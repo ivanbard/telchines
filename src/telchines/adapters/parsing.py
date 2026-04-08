@@ -3,8 +3,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from ovai.models import Observation
-from ovai.utils import stable_id
+from telchines.models import Observation
+from telchines.utils import stable_id
 
 GENERIC_PATTERNS = [
     re.compile(r"ERROR:\s+(?P<file>.+?):(?P<line>\d+):\s+(?P<message>.+)"),

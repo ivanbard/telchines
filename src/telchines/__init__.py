@@ -1,4 +1,4 @@
-"""Open Verification AI Platform MVP package."""
+"""Telchines package."""
 
 __all__ = ["__version__"]
 

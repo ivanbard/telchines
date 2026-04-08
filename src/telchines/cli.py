@@ -8,18 +8,18 @@ from typing import Optional
 
 import typer
 
-from ovai.adapters.registry import AdapterRegistry
-from ovai.config import ProjectConfig
-from ovai.eval import run_default_suite
-from ovai.models import VerificationRun
-from ovai.providers import HeuristicRepairProvider
-from ovai.retrieval import RetrievalService
-from ovai.run_store import RunStore
-from ovai.utils import dataclass_to_dict, stable_id, utc_now
-from ovai.workflows.repair import execute_repair
-from ovai.workflows.triage import triage_logs
+from telchines.adapters.registry import AdapterRegistry
+from telchines.config import ProjectConfig
+from telchines.eval import run_default_suite
+from telchines.models import VerificationRun
+from telchines.providers import HeuristicRepairProvider
+from telchines.retrieval import RetrievalService
+from telchines.run_store import RunStore
+from telchines.utils import dataclass_to_dict, stable_id, utc_now
+from telchines.workflows.repair import execute_repair
+from telchines.workflows.triage import triage_logs
 
-app = typer.Typer(help="Open Verification AI Platform CLI", no_args_is_help=True, add_completion=False)
+app = typer.Typer(help="Telchines CLI", no_args_is_help=True, add_completion=False)
 project_app = typer.Typer(no_args_is_help=True)
 runs_app = typer.Typer(no_args_is_help=True)
 eval_app = typer.Typer(no_args_is_help=True)

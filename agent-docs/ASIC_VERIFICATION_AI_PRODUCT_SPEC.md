@@ -1,5 +1,5 @@
 # Product Specification
-## Open Verification AI Platform
+## Telchines
 
 Version: 1.0  
 Date: 2026-04-07  
@@ -11,7 +11,7 @@ Audience: Founders, engineers, Codex, contributors, potential design partners
 ## 1. Product Overview
 
 ### Product Name
-Open Verification AI Platform
+Telchines
 
 ### Category
 Developer tooling / verification productivity / AI infrastructure for hardware engineering
@@ -614,7 +614,7 @@ Mitigation: local-only and no-egress modes from early design.
 ## 20. Product Positioning
 
 ### Positioning Statement
-For hardware verification teams that want AI assistance without giving up rigor, Open Verification AI Platform is a grounded verification workflow system that integrates retrieval, tooling, and validation to accelerate assertions, tests, and triage.
+For hardware verification teams that want AI assistance without giving up rigor, Telchines is a grounded verification workflow system that integrates retrieval, tooling, and validation to accelerate assertions, tests, and triage.
 
 ### What We Are Not
 - generic repo chat

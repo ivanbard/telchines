@@ -3,9 +3,9 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
-from ovai.config import ProjectConfig
-from ovai.eval import run_default_suite
-from ovai.run_store import RunStore
+from telchines.config import ProjectConfig
+from telchines.eval import run_default_suite
+from telchines.run_store import RunStore
 
 
 def test_eval_default_suite(work_root: Path) -> None:

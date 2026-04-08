@@ -1,4 +1,4 @@
-# Open Verification AI Platform for ASIC, FPGA, and RTL Teams
+# Telchines for ASIC, FPGA, and RTL Teams
 ## Master Strategic Plan and Codex Build Blueprint
 
 Version: 1.0  
@@ -792,12 +792,12 @@ The CLI is the first-class interface for developer adoption.
 Example commands:
 
 ```bash
-ovai ask "What likely caused these 12 UART regressions?"
-ovai gen-sva --spec docs/uart.md --rtl rtl/uart.sv
-ovai gen-cocotb --dut rtl/fifo.sv --intent "basic smoke + reset + overflow"
-ovai repair --run run_001
-ovai triage --logs out/regressions/latest/
-ovai coverage-plan --report cov/coverage.json
+tel ask "What likely caused these 12 UART regressions?"
+tel gen-sva --spec docs/uart.md --rtl rtl/uart.sv
+tel gen-cocotb --dut rtl/fifo.sv --intent "basic smoke + reset + overflow"
+tel repair --run run_001
+tel triage --logs out/regressions/latest/
+tel coverage-plan --report cov/coverage.json
 ```
 
 ## 18.2 Web UI

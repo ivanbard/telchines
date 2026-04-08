@@ -3,12 +3,12 @@ from __future__ import annotations
 from collections import defaultdict
 from pathlib import Path
 
-from ovai.adapters.parsing import parse_common_output
-from ovai.config import ProjectConfig
-from ovai.models import FailureCluster, Observation, RetrievalContext, ToolReference, VerificationRun
-from ovai.retrieval import RetrievalService
-from ovai.run_store import RunStore
-from ovai.utils import stable_id, utc_now
+from telchines.adapters.parsing import parse_common_output
+from telchines.config import ProjectConfig
+from telchines.models import FailureCluster, Observation, RetrievalContext, ToolReference, VerificationRun
+from telchines.retrieval import RetrievalService
+from telchines.run_store import RunStore
+from telchines.utils import stable_id, utc_now
 
 
 def triage_logs(config: ProjectConfig, store: RunStore, retrieval: RetrievalService, logs_path: Path) -> tuple[VerificationRun, list[FailureCluster], RetrievalContext]:

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ovai.config import ProjectConfig
-from ovai.retrieval import RetrievalService
+from telchines.config import ProjectConfig
+from telchines.retrieval import RetrievalService
 
 
 def test_retrieval_builds_and_searches(sample_project: Path) -> None:

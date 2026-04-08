@@ -6,8 +6,8 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-from ovai.adapters.base import ToolAdapter
-from ovai.cli import app
+from telchines.adapters.base import ToolAdapter
+from telchines.cli import app
 
 runner = CliRunner()
 
@@ -28,7 +28,7 @@ class FixtureRegistry:
 
 def test_cli_index_retrieve_and_repair(sample_project: Path, monkeypatch) -> None:
     monkeypatch.chdir(sample_project)
-    monkeypatch.setattr("ovai.cli.AdapterRegistry", FixtureRegistry)
+    monkeypatch.setattr("telchines.cli.AdapterRegistry", FixtureRegistry)
     result = runner.invoke(app, ["index"])
     assert result.exit_code == 0
     repair_result = runner.invoke(app, ["repair", "--tool", "fixture", "--file", "rtl/broken_counter.sv", "--apply"])

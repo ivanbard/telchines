@@ -4,16 +4,16 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from ovai.models import VerificationProject
-from ovai.utils import dataclass_to_dict, ensure_directory, read_json, stable_id, utc_now, write_json
+from telchines.models import VerificationProject
+from telchines.utils import dataclass_to_dict, ensure_directory, read_json, stable_id, utc_now, write_json
 
 
 @dataclass(slots=True)
 class ProjectConfig:
     project: VerificationProject
-    store_dir: str = ".ovai"
-    index_dir: str = ".ovai/index"
-    artifacts_dir: str = ".ovai/artifacts"
+    store_dir: str = ".tel"
+    index_dir: str = ".tel/index"
+    artifacts_dir: str = ".tel/artifacts"
     model_mode: str = "hybrid"
     no_egress: bool = False
     adapters: list[str] = field(default_factory=lambda: ["verilator", "iverilog", "verible", "symbiyosys"])
@@ -55,7 +55,7 @@ class ProjectConfig:
     @classmethod
     def init_project(cls, root: Path, name: str | None = None) -> "ProjectConfig":
         root = root.resolve()
-        ensure_directory(root / ".ovai")
+        ensure_directory(root / ".tel")
         project_name = name or root.name
         project = VerificationProject(
             project_id=stable_id("proj", str(root)),
@@ -69,7 +69,7 @@ class ProjectConfig:
 
     @classmethod
     def load(cls, root: Path) -> "ProjectConfig":
-        return cls.from_dict(read_json(root.resolve() / ".ovai" / "config.json"))
+        return cls.from_dict(read_json(root.resolve() / ".tel" / "config.json"))
 
     def save(self) -> None:
         write_json(self.config_path, self.to_dict())

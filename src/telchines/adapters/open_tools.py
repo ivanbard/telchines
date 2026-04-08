@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ovai.adapters.base import ToolAdapter
+from telchines.adapters.base import ToolAdapter
 
 
 class VerilatorAdapter(ToolAdapter):

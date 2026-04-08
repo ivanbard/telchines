@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from ovai.adapters.parsing import normalize_signature, parse_common_output
+from telchines.adapters.parsing import normalize_signature, parse_common_output
 
 
 def test_common_output_parser_detects_semicolon_error() -> None:

@@ -9,7 +9,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from ovai.config import ProjectConfig
+from telchines.config import ProjectConfig
 
 
 @pytest.fixture()

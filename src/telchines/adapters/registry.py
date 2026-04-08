@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from ovai.adapters.base import ToolAdapter
-from ovai.adapters.open_tools import IcarusAdapter, SymbiYosysAdapter, VeribleAdapter, VerilatorAdapter
+from telchines.adapters.base import ToolAdapter
+from telchines.adapters.open_tools import IcarusAdapter, SymbiYosysAdapter, VeribleAdapter, VerilatorAdapter
 
 
 class AdapterRegistry:

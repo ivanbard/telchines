@@ -5,9 +5,9 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-from ovai.adapters.parsing import parse_common_output
-from ovai.models import Observation, ToolReference
-from ovai.utils import ensure_directory, utc_now
+from telchines.adapters.parsing import parse_common_output
+from telchines.models import Observation, ToolReference
+from telchines.utils import ensure_directory, utc_now
 
 
 @dataclass(slots=True)

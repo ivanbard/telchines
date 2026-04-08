@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ovai.config import ProjectConfig
-from ovai.models import ToolReference, VerificationRun
-from ovai.run_store import RunStore
+from telchines.config import ProjectConfig
+from telchines.models import ToolReference, VerificationRun
+from telchines.run_store import RunStore
 
 
 def test_run_store_round_trip(sample_project: Path) -> None:

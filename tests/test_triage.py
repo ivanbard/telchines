@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ovai.config import ProjectConfig
-from ovai.retrieval import RetrievalService
-from ovai.run_store import RunStore
-from ovai.workflows.triage import triage_logs
+from telchines.config import ProjectConfig
+from telchines.retrieval import RetrievalService
+from telchines.run_store import RunStore
+from telchines.workflows.triage import triage_logs
 
 
 def test_triage_clusters_failures(sample_project: Path) -> None:

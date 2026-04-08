@@ -1,11 +1,11 @@
 # Codex Handoff Bundle
-## Open Verification AI Platform
+## Telchines
 
 This bundle combines the master strategic plan and the product specification into a single markdown file.
 
 ---
 
-# Open Verification AI Platform for ASIC, FPGA, and RTL Teams
+# Telchines for ASIC, FPGA, and RTL Teams
 ## Master Strategic Plan and Codex Build Blueprint
 
 Version: 1.0  
@@ -799,12 +799,12 @@ The CLI is the first-class interface for developer adoption.
 Example commands:
 
 ```bash
-ovai ask "What likely caused these 12 UART regressions?"
-ovai gen-sva --spec docs/uart.md --rtl rtl/uart.sv
-ovai gen-cocotb --dut rtl/fifo.sv --intent "basic smoke + reset + overflow"
-ovai repair --run run_001
-ovai triage --logs out/regressions/latest/
-ovai coverage-plan --report cov/coverage.json
+tel ask "What likely caused these 12 UART regressions?"
+tel gen-sva --spec docs/uart.md --rtl rtl/uart.sv
+tel gen-cocotb --dut rtl/fifo.sv --intent "basic smoke + reset + overflow"
+tel repair --run run_001
+tel triage --logs out/regressions/latest/
+tel coverage-plan --report cov/coverage.json
 ```
 
 ## 18.2 Web UI
@@ -1422,7 +1422,7 @@ Built for verification workflows, not generic code generation.
 ---
 
 # Product Specification
-## Open Verification AI Platform
+## Telchines
 
 Version: 1.0  
 Date: 2026-04-07  
@@ -1434,7 +1434,7 @@ Audience: Founders, engineers, Codex, contributors, potential design partners
 ## 1. Product Overview
 
 ### Product Name
-Open Verification AI Platform
+Telchines
 
 ### Category
 Developer tooling / verification productivity / AI infrastructure for hardware engineering
@@ -2037,7 +2037,7 @@ Mitigation: local-only and no-egress modes from early design.
 ## 20. Product Positioning
 
 ### Positioning Statement
-For hardware verification teams that want AI assistance without giving up rigor, Open Verification AI Platform is a grounded verification workflow system that integrates retrieval, tooling, and validation to accelerate assertions, tests, and triage.
+For hardware verification teams that want AI assistance without giving up rigor, Telchines is a grounded verification workflow system that integrates retrieval, tooling, and validation to accelerate assertions, tests, and triage.
 
 ### What We Are Not
 - generic repo chat

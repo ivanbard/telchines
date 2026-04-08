@@ -4,9 +4,9 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from ovai.config import ProjectConfig
-from ovai.models import AgentTask, FailureCluster, Observation, PatchProposal, RetrievalContext, RetrievalHit, ToolReference, ValidationAttempt, VerificationRun
-from ovai.utils import dataclass_to_dict, ensure_directory, read_json, write_json
+from telchines.config import ProjectConfig
+from telchines.models import AgentTask, FailureCluster, Observation, PatchProposal, RetrievalContext, RetrievalHit, ToolReference, ValidationAttempt, VerificationRun
+from telchines.utils import dataclass_to_dict, ensure_directory, read_json, write_json
 
 
 class RunStore:

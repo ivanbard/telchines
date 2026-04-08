@@ -82,7 +82,7 @@ def load_text(path: Path) -> str:
 
 
 def copy_tree_to_temp(source: Path) -> Path:
-    scratch_root = ensure_directory(source.parent / ".ovai-scratch")
+    scratch_root = ensure_directory(source.parent / ".tel-scratch")
     destination = scratch_root / f"{source.name}-{uuid.uuid4().hex}"
     shutil.copytree(source, destination)
     return destination

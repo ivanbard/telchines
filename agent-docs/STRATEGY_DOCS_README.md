@@ -1,4 +1,4 @@
-# Open Verification AI Platform - Strategy Docs
+# Telchines Strategy Docs
 
 This folder contains initial strategy documents for an open-source AI platform focused on ASIC, FPGA, and RTL verification workflows.
 

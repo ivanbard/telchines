@@ -5,15 +5,15 @@ import subprocess
 import sys
 from pathlib import Path
 
-from ovai.adapters.parsing import parse_common_output
-from ovai.config import ProjectConfig
-from ovai.models import BenchmarkCase, ToolReference, VerificationRun
-from ovai.providers import HeuristicRepairProvider
-from ovai.retrieval import RetrievalService
-from ovai.run_store import RunStore
-from ovai.utils import copy_tree_to_temp, read_json, remove_tree, stable_id, utc_now
-from ovai.workflows.repair import execute_repair
-from ovai.workflows.triage import triage_logs
+from telchines.adapters.parsing import parse_common_output
+from telchines.config import ProjectConfig
+from telchines.models import BenchmarkCase, ToolReference, VerificationRun
+from telchines.providers import HeuristicRepairProvider
+from telchines.retrieval import RetrievalService
+from telchines.run_store import RunStore
+from telchines.utils import copy_tree_to_temp, read_json, remove_tree, stable_id, utc_now
+from telchines.workflows.repair import execute_repair
+from telchines.workflows.triage import triage_logs
 
 
 def load_benchmark_cases(root: Path) -> list[BenchmarkCase]:

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ovai.models import Observation, PatchProposal
-from ovai.utils import stable_id
+from telchines.models import Observation, PatchProposal
+from telchines.utils import stable_id
 
 
 class RepairProvider:

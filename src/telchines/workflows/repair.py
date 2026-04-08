@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import subprocess
 
-from ovai.adapters.parsing import parse_common_output
-from ovai.config import ProjectConfig
-from ovai.models import AgentTask, PatchProposal, RetrievalContext, ValidationAttempt, VerificationRun
-from ovai.providers import RepairProvider
-from ovai.retrieval import RetrievalService
-from ovai.run_store import RunStore
-from ovai.utils import copy_tree_to_temp, ensure_directory, remove_tree, stable_id, utc_now
+from telchines.adapters.parsing import parse_common_output
+from telchines.config import ProjectConfig
+from telchines.models import AgentTask, PatchProposal, RetrievalContext, ValidationAttempt, VerificationRun
+from telchines.providers import RepairProvider
+from telchines.retrieval import RetrievalService
+from telchines.run_store import RunStore
+from telchines.utils import copy_tree_to_temp, ensure_directory, remove_tree, stable_id, utc_now
 
 
 def execute_repair(

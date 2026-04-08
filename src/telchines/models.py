@@ -14,7 +14,7 @@ class VerificationProject:
     root_path: str
     created_at: str
     schema_version: str = SCHEMA_VERSION
-    config_path: str = ".ovai/config.json"
+    config_path: str = ".tel/config.json"
     tool_policy: dict[str, Any] = field(default_factory=dict)
     model_policy: dict[str, Any] = field(default_factory=dict)
 

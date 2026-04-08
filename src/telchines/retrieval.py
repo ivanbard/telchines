@@ -3,9 +3,9 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from ovai.config import ProjectConfig
-from ovai.models import RetrievalContext, RetrievalHit
-from ovai.utils import load_text, read_json, sha256_file, stable_id, tokenize, utc_now, write_json
+from telchines.config import ProjectConfig
+from telchines.models import RetrievalContext, RetrievalHit
+from telchines.utils import load_text, read_json, sha256_file, stable_id, tokenize, utc_now, write_json
 
 INDEX_FILENAME = "index.json"
 SUPPORTED_EXTENSIONS = {".sv", ".svh", ".v", ".vh", ".md", ".txt", ".log", ".py"}
@@ -33,7 +33,7 @@ class RetrievalService:
         for path in sorted(self.config.project_root.rglob("*")):
             if not path.is_file():
                 continue
-            if ".ovai" in path.parts:
+            if ".tel" in path.parts:
                 continue
             if path.suffix.lower() not in SUPPORTED_EXTENSIONS:
                 continue

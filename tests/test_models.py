@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from ovai.models import ToolReference, VerificationProject, VerificationRun
-from ovai.utils import dataclass_to_dict
+from telchines.models import ToolReference, VerificationProject, VerificationRun
+from telchines.utils import dataclass_to_dict
 
 
 def test_model_serialization() -> None:

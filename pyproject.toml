@@ -3,9 +3,9 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "ovai"
+name = "telchines"
 version = "0.1.0"
-description = "Open Verification AI Platform MVP"
+description = "Telchines verification workflow platform"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -18,7 +18,8 @@ dev = [
 ]
 
 [project.scripts]
-ovai = "ovai.cli:app"
+tel = "telchines.cli:app"
+telchines = "telchines.cli:app"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
