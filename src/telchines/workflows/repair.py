@@ -21,7 +21,7 @@ def execute_repair(
 ) -> tuple[PatchProposal | None, VerificationRun | None, RetrievalContext]:
     observations = store.load_observations(base_run.observation_ids)
     query = " ".join(filter(None, [observation.message for observation in observations] + [base_run.summary]))
-    context = retrieval.search(query=query, limit=int(config.retrieval.get("max_hits", 5)))
+    context = retrieval.search(query=query, limit=int(config.retrieval.get("max_hits", 5)), mode="repair")
     store.save_context(context)
 
     task = AgentTask(

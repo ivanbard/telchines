@@ -99,4 +99,11 @@ def _run_triage_case(config: ProjectConfig, store: RunStore, retrieval: Retrieva
     run, clusters, _ = triage_logs(config, store, retrieval, logs_path)
     expected = int(case.scoring.get("min_clusters", 1))
     passed = len(clusters) >= expected
-    return {"benchmark_id": case.benchmark_id, "task_type": case.task_type, "passed": passed, "run_id": run.run_id}
+    return {
+        "benchmark_id": case.benchmark_id,
+        "task_type": case.task_type,
+        "passed": passed,
+        "run_id": run.run_id,
+        "cluster_count": len(clusters),
+        "evidence_hits": sum(len(cluster.evidence_hits) for cluster in clusters),
+    }

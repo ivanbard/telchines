@@ -35,6 +35,9 @@ class RunStore:
         runs = [self.load_run(path.stem) for path in sorted(self.runs_dir.glob("*.json"))]
         return sorted(runs, key=lambda run: run.started_at, reverse=True)
 
+    def list_runs_by_workflow(self, workflow_type: str) -> list[VerificationRun]:
+        return [run for run in self.list_runs() if run.workflow_type == workflow_type]
+
     def save_observations(self, observations: list[Observation]) -> None:
         for observation in observations:
             write_json(self.observations_dir / f"{observation.observation_id}.json", dataclass_to_dict(observation))

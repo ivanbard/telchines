@@ -18,4 +18,4 @@ def test_eval_default_suite(work_root: Path) -> None:
     store = RunStore(config)
     report = run_default_suite(config, store)
     assert report["passed"] == report["total"]
-    assert report["total"] == 5
+    assert report["total"] == 6

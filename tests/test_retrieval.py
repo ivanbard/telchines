@@ -13,4 +13,31 @@ def test_retrieval_builds_and_searches(sample_project: Path) -> None:
     context = retrieval.search("counter reset")
     assert chunk_count > 0
     assert context.hits
+    assert context.mode == "general"
+    assert all(hit.citation for hit in context.hits)
     assert any(hit.path.endswith("spec.md") for hit in context.hits)
+
+
+def test_retrieval_supports_task_aware_ranking_and_incremental_refresh(sample_project: Path) -> None:
+    config = ProjectConfig.load(sample_project)
+    retrieval = RetrievalService(config)
+    retrieval.build_index()
+
+    triage_context = retrieval.search(
+        "timeout waiting for start bit",
+        mode="triage",
+        focus_paths=["rtl/uart_rx.sv"],
+    )
+    assert triage_context.mode == "triage"
+    assert triage_context.metadata["focus_paths"] == ["rtl/uart_rx.sv"]
+    assert triage_context.hits
+    assert any(hit.path.endswith("uart_rx.sv") for hit in triage_context.hits)
+
+    uart_doc = sample_project / "docs" / "uart.md"
+    uart_doc.write_text(
+        uart_doc.read_text(encoding="utf-8") + "\nThe baud_divisor register gates uart scheduling.\n",
+        encoding="utf-8",
+    )
+    retrieval.build_index()
+    refreshed = retrieval.search("baud_divisor register", mode="triage")
+    assert any("baud_divisor" in hit.snippet for hit in refreshed.hits)

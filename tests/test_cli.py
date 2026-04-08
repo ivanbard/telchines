@@ -93,6 +93,20 @@ def test_cli_triage(sample_project: Path, monkeypatch) -> None:
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert payload["cluster_count"] == 2
+    assert payload["clusters"][0]["evidence_hits"]
+
+
+def test_cli_triage_human_and_ci_formats(sample_project: Path, monkeypatch) -> None:
+    monkeypatch.chdir(sample_project)
+    runner.invoke(app, ["index"])
+    human = runner.invoke(app, ["triage", "--logs", "logs/regressions", "--format", "human"])
+    assert human.exit_code == 0
+    assert "likely cause:" in human.stdout.lower()
+    ci = runner.invoke(app, ["triage", "--logs", "logs/regressions", "--format", "ci"])
+    assert ci.exit_code == 0
+    payload = json.loads(ci.stdout)
+    assert payload["status"] == "needs_attention"
+    assert payload["clusters"][0]["evidence"]
 
 
 def test_cli_reports_project_config_error(work_root: Path, monkeypatch) -> None:

@@ -77,6 +77,8 @@ class RetrievalHit:
     start_line: int
     end_line: int
     snippet: str
+    citation: str = ""
+    source_hash: str = ""
 
 
 @dataclass(slots=True)
@@ -86,6 +88,8 @@ class RetrievalContext:
     query: str
     hits: list[RetrievalHit]
     created_at: str
+    mode: str = "general"
+    metadata: dict[str, Any] = field(default_factory=dict)
     schema_version: str = SCHEMA_VERSION
 
 
@@ -148,6 +152,13 @@ class CoverageItem:
 
 
 @dataclass(slots=True)
+class SimilarRunMatch:
+    run_id: str
+    score: float
+    summary: str
+
+
+@dataclass(slots=True)
 class FailureCluster:
     cluster_id: str
     signature: str
@@ -155,4 +166,9 @@ class FailureCluster:
     files: list[str]
     summary: str
     observation_ids: list[str]
+    likely_cause: str = ""
+    suggested_action: str = ""
+    evidence_context_id: str = ""
+    evidence_hits: list[RetrievalHit] = field(default_factory=list)
+    similar_runs: list[SimilarRunMatch] = field(default_factory=list)
     schema_version: str = SCHEMA_VERSION

@@ -1,18 +1,25 @@
 from __future__ import annotations
 
-from collections import defaultdict
+from collections import Counter
 from pathlib import Path
 
 from telchines.adapters.parsing import parse_common_output
 from telchines.config import ProjectConfig
-from telchines.models import FailureCluster, Observation, RetrievalContext, ToolReference, VerificationRun
+from telchines.models import FailureCluster, Observation, RetrievalContext, SimilarRunMatch, ToolReference, VerificationRun
 from telchines.retrieval import RetrievalService
 from telchines.run_store import RunStore
-from telchines.utils import stable_id, utc_now
+from telchines.utils import stable_id, tokenize, unique_preserve_order, utc_now
 
 
 def triage_logs(config: ProjectConfig, store: RunStore, retrieval: RetrievalService, logs_path: Path) -> tuple[VerificationRun, list[FailureCluster], RetrievalContext]:
-    run_id = stable_id("run", config.project.project_id, "triage", utc_now(), str(logs_path))
+    run_id = stable_id(
+        "run",
+        config.project.project_id,
+        "triage",
+        utc_now(),
+        str(logs_path),
+        str(len(store.list_runs_by_workflow("regression_triage"))),
+    )
     all_observations: list[Observation] = []
     for path in sorted(logs_path.rglob("*")):
         if not path.is_file():
@@ -23,47 +30,166 @@ def triage_logs(config: ProjectConfig, store: RunStore, retrieval: RetrievalServ
         observations = parse_common_output(run_id, text, default_type="sim_failure")
         all_observations.extend(observations)
     store.save_observations(all_observations)
-    clusters = build_clusters(all_observations)
-    query = " ".join(observation.message for observation in all_observations[:10])
-    context = retrieval.search(query=query or "triage failure summary")
+
+    overall_query = " ".join(observation.message for observation in all_observations[:10]) or "triage failure summary"
+    overall_focus = unique_preserve_order(observation.file for observation in all_observations if observation.file)
+    context = retrieval.search(query=overall_query, mode="triage", focus_paths=overall_focus)
     store.save_context(context)
+
+    clusters = build_clusters(store, retrieval, all_observations)
     clusters_path = store.save_clusters(run_id, clusters)
     run = VerificationRun(
         run_id=run_id,
         project_id=config.project.project_id,
         commit_sha="workspace",
         workflow_type="regression_triage",
-        tool=ToolReference(kind="triage", name="log_clusterer", version="0.1"),
+        tool=ToolReference(kind="triage", name="log_clusterer", version="0.2"),
         inputs={"logs_path": str(logs_path)},
         status="passed",
         started_at=utc_now(),
         finished_at=utc_now(),
         exit_code=0,
-        artifacts={"clusters_path": str(clusters_path)},
+        artifacts={"clusters_path": str(clusters_path), "context_id": context.context_id},
         observation_ids=[observation.observation_id for observation in all_observations],
-        summary=f"clustered {len(all_observations)} observations into {len(clusters)} failure clusters",
+        summary=f"clustered {len(all_observations)} observations into {len(clusters)} evidence-backed failure clusters",
         replay_command=[],
     )
     store.save_run(run)
     return run, clusters, context
 
 
-def build_clusters(observations: list[Observation]) -> list[FailureCluster]:
-    grouped: dict[str, list[Observation]] = defaultdict(list)
-    for observation in observations:
-        grouped[observation.signature].append(observation)
+def build_clusters(store: RunStore, retrieval: RetrievalService, observations: list[Observation]) -> list[FailureCluster]:
+    grouped = _group_observations(observations)
+    previous_runs = store.list_runs_by_workflow("regression_triage")
     clusters: list[FailureCluster] = []
-    for signature, items in sorted(grouped.items(), key=lambda entry: (-len(entry[1]), entry[0])):
+    for items in sorted(grouped, key=lambda group: (-len(group), _cluster_signature(group))):
+        signature = _cluster_signature(items)
         files = sorted({item.file for item in items if item.file})
-        summary = f"{len(items)} failures matched {signature}"
+        lead_message = items[0].message
+        evidence_context = retrieval.search(
+            query=" ".join([signature, *files, *(item.message for item in items[:3])]),
+            mode="triage",
+            focus_paths=files,
+            limit=4,
+        )
+        store.save_context(evidence_context)
+        likely_cause = _likely_cause(signature, files)
+        suggested_action = _suggested_action(signature, files)
+        cluster_summary = _cluster_summary(items, signature, lead_message, files)
         clusters.append(
             FailureCluster(
-                cluster_id=stable_id("cluster", signature, str(len(items))),
+                cluster_id=stable_id("cluster", signature, str(len(items)), lead_message),
                 signature=signature,
                 count=len(items),
                 files=files,
-                summary=summary,
+                summary=cluster_summary,
                 observation_ids=[item.observation_id for item in items],
+                likely_cause=likely_cause,
+                suggested_action=suggested_action,
+                evidence_context_id=evidence_context.context_id,
+                evidence_hits=evidence_context.hits,
+                similar_runs=_find_similar_runs(store, previous_runs, items),
             )
         )
     return clusters
+
+
+def _group_observations(observations: list[Observation]) -> list[list[Observation]]:
+    groups: list[list[Observation]] = []
+    for observation in sorted(observations, key=lambda item: (item.file or "", item.line or 0, item.signature, item.message)):
+        best_index: int | None = None
+        best_score = 0.0
+        for index, group in enumerate(groups):
+            score = max(_observation_similarity(observation, candidate) for candidate in group)
+            if score > best_score:
+                best_score = score
+                best_index = index
+        if best_index is not None and best_score >= 0.6:
+            groups[best_index].append(observation)
+        else:
+            groups.append([observation])
+    return groups
+
+
+def _observation_similarity(left: Observation, right: Observation) -> float:
+    score = 0.0
+    if left.signature == right.signature:
+        score += 0.55
+    if left.file and right.file and left.file == right.file:
+        score += 0.2
+    left_tokens = set(tokenize(left.message))
+    right_tokens = set(tokenize(right.message))
+    union = left_tokens | right_tokens
+    if union:
+        score += 0.4 * (len(left_tokens & right_tokens) / len(union))
+    return min(score, 1.0)
+
+
+def _cluster_signature(items: list[Observation]) -> str:
+    counts = Counter(item.signature for item in items)
+    return counts.most_common(1)[0][0]
+
+
+def _cluster_summary(items: list[Observation], signature: str, lead_message: str, files: list[str]) -> str:
+    target = files[0] if files else "the regression logs"
+    if len(items) == 1:
+        return f"1 failure in {target}: {lead_message}"
+    return f"{len(items)} related failures in {target} around {signature.lower()}: {lead_message}"
+
+
+def _likely_cause(signature: str, files: list[str]) -> str:
+    target = files[0] if files else "the failing design path"
+    if signature == "SIM_TIMEOUT":
+        return f"Repeated timeout behavior suggests a stalled handshake or missing stimulus path near {target}."
+    if signature == "SV_UNKNOWN_IDENTIFIER":
+        return f"Identifier resolution is inconsistent in {target}, likely from a typo or missing declaration."
+    if signature == "ASSERTION_FAILURE":
+        return f"An assertion is firing repeatedly near {target}, which usually means the DUT and checker disagree on protocol behavior."
+    if signature == "FILE_NOT_FOUND":
+        return f"Build inputs are incomplete; Telchines could not resolve an expected source under {target}."
+    return f"Related failures share the {signature.lower()} signature and likely originate from the same local root cause near {target}."
+
+
+def _suggested_action(signature: str, files: list[str]) -> str:
+    target = files[0] if files else "the primary failing file"
+    if signature == "SIM_TIMEOUT":
+        return f"Inspect the timeout site in {target}, then check the driving sequence and reset/ready conditions around that block."
+    if signature == "SV_UNKNOWN_IDENTIFIER":
+        return f"Audit declarations and nearby signal names in {target}, then rerun lint after fixing the mismatch."
+    if signature == "ASSERTION_FAILURE":
+        return f"Trace the first failing assertion in {target} and compare waveform or log evidence against the checker intent."
+    if signature == "FILE_NOT_FOUND":
+        return f"Confirm the missing file is present and included in the tool invocation before rerunning the regression."
+    return f"Start from {target}, inspect the first cited evidence block, and rerun the smallest reproducer before scaling back to the full regression."
+
+
+def _find_similar_runs(store: RunStore, previous_runs: list[VerificationRun], items: list[Observation]) -> list[SimilarRunMatch]:
+    matches: list[SimilarRunMatch] = []
+    for run in previous_runs:
+        observations = store.load_observations(run.observation_ids)
+        score = _run_similarity(items, observations)
+        if score < 0.5:
+            continue
+        matches.append(SimilarRunMatch(run_id=run.run_id, score=round(score, 3), summary=run.summary))
+    matches.sort(key=lambda match: (-match.score, match.run_id))
+    return matches[:3]
+
+
+def _run_similarity(cluster_items: list[Observation], prior_items: list[Observation]) -> float:
+    if not cluster_items or not prior_items:
+        return 0.0
+    cluster_signatures = Counter(item.signature for item in cluster_items)
+    prior_signatures = Counter(item.signature for item in prior_items)
+    shared_signatures = sum(min(cluster_signatures[signature], prior_signatures[signature]) for signature in cluster_signatures)
+    signature_score = shared_signatures / max(len(cluster_items), 1)
+    cluster_files = {item.file for item in cluster_items if item.file}
+    prior_files = {item.file for item in prior_items if item.file}
+    if cluster_files:
+        file_score = len(cluster_files & prior_files) / len(cluster_files)
+    else:
+        file_score = 0.0
+    cluster_tokens = set(tokenize(" ".join(item.message for item in cluster_items)))
+    prior_tokens = set(tokenize(" ".join(item.message for item in prior_items)))
+    union = cluster_tokens | prior_tokens
+    message_score = (len(cluster_tokens & prior_tokens) / len(union)) if union else 0.0
+    return min(1.0, 0.6 * signature_score + 0.25 * file_score + 0.15 * message_score)

@@ -61,14 +61,14 @@ def index_project() -> None:
 
 
 @app.command("retrieve")
-def retrieve(query: str, limit: int = typer.Option(5, "--limit")) -> None:
+def retrieve(query: str, limit: int = typer.Option(5, "--limit"), mode: str = typer.Option("general", "--mode")) -> None:
     try:
         _, store, retrieval = _load_services()
     except ConfigError as exc:
         _fail(f"config error: {exc}")
-    context = retrieval.search(query, limit=limit)
+    context = retrieval.search(query, limit=limit, mode=mode)
     store.save_context(context)
-    typer.echo(json.dumps({"context_id": context.context_id, "hits": [asdict(hit) for hit in context.hits]}, indent=2))
+    typer.echo(json.dumps({"context_id": context.context_id, "mode": context.mode, "hits": [asdict(hit) for hit in context.hits]}, indent=2))
 
 
 @runs_app.command("list")
@@ -165,23 +165,25 @@ def repair(
 
 
 @app.command("triage")
-def triage(logs: Path = typer.Option(..., "--logs")) -> None:
+def triage(logs: Path = typer.Option(..., "--logs"), output_format: str = typer.Option("json", "--format")) -> None:
     try:
         config, store, retrieval = _load_services()
     except ConfigError as exc:
         _fail(f"config error: {exc}")
     run, clusters, context = triage_logs(config, store, retrieval, logs)
-    typer.echo(
-        json.dumps(
-            {
-                "run_id": run.run_id,
-                "cluster_count": len(clusters),
-                "context_id": context.context_id,
-                "clusters": [dataclass_to_dict(cluster) for cluster in clusters],
-            },
-            indent=2,
-        )
-    )
+    payload = {
+        "run_id": run.run_id,
+        "cluster_count": len(clusters),
+        "context_id": context.context_id,
+        "clusters": [dataclass_to_dict(cluster) for cluster in clusters],
+    }
+    if output_format == "human":
+        typer.echo(_format_triage_human(payload))
+        return
+    if output_format == "ci":
+        typer.echo(json.dumps(_format_triage_ci(payload), indent=2))
+        return
+    typer.echo(json.dumps(payload, indent=2))
 
 
 @eval_app.command("run")
@@ -201,3 +203,43 @@ def eval_report() -> None:
     except ConfigError as exc:
         _fail(f"config error: {exc}")
     typer.echo(json.dumps(store.load_report("latest_eval"), indent=2))
+
+
+def _format_triage_ci(payload: dict[str, object]) -> dict[str, object]:
+    clusters = payload["clusters"]
+    return {
+        "status": "needs_attention" if clusters else "clean",
+        "run_id": payload["run_id"],
+        "cluster_count": payload["cluster_count"],
+        "clusters": [
+            {
+                "cluster_id": cluster["cluster_id"],
+                "signature": cluster["signature"],
+                "count": cluster["count"],
+                "summary": cluster["summary"],
+                "likely_cause": cluster["likely_cause"],
+                "suggested_action": cluster["suggested_action"],
+                "evidence": [hit["citation"] for hit in cluster["evidence_hits"]],
+                "similar_runs": [match["run_id"] for match in cluster["similar_runs"]],
+            }
+            for cluster in clusters
+        ],
+    }
+
+
+def _format_triage_human(payload: dict[str, object]) -> str:
+    lines = [f"run {payload['run_id']} produced {payload['cluster_count']} cluster(s)"]
+    for index, cluster in enumerate(payload["clusters"], start=1):
+        evidence = ", ".join(hit["citation"] for hit in cluster["evidence_hits"][:3]) or "none"
+        similar = ", ".join(match["run_id"] for match in cluster["similar_runs"]) or "none"
+        lines.extend(
+            [
+                f"",
+                f"{index}. {cluster['summary']}",
+                f"likely cause: {cluster['likely_cause']}",
+                f"suggested action: {cluster['suggested_action']}",
+                f"evidence: {evidence}",
+                f"similar runs: {similar}",
+            ]
+        )
+    return "\n".join(lines)

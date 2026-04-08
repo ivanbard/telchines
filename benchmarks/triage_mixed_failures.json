@@ -1,0 +1,13 @@
+{
+  "benchmark_id": "triage_mixed_failures",
+  "task_type": "triage",
+  "title": "Group repeated mixed UART failures with evidence",
+  "fixture_root": "benchmarks/assets/triage_mixed_failures",
+  "config": {
+    "logs_path": "logs"
+  },
+  "scoring": {
+    "min_clusters": 2
+  },
+  "schema_version": "0.1"
+}
