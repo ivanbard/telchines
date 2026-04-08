@@ -1,0 +1,17 @@
+{
+  "benchmark_id": "repair_missing_semicolon",
+  "task_type": "repair",
+  "title": "Repair missing semicolon in small RTL module",
+  "fixture_root": "benchmarks/assets/repair_missing_semicolon",
+  "config": {
+    "validator_command": [
+      "tools/fixture_lint.py",
+      "rtl/broken_counter.sv"
+    ],
+    "target_file": "rtl/broken_counter.sv"
+  },
+  "scoring": {
+    "must_pass": true
+  },
+  "schema_version": "0.1"
+}

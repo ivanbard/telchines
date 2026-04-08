@@ -1,0 +1,21 @@
+from __future__ import annotations
+
+import shutil
+from pathlib import Path
+
+from ovai.config import ProjectConfig
+from ovai.eval import run_default_suite
+from ovai.run_store import RunStore
+
+
+def test_eval_default_suite(work_root: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    project_root = work_root / "eval_project"
+    project_root.mkdir()
+    shutil.copytree(repo_root / "benchmarks", project_root / "benchmarks")
+    ProjectConfig.init_project(project_root)
+    config = ProjectConfig.load(project_root)
+    store = RunStore(config)
+    report = run_default_suite(config, store)
+    assert report["passed"] == report["total"]
+    assert report["total"] == 2

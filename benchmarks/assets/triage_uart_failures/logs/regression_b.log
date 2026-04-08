@@ -1,0 +1,1 @@
+ERROR: rtl/uart_tx.sv:88: unknown identifier tx_fifo_level
