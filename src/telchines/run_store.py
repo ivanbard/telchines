@@ -17,6 +17,7 @@ class RunStore:
         self.observations_dir = ensure_directory(self.root / "observations")
         self.contexts_dir = ensure_directory(self.root / "contexts")
         self.tasks_dir = ensure_directory(self.root / "tasks")
+        self.task_artifacts_dir = ensure_directory(self.root / "task-artifacts")
         self.patches_dir = ensure_directory(self.root / "patches")
         self.reports_dir = ensure_directory(self.root / "reports")
 
@@ -56,6 +57,14 @@ class RunStore:
 
     def save_task(self, task: AgentTask) -> None:
         write_json(self.tasks_dir / f"{task.task_id}.json", dataclass_to_dict(task))
+
+    def load_task(self, task_id: str) -> AgentTask:
+        return AgentTask(**read_json(self.tasks_dir / f"{task_id}.json"))
+
+    def save_task_artifact(self, task_id: str, name: str, payload: dict[str, Any]) -> Path:
+        path = self.task_artifacts_dir / f"{task_id}_{name}.json"
+        write_json(path, payload)
+        return path
 
     def save_patch(self, patch: PatchProposal) -> None:
         payload = dataclass_to_dict(patch)

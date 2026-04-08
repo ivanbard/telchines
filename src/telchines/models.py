@@ -97,6 +97,7 @@ class AgentTask:
     input_run_id: str | None
     status: str
     created_at: str
+    metadata: dict[str, Any] = field(default_factory=dict)
     schema_version: str = SCHEMA_VERSION
 
 
@@ -120,6 +121,7 @@ class PatchProposal:
     status: str
     provider: str = ""
     evidence_paths: list[str] = field(default_factory=list)
+    replay_artifacts: dict[str, str] = field(default_factory=dict)
     validation_attempts: list[ValidationAttempt] = field(default_factory=list)
     schema_version: str = SCHEMA_VERSION
 

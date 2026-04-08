@@ -10,10 +10,10 @@ import typer
 
 from telchines.adapters.registry import AdapterRegistry
 from telchines.config import ProjectConfig
-from telchines.errors import AdapterExecutionError, ConfigError
+from telchines.errors import AdapterExecutionError, ConfigError, ProviderError
 from telchines.eval import run_default_suite
 from telchines.models import VerificationRun
-from telchines.providers import HeuristicRepairProvider
+from telchines.providers import build_repair_provider
 from telchines.retrieval import RetrievalService
 from telchines.run_store import RunStore
 from telchines.utils import dataclass_to_dict, stable_id, utc_now
@@ -140,14 +140,26 @@ def repair(
         replay_command=execution.command,
     )
     store.save_run(base_run)
-    proposal, validation_run, context = execute_repair(config, store, retrieval, HeuristicRepairProvider(), base_run, apply_patch=apply_patch)
+    try:
+        provider = build_repair_provider(config)
+    except ConfigError as exc:
+        _fail(f"config error: {exc}")
+    try:
+        proposal, validation_run, context = execute_repair(config, store, retrieval, provider, base_run, apply_patch=apply_patch)
+    except ProviderError as exc:
+        _fail(f"provider error: {exc}")
     payload = {
         "run_id": base_run.run_id,
         "status": base_run.status,
         "context_id": context.context_id,
         "patch_id": proposal.patch_id if proposal else None,
+        "provider": proposal.provider if proposal else getattr(provider, "name", ""),
+        "proposal_explanation": proposal.explanation if proposal else None,
+        "evidence_paths": proposal.evidence_paths if proposal else [],
+        "replay_artifacts": proposal.replay_artifacts if proposal else {},
         "validation_run_id": validation_run.run_id if validation_run else None,
         "validation_status": validation_run.status if validation_run else None,
+        "validation_summary": validation_run.summary if validation_run else None,
     }
     typer.echo(json.dumps(payload, indent=2))
 

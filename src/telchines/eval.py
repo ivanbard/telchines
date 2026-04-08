@@ -8,7 +8,7 @@ from pathlib import Path
 from telchines.adapters.parsing import parse_common_output
 from telchines.config import ProjectConfig
 from telchines.models import BenchmarkCase, ToolReference, VerificationRun
-from telchines.providers import HeuristicRepairProvider
+from telchines.providers import build_repair_provider
 from telchines.retrieval import RetrievalService
 from telchines.run_store import RunStore
 from telchines.utils import copy_tree_to_temp, read_json, remove_tree, stable_id, utc_now
@@ -28,7 +28,7 @@ def run_default_suite(config: ProjectConfig, store: RunStore) -> dict[str, objec
     cases = load_benchmark_cases(benchmarks_root)
     retrieval = RetrievalService(config)
     retrieval.build_index()
-    provider = HeuristicRepairProvider()
+    provider = build_repair_provider(config)
     results: list[dict[str, object]] = []
     for case in cases:
         if case.task_type == "repair":
@@ -47,7 +47,7 @@ def run_default_suite(config: ProjectConfig, store: RunStore) -> dict[str, objec
     return report
 
 
-def _run_repair_case(config: ProjectConfig, store: RunStore, retrieval: RetrievalService, provider: HeuristicRepairProvider, case: BenchmarkCase) -> dict[str, object]:
+def _run_repair_case(config: ProjectConfig, store: RunStore, retrieval: RetrievalService, provider, case: BenchmarkCase) -> dict[str, object]:
     fixture_root = config.project_root / case.fixture_root
     temp_root = copy_tree_to_temp(fixture_root)
     try:
@@ -79,7 +79,11 @@ def _run_repair_case(config: ProjectConfig, store: RunStore, retrieval: Retrieva
             proposal, validation_run, _ = execute_repair(config, store, retrieval, provider, base_run, apply_patch=False)
         finally:
             config.project.root_path = original_root
-        passed = validation_run is not None and validation_run.status == "passed"
+        expected = str(case.scoring.get("expected", "pass"))
+        if expected == "no_patch":
+            passed = proposal is None and validation_run is None
+        else:
+            passed = validation_run is not None and validation_run.status == "passed"
         return {
             "benchmark_id": case.benchmark_id,
             "task_type": case.task_type,

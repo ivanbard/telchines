@@ -27,3 +27,13 @@ def test_config_rejects_invalid_retrieval_values(sample_project: Path) -> None:
 def test_config_raises_outside_project(work_root: Path) -> None:
     with pytest.raises(ProjectNotInitializedError):
         ProjectConfig.discover(work_root)
+
+
+def test_config_rejects_invalid_model_provider(sample_project: Path) -> None:
+    config_path = sample_project / ".tel" / "config.json"
+    payload = read_json(config_path)
+    payload["project"]["model_policy"]["providers"]["remote"] = {"kind": "openai_compatible", "model": "demo-model"}
+    payload["project"]["model_policy"]["repair_provider"] = "remote"
+    write_json(config_path, payload)
+    with pytest.raises(ConfigError):
+        ProjectConfig.load(sample_project)

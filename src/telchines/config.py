@@ -10,6 +10,7 @@ from telchines.utils import dataclass_to_dict, ensure_directory, read_json, stab
 
 SUPPORTED_MODEL_MODES = {"local", "hybrid", "remote"}
 SUPPORTED_ADAPTERS = {"verilator", "iverilog", "verible", "symbiyosys", "fixture"}
+SUPPORTED_PROVIDER_KINDS = {"heuristic", "openai_compatible"}
 
 
 @dataclass(slots=True)
@@ -69,6 +70,14 @@ class ProjectConfig:
             name=project_name,
             root_path=str(root),
             created_at=utc_now(),
+            model_policy={
+                "repair_provider": "heuristic",
+                "providers": {
+                    "heuristic": {
+                        "kind": "heuristic",
+                    }
+                },
+            },
         )
         config = cls(project=project)
         config.save()
@@ -122,6 +131,29 @@ class ProjectConfig:
                 raise ConfigError(f"{field_name} must be a non-empty string")
             if Path(path_value).is_absolute():
                 raise ConfigError(f"{field_name} must be relative to the project root")
+        model_policy = self.project.model_policy
+        if not isinstance(model_policy, dict):
+            raise ConfigError("project.model_policy must be an object")
+        providers = model_policy.get("providers", {})
+        if not isinstance(providers, dict) or not providers:
+            raise ConfigError("project.model_policy.providers must be a non-empty object")
+        repair_provider = model_policy.get("repair_provider", "heuristic")
+        if repair_provider not in providers:
+            raise ConfigError("project.model_policy.repair_provider must reference a configured provider")
+        for provider_name, provider_config in providers.items():
+            if not isinstance(provider_config, dict):
+                raise ConfigError(f"provider config for {provider_name} must be an object")
+            kind = provider_config.get("kind")
+            if kind not in SUPPORTED_PROVIDER_KINDS:
+                raise ConfigError(f"provider {provider_name} has unsupported kind: {kind}")
+            if kind == "openai_compatible":
+                if not isinstance(provider_config.get("base_url"), str) or not provider_config["base_url"].strip():
+                    raise ConfigError(f"provider {provider_name} must define base_url")
+                if not isinstance(provider_config.get("model"), str) or not provider_config["model"].strip():
+                    raise ConfigError(f"provider {provider_name} must define model")
+                timeout = provider_config.get("timeout_seconds", 30)
+                if not isinstance(timeout, int) or timeout <= 0:
+                    raise ConfigError(f"provider {provider_name} timeout_seconds must be a positive integer")
 
     def save(self) -> None:
         self.validate()

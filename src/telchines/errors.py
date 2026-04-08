@@ -15,3 +15,7 @@ class ProjectNotInitializedError(ConfigError):
 
 class AdapterExecutionError(TelchinesError):
     """Raised when an adapter cannot be executed safely."""
+
+
+class ProviderError(TelchinesError):
+    """Raised when a repair provider cannot generate or validate a response."""

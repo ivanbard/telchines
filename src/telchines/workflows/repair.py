@@ -31,6 +31,7 @@ def execute_repair(
         input_run_id=base_run.run_id,
         status="running",
         created_at=utc_now(),
+        metadata={},
     )
     store.save_task(task)
 
@@ -41,17 +42,49 @@ def execute_repair(
         observations=observations,
         retrieval_context=context,
     )
-    proposal = provider.propose_patch(request)
+    provider_result = provider.propose_patch(request)
+    request_artifact = store.save_task_artifact(task.task_id, "repair_request", provider_result.request_payload)
+    response_artifact = store.save_task_artifact(task.task_id, "repair_response", provider_result.response_payload)
+    replay_artifact = store.save_task_artifact(
+        task.task_id,
+        "repair_replay",
+        {
+            "task_id": task.task_id,
+            "base_run_id": base_run.run_id,
+            "provider": provider_result.provider_name,
+            "context_id": context.context_id,
+            "observation_ids": base_run.observation_ids,
+            "request_artifact": str(request_artifact),
+            "response_artifact": str(response_artifact),
+        },
+    )
+    task.metadata = {
+        "provider": provider_result.provider_name,
+        "context_id": context.context_id,
+        "request_artifact": str(request_artifact),
+        "response_artifact": str(response_artifact),
+        "replay_artifact": str(replay_artifact),
+        "provider_summary": provider_result.summary,
+    }
+
+    proposal = provider_result.proposal
     if proposal is None:
         task.status = "no_patch"
         store.save_task(task)
         return None, None, context
 
+    proposal.replay_artifacts = {
+        "request_artifact": str(request_artifact),
+        "response_artifact": str(response_artifact),
+        "replay_artifact": str(replay_artifact),
+    }
     validation_run = validate_patch(config, store, base_run, proposal, apply_patch=apply_patch)
     proposal.status = "validated" if validation_run.status == "passed" else "rejected"
     proposal.validation_attempts.append(
         ValidationAttempt(attempt=1, result=validation_run.status, run_id=validation_run.run_id, notes=validation_run.summary)
     )
+    task.metadata["patch_id"] = proposal.patch_id
+    task.metadata["validation_run_id"] = validation_run.run_id
     task.status = proposal.status
     store.save_patch(proposal)
     store.save_task(task)
