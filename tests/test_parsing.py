@@ -8,3 +8,5 @@ def test_common_output_parser_detects_semicolon_error() -> None:
     assert len(observations) == 1
     assert observations[0].signature == "SV_PARSE_EXPECTED_SEMICOLON"
     assert normalize_signature("unknown identifier tx_fifo_level") == "SV_UNKNOWN_IDENTIFIER"
+    assert normalize_signature("expected endmodule at end of file") == "SV_EXPECTED_ENDMODULE"
+    assert normalize_signature("timeout waiting for start bit") == "SIM_TIMEOUT"

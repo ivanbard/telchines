@@ -39,3 +39,15 @@ pytest
 - Retrieval is local and provenance-aware.
 - `telchines` is an equivalent fallback binary if `tel` collides with a local tool on a user machine.
 - Model routing is abstracted behind a repair provider; the default implementation is heuristic and deterministic for benchmarkable MVP behavior.
+
+## GitHub Backlog Automation
+
+- Backlog definition: `ops/github-backlog.json`
+- Local sync script: `scripts/sync-github-backlog.ps1`
+- Manual GitHub Action: `.github/workflows/sync-backlog.yml`
+
+Example local dry run:
+
+```powershell
+./scripts/sync-github-backlog.ps1 -Repo OWNER/REPO -WhatIf
+```

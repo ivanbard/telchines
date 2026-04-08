@@ -16,10 +16,18 @@ def normalize_signature(message: str) -> str:
     text = message.lower()
     if "semicolon" in text:
         return "SV_PARSE_EXPECTED_SEMICOLON"
+    if "endmodule" in text:
+        return "SV_EXPECTED_ENDMODULE"
+    if ("missing end" in text) or ("expecting 'end'" in text) or ("expected end before" in text):
+        return "SV_EXPECTED_END"
     if "syntax error" in text:
         return "SV_GENERIC_SYNTAX_ERROR"
     if "undeclared" in text or "unknown identifier" in text:
         return "SV_UNKNOWN_IDENTIFIER"
+    if "cannot open" in text or "no such file" in text:
+        return "FILE_NOT_FOUND"
+    if "timeout" in text:
+        return "SIM_TIMEOUT"
     if "assert" in text and "fail" in text:
         return "ASSERTION_FAILURE"
     compact = re.sub(r"[^a-z0-9]+", "_", text.upper()).strip("_")

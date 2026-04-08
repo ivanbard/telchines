@@ -66,6 +66,7 @@ def _run_repair_case(config: ProjectConfig, store: RunStore, retrieval: Retrieva
             status="failed" if process.returncode else "passed",
             started_at=utc_now(),
             finished_at=utc_now(),
+            exit_code=process.returncode,
             artifacts={},
             observation_ids=[observation.observation_id for observation in observations],
             summary=case.title,

@@ -9,6 +9,7 @@ from telchines.utils import load_text, read_json, sha256_file, stable_id, tokeni
 
 INDEX_FILENAME = "index.json"
 SUPPORTED_EXTENSIONS = {".sv", ".svh", ".v", ".vh", ".md", ".txt", ".log", ".py"}
+SKIP_DIR_NAMES = {".git", ".venv", ".tel", ".tel-scratch", ".pytest_tmp", ".test-work", "__pycache__"}
 
 
 @dataclass(slots=True)
@@ -33,13 +34,17 @@ class RetrievalService:
         for path in sorted(self.config.project_root.rglob("*")):
             if not path.is_file():
                 continue
-            if ".tel" in path.parts:
-                continue
             if path.suffix.lower() not in SUPPORTED_EXTENSIONS:
                 continue
-            relative = str(path.relative_to(self.config.project_root))
+            relative_path = path.relative_to(self.config.project_root)
+            if any(part in SKIP_DIR_NAMES for part in relative_path.parts):
+                continue
+            relative = str(relative_path)
             kind = self._kind_for_path(path)
-            lines = load_text(path).splitlines()
+            try:
+                lines = load_text(path).splitlines()
+            except UnicodeDecodeError:
+                continue
             if not lines:
                 continue
             for start in range(0, len(lines), chunk_lines):
@@ -57,6 +62,8 @@ class RetrievalService:
         return len(chunks)
 
     def search(self, query: str, limit: int | None = None) -> RetrievalContext:
+        if not self.index_path.exists():
+            self.build_index()
         payload = read_json(self.index_path)
         query_tokens = tokenize(query)
         limit = limit or int(self.config.retrieval.get("max_hits", 5))

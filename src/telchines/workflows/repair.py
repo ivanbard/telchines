@@ -5,7 +5,7 @@ import subprocess
 from telchines.adapters.parsing import parse_common_output
 from telchines.config import ProjectConfig
 from telchines.models import AgentTask, PatchProposal, RetrievalContext, ValidationAttempt, VerificationRun
-from telchines.providers import RepairProvider
+from telchines.providers import RepairProvider, RepairRequest
 from telchines.retrieval import RetrievalService
 from telchines.run_store import RunStore
 from telchines.utils import copy_tree_to_temp, ensure_directory, remove_tree, stable_id, utc_now
@@ -34,7 +34,14 @@ def execute_repair(
     )
     store.save_task(task)
 
-    proposal = provider.propose_patch(task.task_id, config.project_root, observations)
+    request = RepairRequest(
+        task_id=task.task_id,
+        project_root=config.project_root,
+        base_run=base_run,
+        observations=observations,
+        retrieval_context=context,
+    )
+    proposal = provider.propose_patch(request)
     if proposal is None:
         task.status = "no_patch"
         store.save_task(task)
@@ -76,9 +83,10 @@ def validate_patch(config: ProjectConfig, store: RunStore, base_run: Verificatio
             status="passed" if result.returncode == 0 else "failed",
             started_at=utc_now(),
             finished_at=utc_now(),
+            exit_code=result.returncode,
             artifacts={"log_path": str(log_path)},
             observation_ids=[observation.observation_id for observation in observations],
-            summary="validation command passed" if result.returncode == 0 else "validation command still failed",
+            summary=_validation_summary(result.returncode, observations),
             replay_command=base_run.replay_command,
         )
         if apply_patch and result.returncode == 0:
@@ -88,3 +96,12 @@ def validate_patch(config: ProjectConfig, store: RunStore, base_run: Verificatio
         return validation_run
     finally:
         remove_tree(temp_root)
+
+
+def _validation_summary(exit_code: int, observations: list[object]) -> str:
+    if exit_code == 0:
+        return "validation command passed"
+    if observations:
+        first = observations[0]
+        return f"validation failed with {len(observations)} observation(s); first: {first.signature}"
+    return f"validation failed with exit code {exit_code}"

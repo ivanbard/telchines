@@ -48,6 +48,7 @@ class VerificationRun:
     status: str
     started_at: str
     finished_at: str | None = None
+    exit_code: int | None = None
     artifacts: dict[str, str] = field(default_factory=dict)
     observation_ids: list[str] = field(default_factory=list)
     summary: str = ""
@@ -117,6 +118,8 @@ class PatchProposal:
     candidate_content: str
     explanation: str
     status: str
+    provider: str = ""
+    evidence_paths: list[str] = field(default_factory=list)
     validation_attempts: list[ValidationAttempt] = field(default_factory=list)
     schema_version: str = SCHEMA_VERSION
 

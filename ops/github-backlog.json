@@ -1,0 +1,331 @@
+{
+  "milestones": [
+    {
+      "title": "Milestone 1: Harden The MVP Core",
+      "description": "Make the current Telchines scaffold reliable enough to install and run on small public repos.",
+      "issues": [
+        {
+          "title": "Improve project init and config validation",
+          "body": "Tighten project bootstrap, validate `.tel/config.json`, and fail early on invalid or missing configuration.",
+          "labels": [
+            "mvp",
+            "cli",
+            "config"
+          ]
+        },
+        {
+          "title": "Add better run metadata, errors, and logging",
+          "body": "Improve structured run output, CLI error messages, and persisted metadata so failures are easier to diagnose and replay.",
+          "labels": [
+            "mvp",
+            "observability"
+          ]
+        },
+        {
+          "title": "Harden retrieval indexing across repo layouts",
+          "body": "Handle more repository shapes, excluded paths, and file-type edge cases in the local indexer.",
+          "labels": [
+            "mvp",
+            "retrieval"
+          ]
+        },
+        {
+          "title": "Tighten adapter execution and observation parsing",
+          "body": "Improve tool invocation behavior and normalize more failure patterns into stable observations.",
+          "labels": [
+            "mvp",
+            "adapters"
+          ]
+        },
+        {
+          "title": "Expand fixture coverage for compile and sim failures",
+          "body": "Add more realistic benchmark and test fixtures covering distinct compile, lint, and simulation failure classes.",
+          "labels": [
+            "mvp",
+            "testing"
+          ]
+        },
+        {
+          "title": "Add install and CLI smoke tests for tel and telchines",
+          "body": "Verify both console entrypoints work in a clean install path and catch packaging regressions early.",
+          "labels": [
+            "mvp",
+            "packaging",
+            "testing"
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Milestone 2: Real Repair Workflow",
+      "description": "Move from deterministic heuristics to a usable, model-backed repair loop with replay and validation.",
+      "issues": [
+        {
+          "title": "Define a provider interface for model-backed repair generation",
+          "body": "Refine the repair provider abstraction so heuristic and model-backed providers share the same workflow contract.",
+          "labels": [
+            "repair",
+            "architecture"
+          ]
+        },
+        {
+          "title": "Add a first pluggable local or remote model provider",
+          "body": "Implement one configurable provider backend that can generate patch proposals using a real model.",
+          "labels": [
+            "repair",
+            "models"
+          ]
+        },
+        {
+          "title": "Expand patch generation beyond missing semicolons",
+          "body": "Support several common compile and lint failure categories instead of a single heuristic fix.",
+          "labels": [
+            "repair",
+            "mvp"
+          ]
+        },
+        {
+          "title": "Add patch minimization and better validation summaries",
+          "body": "Reduce noisy diffs and explain validation outcomes more clearly in stored run artifacts and CLI output.",
+          "labels": [
+            "repair",
+            "ux"
+          ]
+        },
+        {
+          "title": "Store prompt, context, and evidence for repair replay",
+          "body": "Persist the full context used for model-backed repair so runs remain replayable and auditable.",
+          "labels": [
+            "repair",
+            "replayability"
+          ]
+        },
+        {
+          "title": "Build repair benchmarks for multiple error classes",
+          "body": "Create benchmark cases that measure repair performance across several distinct compile and lint failure signatures.",
+          "labels": [
+            "repair",
+            "benchmarks"
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Milestone 3: Better Triage And Evidence Packs",
+      "description": "Make regression triage useful on realistic failure sets with stronger clustering and grounded summaries.",
+      "issues": [
+        {
+          "title": "Improve triage clustering beyond exact signature grouping",
+          "body": "Cluster similar failures more robustly than simple signature equality.",
+          "labels": [
+            "triage",
+            "retrieval"
+          ]
+        },
+        {
+          "title": "Add per-cluster summaries with likely root-cause hints",
+          "body": "Generate concise summaries and likely next actions for each failure cluster.",
+          "labels": [
+            "triage",
+            "ux"
+          ]
+        },
+        {
+          "title": "Link triage clusters to code, spec, and log evidence",
+          "body": "Attach retrieved evidence packs directly to triage output so users can inspect why a cluster was formed.",
+          "labels": [
+            "triage",
+            "retrieval"
+          ]
+        },
+        {
+          "title": "Add historical similarity search over stored runs",
+          "body": "Use the run store as a source of prior failures and similar cases for new triage requests.",
+          "labels": [
+            "triage",
+            "run-store"
+          ]
+        },
+        {
+          "title": "Support mixed log directories and larger regression sets",
+          "body": "Handle larger log sets, nested directories, and more varied log formats without fragile assumptions.",
+          "labels": [
+            "triage",
+            "adapters"
+          ]
+        },
+        {
+          "title": "Add triage output formats for humans and CI",
+          "body": "Support both readable summaries and machine-oriented structured output for CI integration.",
+          "labels": [
+            "triage",
+            "cli",
+            "ci"
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Milestone 4: Retrieval And Project Memory v1",
+      "description": "Turn retrieval into a dependable grounding layer for repair, triage, and later generation workflows.",
+      "issues": [
+        {
+          "title": "Add file-type-aware chunking for RTL, docs, and logs",
+          "body": "Improve chunking strategy by content type so retrieval packs preserve more useful context boundaries.",
+          "labels": [
+            "retrieval",
+            "indexing"
+          ]
+        },
+        {
+          "title": "Improve task-aware ranking and evidence-pack assembly",
+          "body": "Tune retrieval and evidence packing separately for repair, triage, and future generation workflows.",
+          "labels": [
+            "retrieval",
+            "ranking"
+          ]
+        },
+        {
+          "title": "Support incremental project refresh and reindex",
+          "body": "Allow index refresh without full rebuilds where possible and keep project memory in sync with repo changes.",
+          "labels": [
+            "retrieval",
+            "indexing"
+          ]
+        },
+        {
+          "title": "Add retrieval tests against larger fixture corpora",
+          "body": "Expand retrieval evaluation using larger, more varied fixtures than the current minimal test corpus.",
+          "labels": [
+            "retrieval",
+            "testing"
+          ]
+        },
+        {
+          "title": "Store citations in a cleaner user-facing format",
+          "body": "Normalize citations so evidence references are easier to display in CLI output and future UI surfaces.",
+          "labels": [
+            "retrieval",
+            "ux"
+          ]
+        },
+        {
+          "title": "Define retrieval evaluation metrics and report output",
+          "body": "Add retrieval-specific metrics and reporting to the benchmark suite.",
+          "labels": [
+            "retrieval",
+            "benchmarks"
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Milestone 5: First Model Integration",
+      "description": "Connect Telchines to actual AI backends while preserving replayability and policy boundaries.",
+      "issues": [
+        {
+          "title": "Add model provider config to .tel/config.json",
+          "body": "Define configuration for provider selection, credentials, routing mode, and policy flags.",
+          "labels": [
+            "models",
+            "config"
+          ]
+        },
+        {
+          "title": "Implement one local backend and one remote backend path",
+          "body": "Support at least one local model path and one remote model path behind the same provider abstraction.",
+          "labels": [
+            "models",
+            "integration"
+          ]
+        },
+        {
+          "title": "Record model call metadata for replay and audit",
+          "body": "Persist prompts, retrieved context, provider metadata, and responses so model-backed workflows stay traceable.",
+          "labels": [
+            "models",
+            "replayability"
+          ]
+        },
+        {
+          "title": "Add no-egress and local-only enforcement",
+          "body": "Enforce policy flags that prevent remote calls when local-only or no-egress mode is enabled.",
+          "labels": [
+            "models",
+            "policy"
+          ]
+        },
+        {
+          "title": "Add provider-specific tests and fallback behavior",
+          "body": "Test model provider failure modes and ensure the CLI degrades cleanly when providers are unavailable.",
+          "labels": [
+            "models",
+            "testing"
+          ]
+        },
+        {
+          "title": "Document setup for supported model backends",
+          "body": "Add setup docs for local and remote provider configuration, auth, and expected environment variables.",
+          "labels": [
+            "models",
+            "documentation"
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Milestone 6: First Post-MVP Differentiator",
+      "description": "Add the first workflow beyond repair and triage, with spec-to-SVA as the recommended initial differentiator.",
+      "issues": [
+        {
+          "title": "Define the spec-to-SVA input and output contract",
+          "body": "Specify CLI inputs, structured outputs, evidence requirements, and storage expectations for assertion generation.",
+          "labels": [
+            "sva",
+            "architecture"
+          ]
+        },
+        {
+          "title": "Build retrieval context packs for spec and RTL grounding",
+          "body": "Assemble task-specific context packs that combine spec text, RTL, and prior evidence for SVA generation.",
+          "labels": [
+            "sva",
+            "retrieval"
+          ]
+        },
+        {
+          "title": "Generate candidate SVA artifacts with structured outputs",
+          "body": "Produce reviewable assertion drafts along with structured metadata and evidence references.",
+          "labels": [
+            "sva",
+            "generation"
+          ]
+        },
+        {
+          "title": "Add a validation harness for generated assertions",
+          "body": "Validate generated assertions through parse, compile, or formal acceptance gates as available.",
+          "labels": [
+            "sva",
+            "validation"
+          ]
+        },
+        {
+          "title": "Add SVA benchmark cases and scorecards",
+          "body": "Create benchmark fixtures and reporting so spec-to-SVA quality is measurable and replayable.",
+          "labels": [
+            "sva",
+            "benchmarks"
+          ]
+        },
+        {
+          "title": "Add the tel gen-sva CLI command",
+          "body": "Expose the first generation workflow through the Telchines CLI with clear output and artifact paths.",
+          "labels": [
+            "sva",
+            "cli"
+          ]
+        }
+      ]
+    }
+  ]
+}

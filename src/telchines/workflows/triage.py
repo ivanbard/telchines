@@ -38,6 +38,7 @@ def triage_logs(config: ProjectConfig, store: RunStore, retrieval: RetrievalServ
         status="passed",
         started_at=utc_now(),
         finished_at=utc_now(),
+        exit_code=0,
         artifacts={"clusters_path": str(clusters_path)},
         observation_ids=[observation.observation_id for observation in all_observations],
         summary=f"clustered {len(all_observations)} observations into {len(clusters)} failure clusters",

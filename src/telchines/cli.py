@@ -10,6 +10,7 @@ import typer
 
 from telchines.adapters.registry import AdapterRegistry
 from telchines.config import ProjectConfig
+from telchines.errors import AdapterExecutionError, ConfigError
 from telchines.eval import run_default_suite
 from telchines.models import VerificationRun
 from telchines.providers import HeuristicRepairProvider
@@ -29,28 +30,42 @@ app.add_typer(eval_app, name="eval")
 
 
 def _load_services(root: Path | None = None) -> tuple[ProjectConfig, RunStore, RetrievalService]:
-    config = ProjectConfig.load(root or Path.cwd())
+    config = ProjectConfig.discover(root or Path.cwd())
     store = RunStore(config)
     retrieval = RetrievalService(config)
     return config, store, retrieval
 
 
+def _fail(message: str, exit_code: int = 2) -> None:
+    typer.echo(message, err=True)
+    raise typer.Exit(code=exit_code)
+
+
 @project_app.command("init")
 def project_init(path: Path = typer.Argument(Path(".")), name: Optional[str] = typer.Option(None, "--name")) -> None:
-    config = ProjectConfig.init_project(path, name=name)
+    try:
+        config = ProjectConfig.init_project(path, name=name)
+    except ConfigError as exc:
+        _fail(f"config error: {exc}")
     typer.echo(f"initialized project {config.project.project_id} at {config.project.root_path}")
 
 
 @app.command("index")
 def index_project() -> None:
-    _, _, retrieval = _load_services()
+    try:
+        _, _, retrieval = _load_services()
+    except ConfigError as exc:
+        _fail(f"config error: {exc}")
     chunk_count = retrieval.build_index()
     typer.echo(f"indexed {chunk_count} chunks")
 
 
 @app.command("retrieve")
 def retrieve(query: str, limit: int = typer.Option(5, "--limit")) -> None:
-    _, store, retrieval = _load_services()
+    try:
+        _, store, retrieval = _load_services()
+    except ConfigError as exc:
+        _fail(f"config error: {exc}")
     context = retrieval.search(query, limit=limit)
     store.save_context(context)
     typer.echo(json.dumps({"context_id": context.context_id, "hits": [asdict(hit) for hit in context.hits]}, indent=2))
@@ -58,22 +73,31 @@ def retrieve(query: str, limit: int = typer.Option(5, "--limit")) -> None:
 
 @runs_app.command("list")
 def list_runs() -> None:
-    _, store, _ = _load_services()
+    try:
+        _, store, _ = _load_services()
+    except ConfigError as exc:
+        _fail(f"config error: {exc}")
     typer.echo(json.dumps([dataclass_to_dict(run) for run in store.list_runs()], indent=2))
 
 
 @runs_app.command("show")
 def show_run(run_id: str) -> None:
-    _, store, _ = _load_services()
+    try:
+        _, store, _ = _load_services()
+    except ConfigError as exc:
+        _fail(f"config error: {exc}")
     typer.echo(json.dumps(dataclass_to_dict(store.load_run(run_id)), indent=2))
 
 
 @runs_app.command("replay")
 def replay_run(run_id: str) -> None:
-    config, store, _ = _load_services()
+    try:
+        config, store, _ = _load_services()
+    except ConfigError as exc:
+        _fail(f"config error: {exc}")
     run = store.load_run(run_id)
     if not run.replay_command:
-        raise typer.BadParameter("run does not have a replay command")
+        _fail("run does not have a replay command")
     result = subprocess.run(run.replay_command, cwd=config.project_root, capture_output=True, text=True, check=False)
     typer.echo(json.dumps({"exit_code": result.returncode, "stdout": result.stdout, "stderr": result.stderr}, indent=2))
 
@@ -85,11 +109,19 @@ def repair(
     extra_arg: list[str] = typer.Option([], "--extra-arg"),
     apply_patch: bool = typer.Option(False, "--apply"),
 ) -> None:
-    config, store, retrieval = _load_services()
-    registry = AdapterRegistry()
-    adapter = registry.get(tool)
+    try:
+        config, store, retrieval = _load_services()
+        registry = AdapterRegistry()
+        adapter = registry.get(tool)
+    except KeyError:
+        _fail(f"unknown adapter: {tool}")
+    except ConfigError as exc:
+        _fail(f"config error: {exc}")
     run_id = stable_id("run", config.project.project_id, tool, utc_now(), ",".join(files))
-    execution = adapter.run(run_id, config.project_root, files, config.project_root / config.artifacts_dir, extra_args=extra_arg)
+    try:
+        execution = adapter.run(run_id, config.project_root, files, config.project_root / config.artifacts_dir, extra_args=extra_arg)
+    except AdapterExecutionError as exc:
+        _fail(f"adapter error: {exc}")
     store.save_observations(execution.observations)
     base_run = VerificationRun(
         run_id=run_id,
@@ -101,9 +133,10 @@ def repair(
         status="passed" if execution.exit_code == 0 else "failed",
         started_at=execution.started_at,
         finished_at=execution.finished_at,
+        exit_code=execution.exit_code,
         artifacts={"log_path": execution.log_path},
         observation_ids=[observation.observation_id for observation in execution.observations],
-        summary=f"{tool} exited with code {execution.exit_code}",
+        summary=execution.summary,
         replay_command=execution.command,
     )
     store.save_run(base_run)
@@ -121,7 +154,10 @@ def repair(
 
 @app.command("triage")
 def triage(logs: Path = typer.Option(..., "--logs")) -> None:
-    config, store, retrieval = _load_services()
+    try:
+        config, store, retrieval = _load_services()
+    except ConfigError as exc:
+        _fail(f"config error: {exc}")
     run, clusters, context = triage_logs(config, store, retrieval, logs)
     typer.echo(
         json.dumps(
@@ -138,12 +174,18 @@ def triage(logs: Path = typer.Option(..., "--logs")) -> None:
 
 @eval_app.command("run")
 def eval_run() -> None:
-    config, store, _ = _load_services()
+    try:
+        config, store, _ = _load_services()
+    except ConfigError as exc:
+        _fail(f"config error: {exc}")
     report = run_default_suite(config, store)
     typer.echo(json.dumps(report, indent=2))
 
 
 @eval_app.command("report")
 def eval_report() -> None:
-    _, store, _ = _load_services()
+    try:
+        _, store, _ = _load_services()
+    except ConfigError as exc:
+        _fail(f"config error: {exc}")
     typer.echo(json.dumps(store.load_report("latest_eval"), indent=2))
