@@ -1,0 +1,2 @@
+ERROR: rtl/uart_rx.sv:41: timeout waiting for start bit
+ERROR: rtl/uart_rx.sv:42: timeout waiting for start bit during smoke

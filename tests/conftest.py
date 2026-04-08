@@ -29,3 +29,12 @@ def sample_project(work_root: Path) -> Path:
     shutil.copytree(source, destination)
     ProjectConfig.init_project(destination)
     return destination
+
+
+@pytest.fixture()
+def retrieval_corpus_project(work_root: Path) -> Path:
+    source = Path(__file__).parent / "fixtures" / "retrieval_corpus"
+    destination = work_root / "retrieval_corpus"
+    shutil.copytree(source, destination)
+    ProjectConfig.init_project(destination)
+    return destination

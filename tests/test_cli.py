@@ -109,6 +109,27 @@ def test_cli_triage_human_and_ci_formats(sample_project: Path, monkeypatch) -> N
     assert payload["clusters"][0]["evidence"]
 
 
+def test_cli_triage_accepts_multiple_log_paths(retrieval_corpus_project: Path, monkeypatch) -> None:
+    monkeypatch.chdir(retrieval_corpus_project)
+    runner.invoke(app, ["index"])
+    result = runner.invoke(
+        app,
+        [
+            "triage",
+            "--logs",
+            "logs/regressions",
+            "--logs",
+            "logs/regressions/nested/run_b.out",
+            "--format",
+            "ci",
+        ],
+    )
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["cluster_count"] == 2
+    assert any(cluster["signature"] == "SV_UNKNOWN_IDENTIFIER" for cluster in payload["clusters"])
+
+
 def test_cli_reports_project_config_error(work_root: Path, monkeypatch) -> None:
     monkeypatch.chdir(work_root)
     result = runner.invoke(app, ["index"])

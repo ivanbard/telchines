@@ -10,28 +10,33 @@ from telchines.retrieval import RetrievalService
 from telchines.run_store import RunStore
 from telchines.utils import stable_id, tokenize, unique_preserve_order, utc_now
 
+SUPPORTED_LOG_EXTENSIONS = {".log", ".txt", ".out", ".err"}
 
-def triage_logs(config: ProjectConfig, store: RunStore, retrieval: RetrievalService, logs_path: Path) -> tuple[VerificationRun, list[FailureCluster], RetrievalContext]:
+
+def triage_logs(
+    config: ProjectConfig,
+    store: RunStore,
+    retrieval: RetrievalService,
+    logs_path: Path | list[Path],
+) -> tuple[VerificationRun, list[FailureCluster], RetrievalContext]:
+    requested_paths = _normalize_input_paths(logs_path)
+    log_files = _collect_log_files(requested_paths)
     run_id = stable_id(
         "run",
         config.project.project_id,
         "triage",
         utc_now(),
-        str(logs_path),
+        *[str(path) for path in requested_paths],
         str(len(store.list_runs_by_workflow("regression_triage"))),
     )
     all_observations: list[Observation] = []
-    for path in sorted(logs_path.rglob("*")):
-        if not path.is_file():
-            continue
-        if path.suffix.lower() not in {".log", ".txt"}:
-            continue
-        text = path.read_text(encoding="utf-8")
+    for path in log_files:
+        text = path.read_text(encoding="utf-8", errors="replace")
         observations = parse_common_output(run_id, text, default_type="sim_failure")
         all_observations.extend(observations)
     store.save_observations(all_observations)
 
-    overall_query = " ".join(observation.message for observation in all_observations[:10]) or "triage failure summary"
+    overall_query = " ".join(observation.message for observation in all_observations[:12]) or "triage failure summary"
     overall_focus = unique_preserve_order(observation.file for observation in all_observations if observation.file)
     context = retrieval.search(query=overall_query, mode="triage", focus_paths=overall_focus)
     store.save_context(context)
@@ -43,15 +48,18 @@ def triage_logs(config: ProjectConfig, store: RunStore, retrieval: RetrievalServ
         project_id=config.project.project_id,
         commit_sha="workspace",
         workflow_type="regression_triage",
-        tool=ToolReference(kind="triage", name="log_clusterer", version="0.2"),
-        inputs={"logs_path": str(logs_path)},
+        tool=ToolReference(kind="triage", name="log_clusterer", version="0.3"),
+        inputs={
+            "logs_path": [str(path) for path in requested_paths],
+            "log_file_count": len(log_files),
+        },
         status="passed",
         started_at=utc_now(),
         finished_at=utc_now(),
         exit_code=0,
         artifacts={"clusters_path": str(clusters_path), "context_id": context.context_id},
         observation_ids=[observation.observation_id for observation in all_observations],
-        summary=f"clustered {len(all_observations)} observations into {len(clusters)} evidence-backed failure clusters",
+        summary=f"clustered {len(all_observations)} observations from {len(log_files)} log files into {len(clusters)} evidence-backed failure clusters",
         replay_command=[],
     )
     store.save_run(run)
@@ -73,25 +81,48 @@ def build_clusters(store: RunStore, retrieval: RetrievalService, observations: l
             limit=4,
         )
         store.save_context(evidence_context)
-        likely_cause = _likely_cause(signature, files)
-        suggested_action = _suggested_action(signature, files)
-        cluster_summary = _cluster_summary(items, signature, lead_message, files)
         clusters.append(
             FailureCluster(
                 cluster_id=stable_id("cluster", signature, str(len(items)), lead_message),
                 signature=signature,
                 count=len(items),
                 files=files,
-                summary=cluster_summary,
+                summary=_cluster_summary(items, signature, lead_message, files),
                 observation_ids=[item.observation_id for item in items],
-                likely_cause=likely_cause,
-                suggested_action=suggested_action,
+                likely_cause=_likely_cause(signature, files),
+                suggested_action=_suggested_action(signature, files),
                 evidence_context_id=evidence_context.context_id,
                 evidence_hits=evidence_context.hits,
                 similar_runs=_find_similar_runs(store, previous_runs, items),
             )
         )
     return clusters
+
+
+def _normalize_input_paths(logs_path: Path | list[Path]) -> list[Path]:
+    if isinstance(logs_path, Path):
+        return [logs_path]
+    return [path for path in logs_path]
+
+
+def _collect_log_files(paths: list[Path]) -> list[Path]:
+    seen: set[Path] = set()
+    log_files: list[Path] = []
+    for path in paths:
+        if path.is_file():
+            resolved = path.resolve()
+            if path.suffix.lower() in SUPPORTED_LOG_EXTENSIONS and resolved not in seen:
+                seen.add(resolved)
+                log_files.append(path)
+            continue
+        if not path.exists():
+            continue
+        for candidate in sorted(path.rglob("*")):
+            resolved = candidate.resolve()
+            if candidate.is_file() and candidate.suffix.lower() in SUPPORTED_LOG_EXTENSIONS and resolved not in seen:
+                seen.add(resolved)
+                log_files.append(candidate)
+    return log_files
 
 
 def _group_observations(observations: list[Observation]) -> list[list[Observation]]:

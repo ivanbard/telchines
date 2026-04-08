@@ -10,7 +10,7 @@ from telchines.utils import load_text, read_json, sha256_file, stable_id, tokeni
 
 INDEX_FILENAME = "index.json"
 INDEX_FORMAT_VERSION = 2
-SUPPORTED_EXTENSIONS = {".sv", ".svh", ".v", ".vh", ".md", ".txt", ".log", ".py"}
+SUPPORTED_EXTENSIONS = {".sv", ".svh", ".v", ".vh", ".md", ".txt", ".log", ".out", ".err", ".py"}
 SKIP_DIR_NAMES = {".git", ".venv", ".tel", ".tel-scratch", ".pytest_tmp", ".test-work", "__pycache__"}
 LOG_MARKERS = ("error", "warning", "fail", "timeout", "assert")
 MODE_KIND_BOOSTS = {
@@ -261,7 +261,7 @@ class RetrievalService:
         suffix = path.suffix.lower()
         if suffix in {".sv", ".svh", ".v", ".vh"}:
             return "rtl"
-        if suffix == ".log":
+        if suffix in {".log", ".out", ".err"}:
             return "log"
         if suffix == ".py":
             return "script"

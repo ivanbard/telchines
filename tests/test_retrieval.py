@@ -41,3 +41,20 @@ def test_retrieval_supports_task_aware_ranking_and_incremental_refresh(sample_pr
     retrieval.build_index()
     refreshed = retrieval.search("baud_divisor register", mode="triage")
     assert any("baud_divisor" in hit.snippet for hit in refreshed.hits)
+
+
+def test_retrieval_handles_larger_fixture_corpus(retrieval_corpus_project: Path) -> None:
+    config = ProjectConfig.load(retrieval_corpus_project)
+    retrieval = RetrievalService(config)
+    chunk_count = retrieval.build_index()
+    context = retrieval.search(
+        "timeout waiting for start bit tx_fifo_level",
+        mode="triage",
+        focus_paths=["rtl/uart_rx.sv", "rtl/uart_tx.sv"],
+        limit=6,
+    )
+    assert chunk_count >= 6
+    assert len(context.hits) >= 3
+    assert any(hit.path.endswith("uart_rx.sv") for hit in context.hits)
+    assert any(hit.path.endswith("uart_spec.md") for hit in context.hits)
+    assert any(hit.kind == "log" for hit in context.hits)

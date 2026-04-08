@@ -165,7 +165,7 @@ def repair(
 
 
 @app.command("triage")
-def triage(logs: Path = typer.Option(..., "--logs"), output_format: str = typer.Option("json", "--format")) -> None:
+def triage(logs: list[Path] = typer.Option(..., "--logs"), output_format: str = typer.Option("json", "--format")) -> None:
     try:
         config, store, retrieval = _load_services()
     except ConfigError as exc:

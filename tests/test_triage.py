@@ -32,3 +32,19 @@ def test_triage_finds_similar_previous_runs(sample_project: Path) -> None:
     first_run, _, _ = triage_logs(config, store, retrieval, sample_project / "logs" / "regressions")
     _, clusters, _ = triage_logs(config, store, retrieval, sample_project / "logs" / "regressions")
     assert any(match.run_id == first_run.run_id for match in clusters[0].similar_runs)
+
+
+def test_triage_supports_mixed_log_inputs(retrieval_corpus_project: Path) -> None:
+    config = ProjectConfig.load(retrieval_corpus_project)
+    store = RunStore(config)
+    retrieval = RetrievalService(config)
+    retrieval.build_index()
+    logs = [
+        retrieval_corpus_project / "logs" / "regressions",
+        retrieval_corpus_project / "logs" / "regressions" / "nested" / "run_b.out",
+    ]
+    run, clusters, _ = triage_logs(config, store, retrieval, logs)
+    assert run.inputs["log_file_count"] == 2
+    assert len(clusters) == 2
+    assert any(cluster.signature == "SIM_TIMEOUT" for cluster in clusters)
+    assert any(cluster.signature == "SV_UNKNOWN_IDENTIFIER" for cluster in clusters)
