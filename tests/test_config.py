@@ -32,8 +32,28 @@ def test_config_raises_outside_project(work_root: Path) -> None:
 def test_config_rejects_invalid_model_provider(sample_project: Path) -> None:
     config_path = sample_project / ".tel" / "config.json"
     payload = read_json(config_path)
-    payload["project"]["model_policy"]["providers"]["remote"] = {"kind": "openai_compatible", "model": "demo-model"}
-    payload["project"]["model_policy"]["repair_provider"] = "remote"
+    payload["project"]["model_policy"]["providers"]["remote"] = {"kind": "openai_compatible", "capabilities": ["repair"], "model": "demo-model"}
+    payload["project"]["model_policy"]["default_provider_by_capability"]["repair"] = "remote"
+    write_json(config_path, payload)
+    with pytest.raises(ConfigError):
+        ProjectConfig.load(sample_project)
+
+
+def test_init_project_uses_capability_defaults(sample_project: Path) -> None:
+    config = ProjectConfig.load(sample_project)
+    assert config.default_provider_by_capability()["repair"] == "heuristic"
+    assert config.provider_capabilities("heuristic") == ["repair"]
+
+
+def test_config_rejects_invalid_local_command_provider(sample_project: Path) -> None:
+    config_path = sample_project / ".tel" / "config.json"
+    payload = read_json(config_path)
+    payload["project"]["model_policy"]["providers"]["local-test"] = {
+        "kind": "local_command",
+        "capabilities": ["repair"],
+        "args": ["tools/local_provider.py"],
+    }
+    payload["project"]["model_policy"]["default_provider_by_capability"]["repair"] = "local-test"
     write_json(config_path, payload)
     with pytest.raises(ConfigError):
         ProjectConfig.load(sample_project)

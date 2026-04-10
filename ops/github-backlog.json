@@ -264,6 +264,15 @@
           ]
         },
         {
+          "title": "Add provider-agnostic model registry and custom provider support",
+          "body": "Refactor Telchines model routing so workflows target capabilities rather than vendor-specific providers, with support for local command-based models, OpenAI-compatible endpoints, and user-defined custom providers behind one registry.",
+          "labels": [
+            "models",
+            "architecture",
+            "extensibility"
+          ]
+        },
+        {
           "title": "Document setup for supported model backends",
           "body": "Add setup docs for local and remote provider configuration, auth, and expected environment variables.",
           "labels": [
@@ -323,6 +332,61 @@
           "labels": [
             "sva",
             "cli"
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Milestone 7: Verification Tool Ecosystem Expansion",
+      "description": "Expand Telchines tool interoperability across simulation, lint, formal, waveform/debug, and hardware-design workflow tooling so it can interpret and orchestrate a broader verification toolchain.",
+      "issues": [
+        {
+          "title": "Define the verification and hardware tool interoperability roadmap",
+          "body": "Survey and prioritize the external tools Telchines should understand or orchestrate across simulation, lint, formal, waveform/debug, synthesis-adjacent checks, and regression infrastructure. Define the first adapter tiers, normalized output contracts, and selection criteria for what counts as a supported tool.",
+          "labels": [
+            "adapters",
+            "architecture",
+            "roadmap"
+          ]
+        },
+        {
+          "title": "Expand simulator adapter coverage beyond the current MVP set",
+          "body": "Add support for more commonly used simulation tools and normalize their execution and result artifacts into Telchines workflows.",
+          "labels": [
+            "adapters",
+            "simulation"
+          ]
+        },
+        {
+          "title": "Add richer formal-tool interoperability and result normalization",
+          "body": "Broaden formal-tool support and normalize counterexamples, proof summaries, and failure artifacts for replayable workflows.",
+          "labels": [
+            "adapters",
+            "formal"
+          ]
+        },
+        {
+          "title": "Add waveform and debug artifact ingestion support",
+          "body": "Ingest waveform and related debug artifacts so Telchines can ground triage and future generation workflows in richer failure evidence.",
+          "labels": [
+            "adapters",
+            "debug"
+          ]
+        },
+        {
+          "title": "Add regression manager and test-runner integration points",
+          "body": "Integrate with broader regression managers and test runners so Telchines can operate over larger verification environments without bespoke wrappers.",
+          "labels": [
+            "adapters",
+            "integration"
+          ]
+        },
+        {
+          "title": "Define criteria and contracts for community-contributed tool adapters",
+          "body": "Specify the adapter interface, artifact contracts, and support expectations for externally contributed verification tool integrations.",
+          "labels": [
+            "adapters",
+            "extensibility"
           ]
         }
       ]

@@ -32,6 +32,72 @@ class FixtureRegistry:
         return FixtureAdapter()
 
 
+def _set_model_policy(project_root: Path, model_policy: dict[str, object]) -> None:
+    config_path = project_root / ".tel" / "config.json"
+    payload = read_json(config_path)
+    payload["project"]["model_policy"] = model_policy
+    write_json(config_path, payload)
+
+
+def _write_local_provider(project_root: Path) -> None:
+    provider_script = project_root / "tools" / "local_provider.py"
+    provider_script.write_text(
+        """from __future__ import annotations
+import json
+import sys
+from pathlib import Path
+
+payload = json.loads(sys.stdin.read())
+target_file = payload["files"][0]
+target_path = Path(target_file)
+original = target_path.read_text(encoding="utf-8")
+candidate = original.replace("count <= 4'd0", "count <= 4'd0;")
+response = {
+    "status": "proposed",
+    "file_path": target_file,
+    "candidate_content": candidate,
+    "explanation": "Local command fix added the missing semicolon.",
+    "evidence_paths": ["docs/spec.md"],
+}
+sys.stdout.write(json.dumps(response))
+""",
+        encoding="utf-8",
+    )
+
+
+def _remote_model_policy(base_url: str, api_key_env: str) -> dict[str, object]:
+    return {
+        "default_provider_by_capability": {"repair": "mock-remote"},
+        "providers": {
+            "heuristic": {"kind": "heuristic", "capabilities": ["repair"]},
+            "mock-remote": {
+                "kind": "openai_compatible",
+                "capabilities": ["repair"],
+                "base_url": base_url,
+                "model": "mock-model",
+                "api_key_env": api_key_env,
+                "timeout_seconds": 5,
+            },
+        },
+    }
+
+
+def _local_model_policy(command: str, *args: str) -> dict[str, object]:
+    return {
+        "default_provider_by_capability": {"repair": "local-test"},
+        "providers": {
+            "heuristic": {"kind": "heuristic", "capabilities": ["repair"]},
+            "local-test": {
+                "kind": "local_command",
+                "capabilities": ["repair"],
+                "command": command,
+                "args": list(args),
+                "timeout_seconds": 5,
+            },
+        },
+    }
+
+
 def test_cli_index_retrieve_and_repair(sample_project: Path, monkeypatch) -> None:
     monkeypatch.chdir(sample_project)
     monkeypatch.setattr("telchines.cli.AdapterRegistry", FixtureRegistry)
@@ -166,9 +232,6 @@ def test_cli_entrypoints_install_and_help(work_root: Path) -> None:
 
 
 def test_cli_repair_with_openai_compatible_provider(sample_project: Path, monkeypatch) -> None:
-    config_path = sample_project / ".tel" / "config.json"
-    payload = read_json(config_path)
-
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):  # noqa: N802
             length = int(self.headers["Content-Length"])
@@ -210,20 +273,10 @@ def test_cli_repair_with_openai_compatible_provider(sample_project: Path, monkey
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        payload["project"]["model_policy"] = {
-            "repair_provider": "mock-remote",
-            "providers": {
-                "heuristic": {"kind": "heuristic"},
-                "mock-remote": {
-                    "kind": "openai_compatible",
-                    "base_url": f"http://127.0.0.1:{server.server_address[1]}",
-                    "model": "mock-model",
-                    "api_key_env": "TELCHINES_TEST_API_KEY",
-                    "timeout_seconds": 5
-                }
-            }
-        }
-        write_json(config_path, payload)
+        _set_model_policy(
+            sample_project,
+            _remote_model_policy(f"http://127.0.0.1:{server.server_address[1]}", "TELCHINES_TEST_API_KEY"),
+        )
         monkeypatch.setenv("TELCHINES_TEST_API_KEY", "test-token")
         monkeypatch.chdir(sample_project)
         monkeypatch.setattr("telchines.cli.AdapterRegistry", FixtureRegistry)
@@ -240,22 +293,7 @@ def test_cli_repair_with_openai_compatible_provider(sample_project: Path, monkey
 
 
 def test_cli_reports_provider_error_when_api_key_missing(sample_project: Path, monkeypatch) -> None:
-    config_path = sample_project / ".tel" / "config.json"
-    payload = read_json(config_path)
-    payload["project"]["model_policy"] = {
-        "repair_provider": "mock-remote",
-        "providers": {
-            "heuristic": {"kind": "heuristic"},
-            "mock-remote": {
-                "kind": "openai_compatible",
-                "base_url": "http://127.0.0.1:9",
-                "model": "mock-model",
-                "api_key_env": "MISSING_TEST_API_KEY",
-                "timeout_seconds": 1
-            }
-        }
-    }
-    write_json(config_path, payload)
+    _set_model_policy(sample_project, _remote_model_policy("http://127.0.0.1:9", "MISSING_TEST_API_KEY"))
     monkeypatch.delenv("MISSING_TEST_API_KEY", raising=False)
     monkeypatch.chdir(sample_project)
     monkeypatch.setattr("telchines.cli.AdapterRegistry", FixtureRegistry)
@@ -263,3 +301,99 @@ def test_cli_reports_provider_error_when_api_key_missing(sample_project: Path, m
     repair_result = runner.invoke(app, ["repair", "--tool", "fixture", "--file", "rtl/broken_counter.sv"])
     assert repair_result.exit_code == 2
     assert "provider error" in repair_result.stderr
+
+
+def test_cli_repair_with_local_command_provider(sample_project: Path, monkeypatch) -> None:
+    _write_local_provider(sample_project)
+    _set_model_policy(sample_project, _local_model_policy(sys.executable, "tools/local_provider.py"))
+    monkeypatch.chdir(sample_project)
+    monkeypatch.setattr("telchines.cli.AdapterRegistry", FixtureRegistry)
+    runner.invoke(app, ["index"])
+    repair_result = runner.invoke(app, ["repair", "--tool", "fixture", "--file", "rtl/broken_counter.sv", "--apply"])
+    assert repair_result.exit_code == 0
+    payload = json.loads(repair_result.stdout)
+    assert payload["provider"] == "local-test"
+    assert payload["validation_status"] == "passed"
+    assert payload["proposal_explanation"] == "Local command fix added the missing semicolon."
+
+
+def test_cli_reports_policy_block_for_remote_provider(sample_project: Path, monkeypatch) -> None:
+    config_path = sample_project / ".tel" / "config.json"
+    payload = read_json(config_path)
+    payload["model_mode"] = "local"
+    payload["project"]["model_policy"] = _remote_model_policy("http://127.0.0.1:9", "TELCHINES_TEST_API_KEY")
+    write_json(config_path, payload)
+    monkeypatch.chdir(sample_project)
+    monkeypatch.setattr("telchines.cli.AdapterRegistry", FixtureRegistry)
+    runner.invoke(app, ["index"])
+    repair_result = runner.invoke(app, ["repair", "--tool", "fixture", "--file", "rtl/broken_counter.sv"])
+    assert repair_result.exit_code == 2
+    assert "blocked by policy" in repair_result.stderr
+
+
+def test_cli_reports_policy_block_for_no_egress(sample_project: Path, monkeypatch) -> None:
+    config_path = sample_project / ".tel" / "config.json"
+    payload = read_json(config_path)
+    payload["no_egress"] = True
+    payload["project"]["model_policy"] = _remote_model_policy("http://127.0.0.1:9", "TELCHINES_TEST_API_KEY")
+    write_json(config_path, payload)
+    monkeypatch.chdir(sample_project)
+    monkeypatch.setattr("telchines.cli.AdapterRegistry", FixtureRegistry)
+    runner.invoke(app, ["index"])
+    repair_result = runner.invoke(app, ["repair", "--tool", "fixture", "--file", "rtl/broken_counter.sv"])
+    assert repair_result.exit_code == 2
+    assert "no_egress=true" in repair_result.stderr
+
+
+def test_cli_reports_policy_block_for_local_provider(sample_project: Path, monkeypatch) -> None:
+    _write_local_provider(sample_project)
+    config_path = sample_project / ".tel" / "config.json"
+    payload = read_json(config_path)
+    payload["model_mode"] = "remote"
+    payload["project"]["model_policy"] = _local_model_policy(sys.executable, "tools/local_provider.py")
+    write_json(config_path, payload)
+    monkeypatch.chdir(sample_project)
+    monkeypatch.setattr("telchines.cli.AdapterRegistry", FixtureRegistry)
+    runner.invoke(app, ["index"])
+    repair_result = runner.invoke(app, ["repair", "--tool", "fixture", "--file", "rtl/broken_counter.sv"])
+    assert repair_result.exit_code == 2
+    assert "blocked by policy" in repair_result.stderr
+
+
+def test_cli_lists_providers(sample_project: Path, monkeypatch) -> None:
+    _write_local_provider(sample_project)
+    config_path = sample_project / ".tel" / "config.json"
+    payload = read_json(config_path)
+    payload["model_mode"] = "local"
+    payload["project"]["model_policy"] = {
+        "default_provider_by_capability": {"repair": "heuristic"},
+        "providers": {
+            "heuristic": {"kind": "heuristic", "capabilities": ["repair"]},
+            "local-test": {
+                "kind": "local_command",
+                "capabilities": ["repair"],
+                "command": sys.executable,
+                "args": ["tools/local_provider.py"],
+                "timeout_seconds": 5,
+            },
+            "remote-test": {
+                "kind": "openai_compatible",
+                "capabilities": ["repair"],
+                "base_url": "http://127.0.0.1:9",
+                "model": "mock-model",
+                "api_key_env": "TELCHINES_TEST_API_KEY",
+                "timeout_seconds": 5,
+            },
+        },
+    }
+    write_json(config_path, payload)
+    monkeypatch.chdir(sample_project)
+    result = runner.invoke(app, ["providers", "list"])
+    assert result.exit_code == 0
+    provider_payload = json.loads(result.stdout)
+    assert provider_payload["default_provider_by_capability"]["repair"] == "heuristic"
+    remote = next(item for item in provider_payload["providers"] if item["name"] == "remote-test")
+    local = next(item for item in provider_payload["providers"] if item["name"] == "local-test")
+    assert remote["allowed"] is False
+    assert "blocks remote providers" in remote["blocked_reason"]
+    assert local["allowed"] is True

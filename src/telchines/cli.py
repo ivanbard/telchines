@@ -13,7 +13,7 @@ from telchines.config import ProjectConfig
 from telchines.errors import AdapterExecutionError, ConfigError, ProviderError
 from telchines.eval import run_default_suite
 from telchines.models import VerificationRun
-from telchines.providers import build_repair_provider
+from telchines.providers import build_repair_provider, list_provider_statuses
 from telchines.retrieval import RetrievalService
 from telchines.run_store import RunStore
 from telchines.utils import dataclass_to_dict, stable_id, utc_now
@@ -24,9 +24,11 @@ app = typer.Typer(help="Telchines CLI", no_args_is_help=True, add_completion=Fal
 project_app = typer.Typer(no_args_is_help=True)
 runs_app = typer.Typer(no_args_is_help=True)
 eval_app = typer.Typer(no_args_is_help=True)
+providers_app = typer.Typer(no_args_is_help=True)
 app.add_typer(project_app, name="project")
 app.add_typer(runs_app, name="runs")
 app.add_typer(eval_app, name="eval")
+app.add_typer(providers_app, name="providers")
 
 
 def _load_services(root: Path | None = None) -> tuple[ProjectConfig, RunStore, RetrievalService]:
@@ -183,6 +185,29 @@ def triage(logs: list[Path] = typer.Option(..., "--logs"), output_format: str = 
     if output_format == "ci":
         typer.echo(json.dumps(_format_triage_ci(payload), indent=2))
         return
+    typer.echo(json.dumps(payload, indent=2))
+
+
+@providers_app.command("list")
+def providers_list() -> None:
+    try:
+        config, _, _ = _load_services()
+    except ConfigError as exc:
+        _fail(f"config error: {exc}")
+    payload = {
+        "default_provider_by_capability": config.default_provider_by_capability(),
+        "providers": [
+            {
+                "name": status.name,
+                "kind": status.kind,
+                "capabilities": status.capabilities,
+                "default_for": status.default_for,
+                "allowed": status.allowed,
+                "blocked_reason": status.blocked_reason or None,
+            }
+            for status in list_provider_statuses(config)
+        ],
+    }
     typer.echo(json.dumps(payload, indent=2))
 
 
