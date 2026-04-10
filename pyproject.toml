@@ -9,6 +9,8 @@ description = "Telchines verification workflow platform"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+  "prompt_toolkit>=3.0,<4.0",
+  "rich>=14.0,<15.0",
   "typer>=0.17,<1.0",
 ]
 

@@ -403,6 +403,43 @@
             "ux",
             "shell"
           ]
+        },
+        {
+          "title": "Improve shell command autocomplete and contextual suggestions",
+          "body": "Add command-aware autocomplete, contextual suggestions, and shell-native discovery hints so common slash commands and workflow arguments are easier to enter interactively.",
+          "labels": [
+            "cli",
+            "ux",
+            "shell"
+          ]
+        },
+        {
+          "title": "Add @file mentions and project-aware reference insertion in the shell",
+          "body": "Support project-aware file mentions and reference insertion inside the Telchines shell so users can target files and artifacts more fluidly during interactive work.",
+          "labels": [
+            "cli",
+            "ux",
+            "shell"
+          ]
+        },
+        {
+          "title": "Add richer keyboard shortcuts and command palette interactions",
+          "body": "Introduce keyboard-driven shell affordances such as command palette interactions, structured pickers, and richer shortcut handling for the full-screen shell.",
+          "labels": [
+            "cli",
+            "ux",
+            "shell"
+          ]
+        },
+        {
+          "title": "Define a broader interactive shell UX roadmap for Codex-like affordances",
+          "body": "Document and prioritize future shell UX work such as autocomplete, @file mentions, contextual pickers, richer panels, and Codex-like interaction patterns for the Telchines terminal experience.",
+          "labels": [
+            "cli",
+            "ux",
+            "shell",
+            "roadmap"
+          ]
         }
       ]
     }
