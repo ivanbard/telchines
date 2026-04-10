@@ -10,6 +10,7 @@ from telchines.operations import (
     dump_json,
     format_triage_ci,
     format_triage_human,
+    gen_sva as gen_sva_op,
     index_project as index_project_op,
     initialize_project,
     list_providers as list_providers_op,
@@ -140,6 +141,22 @@ def triage(logs: list[Path] = typer.Option(..., "--logs"), output_format: str = 
     if output_format == "ci":
         typer.echo(dump_json(format_triage_ci(payload)))
         return
+    typer.echo(dump_json(payload))
+
+
+@app.command("gen-sva")
+def gen_sva(
+    spec: Path = typer.Option(..., "--spec"),
+    rtl: Path = typer.Option(..., "--rtl"),
+    output: Path | None = typer.Option(None, "--output"),
+    provider: str | None = typer.Option(None, "--provider"),
+) -> None:
+    try:
+        payload = gen_sva_op(None, spec=spec, rtl=rtl, output=output, provider_name=provider)
+    except ConfigError as exc:
+        _fail(f"config error: {exc}")
+    except ProviderError as exc:
+        _fail(f"provider error: {exc}")
     typer.echo(dump_json(payload))
 
 

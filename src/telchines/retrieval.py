@@ -17,6 +17,7 @@ MODE_KIND_BOOSTS = {
     "general": {"rtl": 0.15, "doc": 0.1, "log": 0.1, "script": 0.05},
     "repair": {"rtl": 0.45, "doc": 0.2, "log": 0.05, "script": 0.0},
     "triage": {"log": 0.45, "rtl": 0.25, "doc": 0.15, "script": 0.0},
+    "generation": {"doc": 0.45, "rtl": 0.35, "log": 0.0, "script": 0.0},
 }
 
 

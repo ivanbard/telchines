@@ -131,6 +131,32 @@ class PatchProposal:
 
 
 @dataclass(slots=True)
+class SvaProperty:
+    name: str
+    summary: str
+    rationale: str
+    source_citation: str = ""
+
+
+@dataclass(slots=True)
+class SvaCandidate:
+    candidate_id: str
+    task_id: str
+    spec_path: str
+    rtl_path: str
+    file_path: str
+    candidate_content: str
+    explanation: str
+    status: str
+    provider: str = ""
+    evidence_paths: list[str] = field(default_factory=list)
+    properties: list[SvaProperty] = field(default_factory=list)
+    replay_artifacts: dict[str, str] = field(default_factory=dict)
+    validation_attempts: list[ValidationAttempt] = field(default_factory=list)
+    schema_version: str = SCHEMA_VERSION
+
+
+@dataclass(slots=True)
 class BenchmarkCase:
     benchmark_id: str
     task_type: str

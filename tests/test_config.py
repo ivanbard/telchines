@@ -42,7 +42,8 @@ def test_config_rejects_invalid_model_provider(sample_project: Path) -> None:
 def test_init_project_uses_capability_defaults(sample_project: Path) -> None:
     config = ProjectConfig.load(sample_project)
     assert config.default_provider_by_capability()["repair"] == "heuristic"
-    assert config.provider_capabilities("heuristic") == ["repair"]
+    assert config.default_provider_by_capability()["generation"] == "heuristic"
+    assert config.provider_capabilities("heuristic") == ["repair", "generation"]
 
 
 def test_config_rejects_invalid_local_command_provider(sample_project: Path) -> None:

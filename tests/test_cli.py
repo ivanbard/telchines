@@ -15,7 +15,10 @@ from telchines.adapters.base import ToolAdapter
 from telchines.cli import app
 from telchines.utils import read_json, write_json
 
-runner = CliRunner(mix_stderr=False)
+try:
+    runner = CliRunner(mix_stderr=False)
+except TypeError:
+    runner = CliRunner()
 
 
 class FixtureAdapter(ToolAdapter):
@@ -65,6 +68,70 @@ sys.stdout.write(json.dumps(response))
     )
 
 
+def _write_local_sva_provider(project_root: Path, *, invalid: bool = False) -> None:
+    provider_script = project_root / "tools" / "local_sva_provider.py"
+    candidate_content = """module uart_rx_assertions(
+  input logic clk,
+  input logic rst_n,
+  input logic serial_i,
+  input logic start_seen
+);
+
+property p_start_seen_after_start_bit;
+  @(posedge clk) disable iff (!rst_n) (!serial_i) |=> start_seen;
+endproperty
+
+assert property (p_start_seen_after_start_bit);
+
+endmodule
+
+bind uart_rx uart_rx_assertions uart_rx_assertions_i(
+  .clk(clk),
+  .rst_n(rst_n),
+  .serial_i(serial_i),
+  .start_seen(start_seen)
+);
+"""
+    if invalid:
+        candidate_content = """module uart_rx_assertions(
+  input logic clk,
+  input logic rst_n,
+  input logic serial_i,
+  input logic start_seen
+);
+
+property p_start_seen_after_start_bit;
+  @(posedge clk) disable iff (!rst_n) (!serial_i) |=> start_seen;
+
+assert property (p_start_seen_after_start_bit);
+"""
+    provider_script.write_text(
+        f"""from __future__ import annotations
+import json
+import sys
+
+payload = json.loads(sys.stdin.read())
+response = {{
+    "status": "proposed",
+    "file_path": payload["output_file"],
+    "candidate_content": {candidate_content!r},
+    "explanation": "Generated a UART receiver start-bit assertion.",
+    "evidence_paths": [payload["spec"]["path"], payload["rtl"]["path"]],
+    "properties": [
+        {{
+            "name": "p_start_seen_after_start_bit",
+            "summary": "Checks that a detected start bit leads to start_seen on the next cycle.",
+            "rationale": "Grounded in the UART receiver start-bit requirement.",
+            "source_citation": payload["spec"]["path"],
+        }}
+    ],
+}}
+sys.stdout.write(json.dumps(response))
+""",
+        encoding="utf-8",
+    )
+
+
 def _remote_model_policy(base_url: str, api_key_env: str) -> dict[str, object]:
     return {
         "default_provider_by_capability": {"repair": "mock-remote"},
@@ -90,6 +157,22 @@ def _local_model_policy(command: str, *args: str) -> dict[str, object]:
             "local-test": {
                 "kind": "local_command",
                 "capabilities": ["repair"],
+                "command": command,
+                "args": list(args),
+                "timeout_seconds": 5,
+            },
+        },
+    }
+
+
+def _generation_model_policy(command: str, *args: str) -> dict[str, object]:
+    return {
+        "default_provider_by_capability": {"repair": "heuristic", "generation": "sva-local"},
+        "providers": {
+            "heuristic": {"kind": "heuristic", "capabilities": ["repair", "generation"]},
+            "sva-local": {
+                "kind": "local_command",
+                "capabilities": ["generation"],
                 "command": command,
                 "args": list(args),
                 "timeout_seconds": 5,
@@ -399,6 +482,37 @@ def test_cli_lists_providers(sample_project: Path, monkeypatch) -> None:
     assert local["allowed"] is True
 
 
+def test_cli_gen_sva_with_local_command_provider(sample_project: Path, monkeypatch) -> None:
+    _write_local_sva_provider(sample_project)
+    _set_model_policy(sample_project, _generation_model_policy(sys.executable, "tools/local_sva_provider.py"))
+    monkeypatch.chdir(sample_project)
+    runner.invoke(app, ["index"])
+    result = runner.invoke(app, ["gen-sva", "--spec", "docs/uart.md", "--rtl", "rtl/uart_rx.sv"])
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["provider"] == "sva-local"
+    assert payload["status"] == "validated"
+    assert payload["validation_status"] == "passed"
+    assert payload["artifact_path"].endswith("uart_rx_assertions.sv")
+    assert payload["property_summaries"][0]["name"] == "p_start_seen_after_start_bit"
+    artifact_path = sample_project / payload["artifact_path"]
+    assert artifact_path.exists()
+    assert "assert property" in artifact_path.read_text(encoding="utf-8")
+
+
+def test_cli_gen_sva_reports_validation_failure(sample_project: Path, monkeypatch) -> None:
+    _write_local_sva_provider(sample_project, invalid=True)
+    _set_model_policy(sample_project, _generation_model_policy(sys.executable, "tools/local_sva_provider.py"))
+    monkeypatch.chdir(sample_project)
+    runner.invoke(app, ["index"])
+    result = runner.invoke(app, ["gen-sva", "--spec", "docs/uart.md", "--rtl", "rtl/uart_rx.sv"])
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "rejected"
+    assert payload["validation_status"] == "failed"
+    assert "validation failed" in payload["validation_summary"].lower()
+
+
 def test_cli_enters_shell_by_default(sample_project: Path, monkeypatch) -> None:
     monkeypatch.chdir(sample_project)
     result = runner.invoke(app, [], input="/exit\n")
@@ -420,3 +534,14 @@ def test_cli_shell_supports_explicit_shell_subcommand(sample_project: Path, monk
     result = runner.invoke(app, ["shell"], input="/pwd\n/exit\n")
     assert result.exit_code == 0
     assert str(sample_project) in result.stdout
+
+
+def test_cli_shell_supports_gen_sva(sample_project: Path, monkeypatch) -> None:
+    _write_local_sva_provider(sample_project)
+    _set_model_policy(sample_project, _generation_model_policy(sys.executable, "tools/local_sva_provider.py"))
+    monkeypatch.chdir(sample_project)
+    runner.invoke(app, ["index"])
+    result = runner.invoke(app, [], input="/gen-sva --spec docs/uart.md --rtl rtl/uart_rx.sv\n/exit\n")
+    assert result.exit_code == 0
+    assert "Spec-to-SVA Result" in result.stdout
+    assert "uart_rx_assertions.sv" in result.stdout

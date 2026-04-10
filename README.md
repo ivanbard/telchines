@@ -35,6 +35,7 @@ Running `tel` with no arguments now opens the interactive Telchines shell. One-s
 - `tel providers list`
 - `tel repair`
 - `tel triage`
+- `tel gen-sva`
 - `tel eval run`
 - `tel eval report`
 
@@ -47,6 +48,7 @@ tel> /help
 tel> /providers
 tel> /index
 tel> /triage --logs logs/regressions
+tel> /gen-sva --spec docs/uart.md --rtl rtl/uart_rx.sv
 tel> show my providers
 tel> triage the regression logs
 tel> /exit
@@ -60,6 +62,25 @@ Use `tel shell` to enter the same experience explicitly.
 - Retrieval is local and provenance-aware.
 - `telchines` is an equivalent fallback binary if `tel` collides with a local tool on a user machine.
 - Model routing is capability-based and provider-agnostic; the default implementation is heuristic and deterministic for benchmarkable MVP behavior.
+- The first spec-to-SVA flow writes a generated assertion artifact and returns a concise inline property summary.
+
+## Spec-to-SVA
+
+Telchines now supports a first spec-to-SVA workflow:
+
+```bash
+tel gen-sva --spec docs/uart.md --rtl rtl/uart_rx.sv
+```
+
+The command:
+
+- builds an SVA-specific retrieval context from the spec and RTL target
+- routes generation through the configured `generation` provider capability
+- writes a generated assertion artifact under `.tel/artifacts/generated/`
+- persists request, response, replay, and validation artifacts in the run store
+- validates the generated artifact through the built-in SVA syntax gate
+
+Use `--output` to override the default generated artifact path and `--provider` to pick a specific configured generation provider.
 
 ## Model Provider Setup
 
@@ -78,16 +99,17 @@ Example hosted provider config:
   "project": {
     "model_policy": {
       "default_provider_by_capability": {
-        "repair": "remote-repair"
+        "repair": "remote-repair",
+        "generation": "remote-repair"
       },
       "providers": {
         "heuristic": {
           "kind": "heuristic",
-          "capabilities": ["repair"]
+          "capabilities": ["repair", "generation"]
         },
         "remote-repair": {
           "kind": "openai_compatible",
-          "capabilities": ["repair"],
+          "capabilities": ["repair", "generation"],
           "base_url": "https://example-provider.local/v1",
           "model": "demo-model",
           "api_key_env": "TELCHINES_API_KEY",
@@ -107,16 +129,17 @@ Example local command provider config:
   "project": {
     "model_policy": {
       "default_provider_by_capability": {
-        "repair": "local-repair"
+        "repair": "local-repair",
+        "generation": "local-repair"
       },
       "providers": {
         "heuristic": {
           "kind": "heuristic",
-          "capabilities": ["repair"]
+          "capabilities": ["repair", "generation"]
         },
         "local-repair": {
           "kind": "local_command",
-          "capabilities": ["repair"],
+          "capabilities": ["repair", "generation"],
           "command": "python",
           "args": ["tools/local_provider.py"],
           "timeout_seconds": 30

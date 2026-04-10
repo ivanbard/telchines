@@ -10,10 +10,11 @@ from telchines.config import ProjectConfig
 from telchines.errors import AdapterExecutionError
 from telchines.eval import run_default_suite
 from telchines.models import VerificationRun
-from telchines.providers import build_repair_provider, list_provider_statuses
+from telchines.providers import build_generation_provider, build_repair_provider, list_provider_statuses
 from telchines.retrieval import RetrievalService
 from telchines.run_store import RunStore
 from telchines.utils import dataclass_to_dict, stable_id, utc_now
+from telchines.workflows.gen_sva import execute_generation
 from telchines.workflows.repair import execute_repair
 from telchines.workflows.triage import triage_logs
 
@@ -95,6 +96,37 @@ def repair(root: Path | None, tool: str, files: list[str], extra_arg: list[str] 
         "proposal_explanation": proposal.explanation if proposal else None,
         "evidence_paths": proposal.evidence_paths if proposal else [],
         "replay_artifacts": proposal.replay_artifacts if proposal else {},
+        "validation_run_id": validation_run.run_id if validation_run else None,
+        "validation_status": validation_run.status if validation_run else None,
+        "validation_summary": validation_run.summary if validation_run else None,
+    }
+
+
+def gen_sva(
+    root: Path | None,
+    spec: Path,
+    rtl: Path,
+    output: Path | None = None,
+    provider_name: str | None = None,
+) -> dict[str, object]:
+    config, store, retrieval = load_services(root)
+    spec_path = spec if spec.is_absolute() else (config.project_root / spec).resolve()
+    rtl_path = rtl if rtl.is_absolute() else (config.project_root / rtl).resolve()
+    output_path = None if output is None else (output if output.is_absolute() else (config.project_root / output).resolve())
+    provider = build_generation_provider(config, provider_name=provider_name)
+    candidate, validation_run, context = execute_generation(config, store, retrieval, provider, spec_path, rtl_path, output_path=output_path)
+    return {
+        "context_id": context.context_id,
+        "candidate_id": candidate.candidate_id if candidate else None,
+        "provider": candidate.provider if candidate else getattr(provider, "name", ""),
+        "status": candidate.status if candidate else "no_generation",
+        "artifact_path": candidate.file_path if candidate else None,
+        "spec_path": candidate.spec_path if candidate else str(spec_path.relative_to(config.project_root)).replace("\\", "/"),
+        "rtl_path": candidate.rtl_path if candidate else str(rtl_path.relative_to(config.project_root)).replace("\\", "/"),
+        "explanation": candidate.explanation if candidate else None,
+        "property_summaries": [dataclass_to_dict(item) for item in candidate.properties] if candidate else [],
+        "evidence_paths": candidate.evidence_paths if candidate else [],
+        "replay_artifacts": candidate.replay_artifacts if candidate else {},
         "validation_run_id": validation_run.run_id if validation_run else None,
         "validation_status": validation_run.status if validation_run else None,
         "validation_summary": validation_run.summary if validation_run else None,

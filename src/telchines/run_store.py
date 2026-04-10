@@ -5,7 +5,19 @@ from pathlib import Path
 from typing import Any
 
 from telchines.config import ProjectConfig
-from telchines.models import AgentTask, FailureCluster, Observation, PatchProposal, RetrievalContext, RetrievalHit, ToolReference, ValidationAttempt, VerificationRun
+from telchines.models import (
+    AgentTask,
+    FailureCluster,
+    Observation,
+    PatchProposal,
+    RetrievalContext,
+    RetrievalHit,
+    SvaCandidate,
+    SvaProperty,
+    ToolReference,
+    ValidationAttempt,
+    VerificationRun,
+)
 from telchines.utils import dataclass_to_dict, ensure_directory, read_json, write_json
 
 
@@ -19,6 +31,7 @@ class RunStore:
         self.tasks_dir = ensure_directory(self.root / "tasks")
         self.task_artifacts_dir = ensure_directory(self.root / "task-artifacts")
         self.patches_dir = ensure_directory(self.root / "patches")
+        self.generations_dir = ensure_directory(self.root / "generations")
         self.reports_dir = ensure_directory(self.root / "reports")
 
     def save_run(self, run: VerificationRun) -> None:
@@ -78,6 +91,18 @@ class RunStore:
         payload = read_json(self.patches_dir / f"{patch_id}.json")
         payload["validation_attempts"] = [ValidationAttempt(**attempt) for attempt in payload["validation_attempts"]]
         return PatchProposal(**payload)
+
+    def save_sva_candidate(self, candidate: SvaCandidate) -> None:
+        payload = dataclass_to_dict(candidate)
+        payload["properties"] = [asdict(item) for item in candidate.properties]
+        payload["validation_attempts"] = [asdict(attempt) for attempt in candidate.validation_attempts]
+        write_json(self.generations_dir / f"{candidate.candidate_id}.json", payload)
+
+    def load_sva_candidate(self, candidate_id: str) -> SvaCandidate:
+        payload = read_json(self.generations_dir / f"{candidate_id}.json")
+        payload["properties"] = [SvaProperty(**item) for item in payload["properties"]]
+        payload["validation_attempts"] = [ValidationAttempt(**attempt) for attempt in payload["validation_attempts"]]
+        return SvaCandidate(**payload)
 
     def save_report(self, name: str, payload: dict[str, Any]) -> Path:
         path = self.reports_dir / f"{name}.json"

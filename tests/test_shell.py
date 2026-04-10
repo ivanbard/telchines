@@ -13,10 +13,12 @@ def test_shell_welcome_renders_project_context(sample_project: Path) -> None:
     assert "Verification Cockpit" in rendered
     assert config.project.name in rendered
     assert "Repair Provider" in rendered
+    assert "Generation Provider" in rendered
 
 
 def test_shell_help_renders_core_commands() -> None:
     rendered = render_help()
     assert "/providers" in rendered
     assert "/triage --logs PATH" in rendered
+    assert "/gen-sva --spec PATH --rtl PATH" in rendered
     assert "/raw <slash command>" in rendered

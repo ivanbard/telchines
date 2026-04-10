@@ -90,11 +90,12 @@ class ProjectConfig:
             model_policy={
                 "default_provider_by_capability": {
                     "repair": "heuristic",
+                    "generation": "heuristic",
                 },
                 "providers": {
                     "heuristic": {
                         "kind": "heuristic",
-                        "capabilities": ["repair"],
+                        "capabilities": ["repair", "generation"],
                     }
                 },
             },

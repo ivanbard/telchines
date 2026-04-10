@@ -22,6 +22,7 @@ from telchines.errors import AdapterExecutionError, ConfigError, ProviderError, 
 from telchines.operations import (
     dump_json,
     format_triage_human,
+    gen_sva,
     index_project,
     initialize_project,
     list_providers,
@@ -61,6 +62,12 @@ class ShellSession:
         if not config:
             return "uninitialized"
         return config.default_provider_by_capability().get("repair", "heuristic")
+
+    def active_generation_provider(self) -> str:
+        config = self.project_config()
+        if not config:
+            return "uninitialized"
+        return config.default_provider_by_capability().get("generation", "heuristic")
 
     def note_context(self, payload: dict[str, object]) -> None:
         context_id = payload.get("context_id")
@@ -279,6 +286,8 @@ def _dispatch_plain_text(session: ShellSession, user_input: str) -> tuple[bool, 
         return False, _render_intent("Inspect recent runs", render_runs_payload(list_runs(session.cwd)))
     if "repair" in lowered:
         return False, "I can run repair, but I need an explicit tool and file. Try `/repair --tool verilator --file rtl/foo.sv`."
+    if "assert" in lowered or "sva" in lowered:
+        return False, "I can generate assertions, but I need a spec and RTL target. Try `/gen-sva --spec docs/uart.md --rtl rtl/uart_rx.sv`."
     return False, "I did not recognize that request. Use /help or try `/providers`, `/index`, or `/triage --logs logs/regressions`."
 
 
@@ -323,6 +332,12 @@ def _execute_command(session: ShellSession, parts: list[str], raw: bool) -> str 
         session.note_context(payload)
         return dump_json(payload) if raw else render_triage_payload(payload)
 
+    if command == "gen-sva":
+        spec, rtl, output, provider = _parse_gen_sva_args(parts[1:])
+        payload = gen_sva(session.cwd, spec=_resolve_path(session.cwd, spec), rtl=_resolve_path(session.cwd, rtl), output=None if output is None else _resolve_path(session.cwd, output), provider_name=provider)
+        session.note_context(payload)
+        return dump_json(payload) if raw else render_sva_payload(payload)
+
     if command == "runs":
         if len(parts) == 1 or parts[1] == "list":
             payload = list_runs(session.cwd)
@@ -355,6 +370,7 @@ def render_welcome(session: ShellSession) -> str:
     table.add_row("Project", config.project.name if config else "No Telchines project detected")
     table.add_row("CWD", str(session.cwd))
     table.add_row("Repair Provider", session.active_provider())
+    table.add_row("Generation Provider", session.active_generation_provider())
     table.add_row("Indexed", "yes" if session.indexed() else "no")
     table.add_row("Logs Hint", session.logs_hint())
     table.add_row("Try", "/help, /providers, /index, /triage --logs logs/regressions")
@@ -380,6 +396,7 @@ def render_help() -> str:
         ("/providers", "Show configured providers and policy status"),
         ("/repair --tool TOOL --file PATH", "Run repair workflow"),
         ("/triage --logs PATH [--logs PATH]", "Run regression triage"),
+        ("/gen-sva --spec PATH --rtl PATH [--output PATH]", "Generate assertion draft from spec and RTL"),
         ("/runs [list|show RUN_ID|replay RUN_ID]", "Inspect stored runs"),
         ("/eval [run|report]", "Run or show benchmarks"),
         ("/cd PATH", "Change working directory"),
@@ -451,6 +468,20 @@ def render_repair_payload(payload: dict[str, object]) -> str:
 
 def render_triage_payload(payload: dict[str, object]) -> str:
     return render_action_panel("Triage Summary", format_triage_human(payload))
+
+
+def render_sva_payload(payload: dict[str, object]) -> str:
+    body = [
+        f"provider: {payload['provider']}",
+        f"status: {payload['status']}",
+        f"artifact: {payload['artifact_path']}",
+        f"validation: {payload['validation_status']}",
+    ]
+    if payload["explanation"]:
+        body.append(f"explanation: {payload['explanation']}")
+    for item in payload["property_summaries"][:3]:
+        body.append(f"property: {item['name']} -> {item['summary']}")
+    return render_action_panel("Spec-to-SVA Result", "\n".join(body))
 
 
 def render_runs_payload(payload: list[dict[str, object]]) -> str:
@@ -529,6 +560,7 @@ def _sidebar_text(session: ShellSession) -> str:
             "- /index",
             "- /triage --logs logs/regressions",
             "- /repair --tool verilator --file rtl/foo.sv",
+            "- /gen-sva --spec docs/uart.md --rtl rtl/uart_rx.sv",
         ]
     )
     return "\n".join(lines)
@@ -586,6 +618,38 @@ def _parse_repair_args(parts: list[str]) -> tuple[str, list[str], list[str], boo
     if not files:
         raise ValueError("/repair requires at least one --file")
     return tool, files, extra_args, apply_patch
+
+
+def _parse_gen_sva_args(parts: list[str]) -> tuple[str, str, str | None, str | None]:
+    spec: str | None = None
+    rtl: str | None = None
+    output: str | None = None
+    provider: str | None = None
+    index = 0
+    while index < len(parts):
+        part = parts[index]
+        if part == "--spec":
+            spec = parts[index + 1]
+            index += 2
+            continue
+        if part == "--rtl":
+            rtl = parts[index + 1]
+            index += 2
+            continue
+        if part == "--output":
+            output = parts[index + 1]
+            index += 2
+            continue
+        if part == "--provider":
+            provider = parts[index + 1]
+            index += 2
+            continue
+        raise ValueError(f"unrecognized gen-sva argument: {part}")
+    if not spec:
+        raise ValueError("/gen-sva requires --spec")
+    if not rtl:
+        raise ValueError("/gen-sva requires --rtl")
+    return spec, rtl, output, provider
 
 
 def _parse_repeated_option(parts: list[str], option_name: str) -> list[str]:
