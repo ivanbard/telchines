@@ -100,7 +100,7 @@ def _local_model_policy(command: str, *args: str) -> dict[str, object]:
 
 def test_cli_index_retrieve_and_repair(sample_project: Path, monkeypatch) -> None:
     monkeypatch.chdir(sample_project)
-    monkeypatch.setattr("telchines.cli.AdapterRegistry", FixtureRegistry)
+    monkeypatch.setattr("telchines.operations.AdapterRegistry", FixtureRegistry)
     result = runner.invoke(app, ["index"])
     assert result.exit_code == 0
     repair_result = runner.invoke(app, ["repair", "--tool", "fixture", "--file", "rtl/broken_counter.sv", "--apply"])
@@ -141,7 +141,7 @@ endmodule
         encoding="utf-8",
     )
     monkeypatch.chdir(sample_project)
-    monkeypatch.setattr("telchines.cli.AdapterRegistry", FixtureRegistry)
+    monkeypatch.setattr("telchines.operations.AdapterRegistry", FixtureRegistry)
     runner.invoke(app, ["index"])
     repair_result = runner.invoke(app, ["repair", "--tool", "fixture", "--file", "rtl/broken_counter.sv", "--apply"])
     assert repair_result.exit_code == 0
@@ -279,7 +279,7 @@ def test_cli_repair_with_openai_compatible_provider(sample_project: Path, monkey
         )
         monkeypatch.setenv("TELCHINES_TEST_API_KEY", "test-token")
         monkeypatch.chdir(sample_project)
-        monkeypatch.setattr("telchines.cli.AdapterRegistry", FixtureRegistry)
+        monkeypatch.setattr("telchines.operations.AdapterRegistry", FixtureRegistry)
         runner.invoke(app, ["index"])
         repair_result = runner.invoke(app, ["repair", "--tool", "fixture", "--file", "rtl/broken_counter.sv", "--apply"])
         assert repair_result.exit_code == 0
@@ -296,7 +296,7 @@ def test_cli_reports_provider_error_when_api_key_missing(sample_project: Path, m
     _set_model_policy(sample_project, _remote_model_policy("http://127.0.0.1:9", "MISSING_TEST_API_KEY"))
     monkeypatch.delenv("MISSING_TEST_API_KEY", raising=False)
     monkeypatch.chdir(sample_project)
-    monkeypatch.setattr("telchines.cli.AdapterRegistry", FixtureRegistry)
+    monkeypatch.setattr("telchines.operations.AdapterRegistry", FixtureRegistry)
     runner.invoke(app, ["index"])
     repair_result = runner.invoke(app, ["repair", "--tool", "fixture", "--file", "rtl/broken_counter.sv"])
     assert repair_result.exit_code == 2
@@ -307,7 +307,7 @@ def test_cli_repair_with_local_command_provider(sample_project: Path, monkeypatc
     _write_local_provider(sample_project)
     _set_model_policy(sample_project, _local_model_policy(sys.executable, "tools/local_provider.py"))
     monkeypatch.chdir(sample_project)
-    monkeypatch.setattr("telchines.cli.AdapterRegistry", FixtureRegistry)
+    monkeypatch.setattr("telchines.operations.AdapterRegistry", FixtureRegistry)
     runner.invoke(app, ["index"])
     repair_result = runner.invoke(app, ["repair", "--tool", "fixture", "--file", "rtl/broken_counter.sv", "--apply"])
     assert repair_result.exit_code == 0
@@ -324,7 +324,7 @@ def test_cli_reports_policy_block_for_remote_provider(sample_project: Path, monk
     payload["project"]["model_policy"] = _remote_model_policy("http://127.0.0.1:9", "TELCHINES_TEST_API_KEY")
     write_json(config_path, payload)
     monkeypatch.chdir(sample_project)
-    monkeypatch.setattr("telchines.cli.AdapterRegistry", FixtureRegistry)
+    monkeypatch.setattr("telchines.operations.AdapterRegistry", FixtureRegistry)
     runner.invoke(app, ["index"])
     repair_result = runner.invoke(app, ["repair", "--tool", "fixture", "--file", "rtl/broken_counter.sv"])
     assert repair_result.exit_code == 2
@@ -338,7 +338,7 @@ def test_cli_reports_policy_block_for_no_egress(sample_project: Path, monkeypatc
     payload["project"]["model_policy"] = _remote_model_policy("http://127.0.0.1:9", "TELCHINES_TEST_API_KEY")
     write_json(config_path, payload)
     monkeypatch.chdir(sample_project)
-    monkeypatch.setattr("telchines.cli.AdapterRegistry", FixtureRegistry)
+    monkeypatch.setattr("telchines.operations.AdapterRegistry", FixtureRegistry)
     runner.invoke(app, ["index"])
     repair_result = runner.invoke(app, ["repair", "--tool", "fixture", "--file", "rtl/broken_counter.sv"])
     assert repair_result.exit_code == 2
@@ -353,7 +353,7 @@ def test_cli_reports_policy_block_for_local_provider(sample_project: Path, monke
     payload["project"]["model_policy"] = _local_model_policy(sys.executable, "tools/local_provider.py")
     write_json(config_path, payload)
     monkeypatch.chdir(sample_project)
-    monkeypatch.setattr("telchines.cli.AdapterRegistry", FixtureRegistry)
+    monkeypatch.setattr("telchines.operations.AdapterRegistry", FixtureRegistry)
     runner.invoke(app, ["index"])
     repair_result = runner.invoke(app, ["repair", "--tool", "fixture", "--file", "rtl/broken_counter.sv"])
     assert repair_result.exit_code == 2
@@ -397,3 +397,26 @@ def test_cli_lists_providers(sample_project: Path, monkeypatch) -> None:
     assert remote["allowed"] is False
     assert "blocks remote providers" in remote["blocked_reason"]
     assert local["allowed"] is True
+
+
+def test_cli_enters_shell_by_default(sample_project: Path, monkeypatch) -> None:
+    monkeypatch.chdir(sample_project)
+    result = runner.invoke(app, [], input="/exit\n")
+    assert result.exit_code == 0
+    assert "interactive shell" in result.stdout.lower()
+    assert "leaving telchines shell" in result.stdout.lower()
+
+
+def test_cli_shell_routes_plain_text_and_slash_commands(sample_project: Path, monkeypatch) -> None:
+    monkeypatch.chdir(sample_project)
+    result = runner.invoke(app, [], input="/providers\nshow my providers\ntriage the regression logs\n/exit\n")
+    assert result.exit_code == 0
+    assert result.stdout.lower().count("default providers") >= 2
+    assert "produced 2 cluster(s)" in result.stdout
+
+
+def test_cli_shell_supports_explicit_shell_subcommand(sample_project: Path, monkeypatch) -> None:
+    monkeypatch.chdir(sample_project)
+    result = runner.invoke(app, ["shell"], input="/pwd\n/exit\n")
+    assert result.exit_code == 0
+    assert str(sample_project) in result.stdout

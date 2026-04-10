@@ -15,13 +15,17 @@ MVP scaffold for Telchines, a CLI-first verification workflow platform focused o
 python -m venv .venv
 . .venv/Scripts/activate
 pip install -e .[dev]
-tel --help
+tel
 telchines --help
 pytest
 ```
 
+Running `tel` with no arguments now opens the interactive Telchines shell. One-shot commands still work when you pass arguments such as `tel repair ...` or `tel providers list`.
+
 ## Current MVP Surface
 
+- `tel`
+- `tel shell`
 - `tel project init`
 - `tel index`
 - `tel retrieve`
@@ -33,6 +37,22 @@ pytest
 - `tel triage`
 - `tel eval run`
 - `tel eval report`
+
+## Interactive Shell
+
+Telchines now supports a persistent shell oriented around slash commands and lightweight plain-text prompts:
+
+```text
+tel> /help
+tel> /providers
+tel> /index
+tel> /triage --logs logs/regressions
+tel> show my providers
+tel> triage the regression logs
+tel> /exit
+```
+
+Use `tel shell` to enter the same experience explicitly.
 
 ## Notes
 

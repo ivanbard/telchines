@@ -390,6 +390,21 @@
           ]
         }
       ]
+    },
+    {
+      "title": "Milestone 8: Interactive CLI UX",
+      "description": "Turn Telchines into a persistent interactive CLI with session state, slash commands, and an in-process shell experience.",
+      "issues": [
+        {
+          "title": "Add an interactive Telchines shell with slash commands and session context",
+          "body": "Make `tel` open a persistent interactive shell by default when no args are supplied, keep one-shot commands for scripting, add slash commands for the current workflow surface, and maintain in-session context such as cwd, recent runs, and last retrieval state.",
+          "labels": [
+            "cli",
+            "ux",
+            "shell"
+          ]
+        }
+      ]
     }
   ]
 }
