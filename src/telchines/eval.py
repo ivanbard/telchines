@@ -3,15 +3,18 @@ from __future__ import annotations
 import shutil
 import subprocess
 import sys
+from copy import deepcopy
 from pathlib import Path
+from typing import Any
 
 from telchines.adapters.parsing import parse_common_output
 from telchines.config import ProjectConfig
 from telchines.models import BenchmarkCase, ToolReference, VerificationRun
-from telchines.providers import build_repair_provider
+from telchines.providers import build_generation_provider, build_repair_provider
 from telchines.retrieval import RetrievalService
 from telchines.run_store import RunStore
 from telchines.utils import copy_tree_to_temp, read_json, remove_tree, stable_id, utc_now
+from telchines.workflows.gen_sva import execute_generation
 from telchines.workflows.repair import execute_repair
 from telchines.workflows.triage import triage_logs
 
@@ -37,6 +40,8 @@ def run_default_suite(config: ProjectConfig, store: RunStore) -> dict[str, objec
             results.append(_run_triage_case(config, store, retrieval, case))
         elif case.task_type == "retrieval":
             results.append(_run_retrieval_case(config, case))
+        elif case.task_type == "sva":
+            results.append(_run_sva_case(config, case))
     passed = sum(1 for result in results if result["passed"])
     report = {
         "suite": "default",
@@ -148,8 +153,80 @@ def _run_retrieval_case(config: ProjectConfig, case: BenchmarkCase) -> dict[str,
         remove_tree(temp_root)
 
 
+def _run_sva_case(config: ProjectConfig, case: BenchmarkCase) -> dict[str, object]:
+    fixture_root = config.project_root / case.fixture_root
+    temp_root = copy_tree_to_temp(fixture_root)
+    try:
+        temp_config = ProjectConfig.init_project(temp_root)
+        model_policy = _resolve_runtime_placeholders(deepcopy(case.config.get("model_policy", {})))
+        if model_policy:
+            temp_config.project.model_policy = model_policy
+            temp_config.save()
+        temp_store = RunStore(temp_config)
+        retrieval = RetrievalService(temp_config)
+        retrieval.build_index()
+        provider_name = case.config.get("provider")
+        provider = build_generation_provider(temp_config, provider_name=str(provider_name) if provider_name else None)
+        candidate, validation_run, context = execute_generation(
+            temp_config,
+            temp_store,
+            retrieval,
+            provider,
+            temp_root / case.config["spec_path"],
+            temp_root / case.config["rtl_path"],
+        )
+        expected_validation = str(case.scoring.get("expected_validation", "passed"))
+        min_properties = int(case.scoring.get("min_properties", 1))
+        expected_names = {str(name) for name in case.scoring.get("expected_property_names", [])}
+        expected_citations = {str(item).replace("\\", "/") for item in case.scoring.get("expected_citations", [])}
+        property_names = {item.name for item in candidate.properties} if candidate else set()
+        property_citations = (
+            {item.source_citation.replace("\\", "/") for item in candidate.properties if item.source_citation}
+            | {path.replace("\\", "/") for path in candidate.evidence_paths}
+            if candidate
+            else set()
+        )
+        matched_names = sorted(expected_names & property_names)
+        matched_citations = sorted(expected_citations & property_citations)
+        property_name_match_rate = len(matched_names) / max(len(expected_names), 1)
+        citation_match_rate = len(matched_citations) / max(len(expected_citations), 1)
+        property_count = len(candidate.properties) if candidate else 0
+        generated_candidate = candidate is not None
+        artifact_exists = bool(candidate and (temp_root / candidate.file_path).exists())
+        validation_status = validation_run.status if validation_run else "not_run"
+        passed = (
+            generated_candidate
+            and artifact_exists
+            and property_count >= min_properties
+            and validation_status == expected_validation
+            and property_name_match_rate >= float(case.scoring.get("min_property_name_match_rate", 1.0))
+            and citation_match_rate >= float(case.scoring.get("min_citation_match_rate", 1.0))
+        )
+        return {
+            "benchmark_id": case.benchmark_id,
+            "task_type": case.task_type,
+            "passed": passed,
+            "provider": provider.name,
+            "context_id": context.context_id,
+            "generated_candidate": generated_candidate,
+            "candidate_id": candidate.candidate_id if candidate else None,
+            "validation_run_id": validation_run.run_id if validation_run else None,
+            "validation_status": validation_status,
+            "artifact_generated": artifact_exists,
+            "artifact_path": candidate.file_path if candidate else None,
+            "property_count": property_count,
+            "matched_property_names": matched_names,
+            "matched_citations": matched_citations,
+            "property_name_match_rate": round(property_name_match_rate, 3),
+            "citation_match_rate": round(citation_match_rate, 3),
+        }
+    finally:
+        remove_tree(temp_root)
+
+
 def _aggregate_metrics(results: list[dict[str, object]]) -> dict[str, object]:
     retrieval_results = [result for result in results if result["task_type"] == "retrieval"]
+    sva_results = [result for result in results if result["task_type"] == "sva"]
     triage_results = [result for result in results if result["task_type"] == "triage"]
     metrics: dict[str, object] = {}
     if retrieval_results:
@@ -161,6 +238,34 @@ def _aggregate_metrics(results: list[dict[str, object]]) -> dict[str, object]:
                 3,
             ),
         }
+    if sva_results:
+        metrics["sva"] = {
+            "cases": len(sva_results),
+            "generation_rate": round(
+                sum(1 for result in sva_results if bool(result["generated_candidate"])) / len(sva_results),
+                3,
+            ),
+            "validation_pass_rate": round(
+                sum(1 for result in sva_results if result["validation_status"] == "passed") / len(sva_results),
+                3,
+            ),
+            "artifact_generation_rate": round(
+                sum(1 for result in sva_results if bool(result["artifact_generated"])) / len(sva_results),
+                3,
+            ),
+            "avg_property_count": round(
+                sum(int(result["property_count"]) for result in sva_results) / len(sva_results),
+                3,
+            ),
+            "avg_property_name_match_rate": round(
+                sum(float(result["property_name_match_rate"]) for result in sva_results) / len(sva_results),
+                3,
+            ),
+            "avg_citation_match_rate": round(
+                sum(float(result["citation_match_rate"]) for result in sva_results) / len(sva_results),
+                3,
+            ),
+        }
     if triage_results:
         metrics["triage"] = {
             "cases": len(triage_results),
@@ -168,3 +273,13 @@ def _aggregate_metrics(results: list[dict[str, object]]) -> dict[str, object]:
             "avg_evidence_hits": round(sum(int(result["evidence_hits"]) for result in triage_results) / len(triage_results), 3),
         }
     return metrics
+
+
+def _resolve_runtime_placeholders(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {key: _resolve_runtime_placeholders(inner) for key, inner in value.items()}
+    if isinstance(value, list):
+        return [_resolve_runtime_placeholders(item) for item in value]
+    if value == "__python__":
+        return sys.executable
+    return value
