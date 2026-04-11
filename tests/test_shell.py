@@ -21,6 +21,7 @@ def test_shell_help_renders_core_commands() -> None:
     assert "/providers" in rendered
     assert "/triage --logs PATH" in rendered
     assert "/gen-sva --spec PATH --rtl PATH" in rendered
+    assert "/waveforms" in rendered
     assert "/raw <slash command>" in rendered
 
 

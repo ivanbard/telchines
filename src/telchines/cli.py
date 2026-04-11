@@ -12,16 +12,20 @@ from telchines.operations import (
     format_triage_human,
     gen_sva as gen_sva_op,
     index_project as index_project_op,
+    inspect_waveform as inspect_waveform_op,
     initialize_project,
     list_providers as list_providers_op,
     list_runs as list_runs_op,
+    list_waveforms as list_waveforms_op,
     load_eval_report,
     repair as repair_op,
     replay_run as replay_run_op,
     retrieve_query,
     run_eval as run_eval_op,
     show_run as show_run_op,
+    show_waveform as show_waveform_op,
     triage as triage_op,
+    waveform_signals as waveform_signals_op,
 )
 from telchines.shell import run_shell
 
@@ -30,10 +34,12 @@ project_app = typer.Typer(no_args_is_help=True)
 runs_app = typer.Typer(no_args_is_help=True)
 eval_app = typer.Typer(no_args_is_help=True)
 providers_app = typer.Typer(no_args_is_help=True)
+waveforms_app = typer.Typer(no_args_is_help=True)
 app.add_typer(project_app, name="project")
 app.add_typer(runs_app, name="runs")
 app.add_typer(eval_app, name="eval")
 app.add_typer(providers_app, name="providers")
+app.add_typer(waveforms_app, name="waveforms")
 
 
 def _fail(message: str, exit_code: int = 2) -> None:
@@ -130,11 +136,17 @@ def repair(
 
 
 @app.command("triage")
-def triage(logs: list[Path] = typer.Option(..., "--logs"), output_format: str = typer.Option("json", "--format")) -> None:
+def triage(
+    logs: list[Path] = typer.Option(..., "--logs"),
+    waveforms: list[Path] = typer.Option([], "--waveform"),
+    output_format: str = typer.Option("json", "--format"),
+) -> None:
     try:
-        payload = triage_op(None, logs)
+        payload = triage_op(None, logs, waveforms=waveforms or None)
     except ConfigError as exc:
         _fail(f"config error: {exc}")
+    except ValueError as exc:
+        _fail(str(exc))
     if output_format == "human":
         typer.echo(format_triage_human(payload))
         return
@@ -166,6 +178,52 @@ def providers_list() -> None:
         payload = list_providers_op()
     except ConfigError as exc:
         _fail(f"config error: {exc}")
+    typer.echo(dump_json(payload))
+
+
+@waveforms_app.command("list")
+def waveforms_list() -> None:
+    try:
+        payload = list_waveforms_op()
+    except ConfigError as exc:
+        _fail(f"config error: {exc}")
+    typer.echo(dump_json(payload))
+
+
+@waveforms_app.command("show")
+def waveforms_show(target: str = typer.Argument(...)) -> None:
+    try:
+        payload = show_waveform_op(None, target)
+    except ConfigError as exc:
+        _fail(f"config error: {exc}")
+    except ValueError as exc:
+        _fail(str(exc))
+    typer.echo(dump_json(payload))
+
+
+@waveforms_app.command("signals")
+def waveforms_signals(target: str = typer.Argument(...), signal_filter: str | None = typer.Option(None, "--filter")) -> None:
+    try:
+        payload = waveform_signals_op(None, target, signal_filter=signal_filter)
+    except ConfigError as exc:
+        _fail(f"config error: {exc}")
+    except ValueError as exc:
+        _fail(str(exc))
+    typer.echo(dump_json(payload))
+
+
+@waveforms_app.command("inspect")
+def waveforms_inspect(
+    target: str = typer.Argument(...),
+    signal: str = typer.Option(..., "--signal"),
+    window: int = typer.Option(8, "--window"),
+) -> None:
+    try:
+        payload = inspect_waveform_op(None, target, signal=signal, window=window)
+    except ConfigError as exc:
+        _fail(f"config error: {exc}")
+    except ValueError as exc:
+        _fail(str(exc))
     typer.echo(dump_json(payload))
 
 

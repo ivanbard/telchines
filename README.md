@@ -35,6 +35,10 @@ Running `tel` with no arguments now opens the interactive Telchines shell. One-s
 - `tel providers list`
 - `tel repair`
 - `tel triage`
+- `tel waveforms list`
+- `tel waveforms show`
+- `tel waveforms signals`
+- `tel waveforms inspect`
 - `tel gen-sva`
 - `tel eval run`
 - `tel eval report`
@@ -48,6 +52,7 @@ tel> /help
 tel> /providers
 tel> /index
 tel> /triage --logs logs/regressions
+tel> /waveforms show logs/regressions/uart_rx_trace.vcd
 tel> /gen-sva --spec docs/uart.md --rtl rtl/uart_rx.sv
 tel> show my providers
 tel> triage the regression logs
@@ -81,6 +86,25 @@ The command:
 - validates the generated artifact through the built-in SVA syntax gate
 
 Use `--output` to override the default generated artifact path and `--provider` to pick a specific configured generation provider.
+
+## Waveform Debug
+
+Telchines now supports a first waveform-aware debug slice with native VCD parsing and shell/CLI inspection commands:
+
+```bash
+tel triage --logs logs/regressions --waveform logs/regressions/uart_rx_trace.vcd
+tel waveforms list
+tel waveforms show logs/regressions/uart_rx_trace.vcd
+tel waveforms signals logs/regressions/uart_rx_trace.vcd --filter start
+tel waveforms inspect logs/regressions/uart_rx_trace.vcd --signal start_seen
+```
+
+The current implementation:
+
+- parses VCD metadata and signal transitions into `.tel/waveforms/`
+- auto-discovers nearby VCD files during triage when present under the same log tree
+- attaches waveform-backed evidence summaries to triage clusters
+- renders signal inventory and simple transition timelines in the shell and one-shot CLI
 
 ## Model Provider Setup
 

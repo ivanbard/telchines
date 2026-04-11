@@ -17,6 +17,7 @@ from telchines.utils import dataclass_to_dict, stable_id, utc_now
 from telchines.workflows.gen_sva import execute_generation
 from telchines.workflows.repair import execute_repair
 from telchines.workflows.triage import triage_logs
+from telchines.waveforms import ingest_waveform, select_signal
 
 
 def load_services(root: Path | None = None) -> tuple[ProjectConfig, RunStore, RetrievalService]:
@@ -133,13 +134,14 @@ def gen_sva(
     }
 
 
-def triage(root: Path | None, logs: list[Path]) -> dict[str, object]:
+def triage(root: Path | None, logs: list[Path], waveforms: list[Path] | None = None) -> dict[str, object]:
     config, store, retrieval = load_services(root)
-    run, clusters, context = triage_logs(config, store, retrieval, logs)
+    run, clusters, context = triage_logs(config, store, retrieval, logs, waveform_paths=waveforms)
     return {
         "run_id": run.run_id,
         "cluster_count": len(clusters),
         "context_id": context.context_id,
+        "waveform_count": int(run.inputs.get("waveform_count", 0)),
         "clusters": [dataclass_to_dict(cluster) for cluster in clusters],
     }
 
@@ -172,6 +174,50 @@ def load_eval_report(root: Path | None = None) -> dict[str, object]:
     return store.load_report("latest_eval")
 
 
+def list_waveforms(root: Path | None = None) -> dict[str, object]:
+    _, store, _ = load_services(root)
+    return {
+        "waveforms": [dataclass_to_dict(summary) for summary in store.list_waveform_summaries()],
+    }
+
+
+def show_waveform(root: Path | None, target: str) -> dict[str, object]:
+    config, store, _ = load_services(root)
+    summary = _resolve_waveform_summary(config, store, root or config.project_root, target)
+    return dataclass_to_dict(summary)
+
+
+def waveform_signals(root: Path | None, target: str, signal_filter: str | None = None) -> dict[str, object]:
+    config, store, _ = load_services(root)
+    summary = _resolve_waveform_summary(config, store, root or config.project_root, target)
+    signals = [dataclass_to_dict(item) for item in summary.signals]
+    if signal_filter:
+        lowered = signal_filter.lower()
+        signals = [item for item in signals if lowered in item["full_name"].lower() or lowered in item["name"].lower()]
+    return {
+        "waveform_id": summary.waveform_id,
+        "source_path": summary.source_path,
+        "signal_count": len(signals),
+        "signals": signals,
+    }
+
+
+def inspect_waveform(root: Path | None, target: str, signal: str, window: int = 8) -> dict[str, object]:
+    config, store, _ = load_services(root)
+    summary = _resolve_waveform_summary(config, store, root or config.project_root, target)
+    sample = select_signal(summary, signal)
+    transitions = sample.transitions[: max(window, 1)]
+    return {
+        "waveform_id": summary.waveform_id,
+        "source_path": summary.source_path,
+        "signal_name": sample.signal_name,
+        "full_name": sample.full_name,
+        "timescale": summary.timescale,
+        "transition_count": len(sample.transitions),
+        "transitions": [dataclass_to_dict(item) for item in transitions],
+    }
+
+
 def format_triage_ci(payload: dict[str, object]) -> dict[str, object]:
     clusters = payload["clusters"]
     return {
@@ -187,6 +233,14 @@ def format_triage_ci(payload: dict[str, object]) -> dict[str, object]:
                 "likely_cause": cluster["likely_cause"],
                 "suggested_action": cluster["suggested_action"],
                 "evidence": [hit["citation"] for hit in cluster["evidence_hits"]],
+                "waveforms": [
+                    {
+                        "waveform_id": item["waveform_id"],
+                        "source_path": item["source_path"],
+                        "matched_signals": item["matched_signals"],
+                    }
+                    for item in cluster["waveform_evidence"]
+                ],
                 "similar_runs": [match["run_id"] for match in cluster["similar_runs"]],
             }
             for cluster in clusters
@@ -199,6 +253,10 @@ def format_triage_human(payload: dict[str, object]) -> str:
     for index, cluster in enumerate(payload["clusters"], start=1):
         evidence = ", ".join(hit["citation"] for hit in cluster["evidence_hits"][:3]) or "none"
         similar = ", ".join(match["run_id"] for match in cluster["similar_runs"]) or "none"
+        waveforms = ", ".join(
+            f"{item['source_path']} ({', '.join(item['matched_signals']) or 'signals unavailable'})"
+            for item in cluster["waveform_evidence"][:2]
+        ) or "none"
         lines.extend(
             [
                 "",
@@ -206,6 +264,7 @@ def format_triage_human(payload: dict[str, object]) -> str:
                 f"likely cause: {cluster['likely_cause']}",
                 f"suggested action: {cluster['suggested_action']}",
                 f"evidence: {evidence}",
+                f"waveforms: {waveforms}",
                 f"similar runs: {similar}",
             ]
         )
@@ -214,3 +273,22 @@ def format_triage_human(payload: dict[str, object]) -> str:
 
 def dump_json(value: object) -> str:
     return json.dumps(value, indent=2)
+
+
+def _resolve_waveform_summary(config: ProjectConfig, store: RunStore, working_root: Path, target: str):
+    waveform_path = store.waveforms_dir / f"{target}.json"
+    if waveform_path.exists():
+        return store.load_waveform_summary(target)
+    try:
+        run = store.load_run(target)
+    except FileNotFoundError:
+        run = None
+    if run is not None:
+        waveform_ids = [item for item in run.artifacts.get("waveform_ids", "").split(",") if item]
+        if not waveform_ids:
+            raise ValueError(f"run does not have linked waveforms: {target}")
+        return store.load_waveform_summary(waveform_ids[0])
+    candidate = Path(target)
+    resolved = candidate if candidate.is_absolute() else (working_root / candidate)
+    summary = ingest_waveform(config, store, resolved)
+    return summary

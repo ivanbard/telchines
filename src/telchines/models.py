@@ -157,6 +157,52 @@ class SvaCandidate:
 
 
 @dataclass(slots=True)
+class WaveformTransition:
+    timestamp: int
+    value: str
+
+
+@dataclass(slots=True)
+class WaveformSignal:
+    name: str
+    full_name: str
+    scope: str = ""
+    width: int = 1
+    identifier: str = ""
+
+
+@dataclass(slots=True)
+class WaveformSample:
+    signal_name: str
+    full_name: str
+    transitions: list[WaveformTransition] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class WaveformSummary:
+    waveform_id: str
+    project_id: str
+    source_path: str
+    source_hash: str
+    format: str
+    timescale: str
+    top_scopes: list[str] = field(default_factory=list)
+    signals: list[WaveformSignal] = field(default_factory=list)
+    sampled_signals: list[WaveformSample] = field(default_factory=list)
+    external_tool: str = ""
+    notes: str = ""
+    schema_version: str = SCHEMA_VERSION
+
+
+@dataclass(slots=True)
+class WaveformEvidence:
+    waveform_id: str
+    source_path: str
+    matched_signals: list[str] = field(default_factory=list)
+    excerpt: str = ""
+
+
+@dataclass(slots=True)
 class BenchmarkCase:
     benchmark_id: str
     task_type: str
@@ -197,4 +243,5 @@ class FailureCluster:
     evidence_context_id: str = ""
     evidence_hits: list[RetrievalHit] = field(default_factory=list)
     similar_runs: list[SimilarRunMatch] = field(default_factory=list)
+    waveform_evidence: list[WaveformEvidence] = field(default_factory=list)
     schema_version: str = SCHEMA_VERSION

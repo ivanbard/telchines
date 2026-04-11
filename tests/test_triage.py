@@ -22,6 +22,9 @@ def test_triage_clusters_failures(sample_project: Path) -> None:
     assert clusters[0].evidence_context_id
     assert clusters[0].evidence_hits
     assert any(hit.path.endswith("uart_rx.sv") or hit.path.endswith("uart.md") for hit in clusters[0].evidence_hits)
+    assert run.inputs["waveform_count"] == 1
+    assert clusters[0].waveform_evidence
+    assert clusters[0].waveform_evidence[0].source_path.endswith("uart_rx_trace.vcd")
 
 
 def test_triage_finds_similar_previous_runs(sample_project: Path) -> None:

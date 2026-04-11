@@ -1,0 +1,34 @@
+$date
+  Apr 11 2026
+$end
+$version
+  Telchines fixture
+$end
+$timescale 1ns $end
+$scope module uart_rx_tb $end
+$var wire 1 ! clk $end
+$var wire 1 " rst_n $end
+$var wire 1 # serial_i $end
+$var wire 1 $ start_seen $end
+$upscope $end
+$enddefinitions $end
+#0
+0!
+0"
+1#
+0$
+#5
+1!
+#10
+0!
+1"
+#15
+1!
+0#
+#20
+0!
+1$
+#25
+1!
+#30
+0!

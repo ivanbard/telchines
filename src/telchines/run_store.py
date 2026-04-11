@@ -17,6 +17,11 @@ from telchines.models import (
     ToolReference,
     ValidationAttempt,
     VerificationRun,
+    WaveformEvidence,
+    WaveformSample,
+    WaveformSignal,
+    WaveformSummary,
+    WaveformTransition,
 )
 from telchines.utils import dataclass_to_dict, ensure_directory, read_json, write_json
 
@@ -32,6 +37,7 @@ class RunStore:
         self.task_artifacts_dir = ensure_directory(self.root / "task-artifacts")
         self.patches_dir = ensure_directory(self.root / "patches")
         self.generations_dir = ensure_directory(self.root / "generations")
+        self.waveforms_dir = ensure_directory(self.root / "waveforms")
         self.reports_dir = ensure_directory(self.root / "reports")
 
     def save_run(self, run: VerificationRun) -> None:
@@ -103,6 +109,36 @@ class RunStore:
         payload["properties"] = [SvaProperty(**item) for item in payload["properties"]]
         payload["validation_attempts"] = [ValidationAttempt(**attempt) for attempt in payload["validation_attempts"]]
         return SvaCandidate(**payload)
+
+    def save_waveform_summary(self, summary: WaveformSummary) -> None:
+        payload = dataclass_to_dict(summary)
+        payload["signals"] = [asdict(item) for item in summary.signals]
+        payload["sampled_signals"] = [
+            {
+                "signal_name": sample.signal_name,
+                "full_name": sample.full_name,
+                "transitions": [asdict(transition) for transition in sample.transitions],
+            }
+            for sample in summary.sampled_signals
+        ]
+        write_json(self.waveforms_dir / f"{summary.waveform_id}.json", payload)
+
+    def load_waveform_summary(self, waveform_id: str) -> WaveformSummary:
+        payload = read_json(self.waveforms_dir / f"{waveform_id}.json")
+        payload["signals"] = [WaveformSignal(**item) for item in payload["signals"]]
+        payload["sampled_signals"] = [
+            WaveformSample(
+                signal_name=sample["signal_name"],
+                full_name=sample["full_name"],
+                transitions=[WaveformTransition(**transition) for transition in sample["transitions"]],
+            )
+            for sample in payload["sampled_signals"]
+        ]
+        return WaveformSummary(**payload)
+
+    def list_waveform_summaries(self) -> list[WaveformSummary]:
+        summaries = [self.load_waveform_summary(path.stem) for path in sorted(self.waveforms_dir.glob("*.json"))]
+        return sorted(summaries, key=lambda item: item.source_path)
 
     def save_report(self, name: str, payload: dict[str, Any]) -> Path:
         path = self.reports_dir / f"{name}.json"

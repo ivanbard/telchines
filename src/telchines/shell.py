@@ -24,17 +24,21 @@ from telchines.operations import (
     dump_json,
     format_triage_human,
     gen_sva,
+    inspect_waveform,
     index_project,
     initialize_project,
     list_providers,
     list_runs,
+    list_waveforms,
     load_eval_report,
     repair,
     replay_run,
     retrieve_query,
     run_eval,
     show_run,
+    show_waveform,
     triage,
+    waveform_signals,
 )
 
 
@@ -353,6 +357,9 @@ def _dispatch_plain_text(session: ShellSession, user_input: str) -> tuple[bool, 
         payload = triage(session.cwd, [logs_path])
         session.note_context(payload)
         return False, _render_intent("Run triage", format_triage_human(payload))
+    if "waveform" in lowered or "trace" in lowered:
+        payload = list_waveforms(session.cwd)
+        return False, _render_intent("Inspect waveforms", render_waveform_list_payload(payload))
     if any(keyword in lowered for keyword in ("retrieve", "search", "find")):
         payload = retrieve_query(session.cwd, user_input, mode="general")
         session.note_context(payload)
@@ -400,10 +407,15 @@ def _execute_command(session: ShellSession, parts: list[str], raw: bool) -> str 
         return dump_json(payload) if raw else render_repair_payload(payload)
 
     if command == "triage":
-        logs = _parse_repeated_option(parts[1:], "--logs")
+        logs = _parse_repeated_option(parts[1:], "--logs", strict=False)
+        waveforms = _parse_repeated_option(parts[1:], "--waveform", strict=False)
         if not logs:
             raise ValueError("/triage requires at least one --logs path")
-        payload = triage(session.cwd, [_resolve_path(session.cwd, value) for value in logs])
+        payload = triage(
+            session.cwd,
+            [_resolve_path(session.cwd, value) for value in logs],
+            waveforms=[_resolve_path(session.cwd, value) for value in waveforms] if waveforms else None,
+        )
         session.note_context(payload)
         return dump_json(payload) if raw else render_triage_payload(payload)
 
@@ -433,6 +445,25 @@ def _execute_command(session: ShellSession, parts: list[str], raw: bool) -> str 
             payload = load_eval_report(session.cwd)
             return dump_json(payload) if raw else render_eval_payload(payload)
         raise ValueError("supported /eval commands are run and report")
+
+    if command == "waveforms":
+        if len(parts) == 1 or parts[1] == "list":
+            payload = list_waveforms(session.cwd)
+            return dump_json(payload) if raw else render_waveform_list_payload(payload)
+        if parts[1] == "show" and len(parts) > 2:
+            payload = show_waveform(session.cwd, parts[2])
+            return dump_json(payload) if raw else render_waveform_show_payload(payload)
+        if parts[1] == "signals" and len(parts) > 2:
+            signal_filter = _parse_optional_argument(parts[3:], "--filter")
+            payload = waveform_signals(session.cwd, parts[2], signal_filter=signal_filter)
+            return dump_json(payload) if raw else render_waveform_signals_payload(payload)
+        if parts[1] == "inspect" and len(parts) > 2:
+            signal = _parse_required_argument(parts[3:], "--signal")
+            window_value = _parse_optional_argument(parts[3:], "--window")
+            window = int(window_value) if window_value else 8
+            payload = inspect_waveform(session.cwd, parts[2], signal=signal, window=window)
+            return dump_json(payload) if raw else render_waveform_inspect_payload(payload)
+        raise ValueError("supported /waveforms commands are list, show <target>, signals <target>, and inspect <target> --signal NAME")
 
     raise ValueError(f"unknown slash command: /{command}")
 
@@ -468,8 +499,9 @@ def render_help() -> str:
         ("/retrieve QUERY", "Search project context"),
         ("/providers", "Show configured providers and policy status"),
         ("/repair --tool TOOL --file PATH", "Run repair workflow"),
-        ("/triage --logs PATH [--logs PATH]", "Run regression triage"),
+        ("/triage --logs PATH [--logs PATH] [--waveform PATH]", "Run regression triage"),
         ("/gen-sva --spec PATH --rtl PATH [--output PATH]", "Generate assertion draft from spec and RTL"),
+        ("/waveforms [list|show TARGET|signals TARGET|inspect TARGET --signal NAME]", "Inspect waveform summaries and signals"),
         ("/runs [list|show RUN_ID|replay RUN_ID]", "Inspect stored runs"),
         ("/eval [run|report]", "Run or show benchmarks"),
         ("/cd PATH", "Change working directory"),
@@ -560,6 +592,59 @@ def render_sva_payload(payload: dict[str, object]) -> str:
     for item in payload["property_summaries"][:3]:
         body.append(f"property: {item['name']} -> {item['summary']}")
     return render_action_panel("Spec-to-SVA Result", "\n".join(body))
+
+
+def render_waveform_list_payload(payload: dict[str, object]) -> str:
+    waveforms = payload["waveforms"]
+    if not waveforms:
+        return render_action_panel("Waveforms", "no waveform summaries recorded")
+    table = Table(title="Waveforms", show_header=True, header_style="bold cyan")
+    table.add_column("Waveform ID")
+    table.add_column("Format")
+    table.add_column("Timescale")
+    table.add_column("Signals")
+    table.add_column("Source")
+    for item in waveforms[:10]:
+        table.add_row(item["waveform_id"], item["format"], item["timescale"], str(len(item["signals"])), item["source_path"])
+    return _render_rich(table)
+
+
+def render_waveform_show_payload(payload: dict[str, object]) -> str:
+    lines = [
+        f"id: {payload['waveform_id']}",
+        f"source: {payload['source_path']}",
+        f"format: {payload['format']}",
+        f"timescale: {payload['timescale']}",
+        f"signals: {len(payload['signals'])}",
+        f"scopes: {', '.join(payload['top_scopes']) or 'none'}",
+    ]
+    if payload.get("external_tool"):
+        lines.append(f"external tool: {payload['external_tool']}")
+    if payload.get("notes"):
+        lines.append(f"notes: {payload['notes']}")
+    return render_action_panel("Waveform Summary", "\n".join(lines))
+
+
+def render_waveform_signals_payload(payload: dict[str, object]) -> str:
+    table = Table(title=f"Signals {payload['waveform_id']}", show_header=True, header_style="bold cyan")
+    table.add_column("Name")
+    table.add_column("Full Name")
+    table.add_column("Width")
+    for item in payload["signals"][:20]:
+        table.add_row(item["name"], item["full_name"], str(item["width"]))
+    return _render_rich(table)
+
+
+def render_waveform_inspect_payload(payload: dict[str, object]) -> str:
+    body = [
+        f"signal: {payload['full_name']}",
+        f"timescale: {payload['timescale']}",
+        f"transitions: {payload['transition_count']}",
+    ]
+    if payload["transitions"]:
+        body.append("timeline:")
+        body.extend(f"  {item['timestamp']}: {item['value']}" for item in payload["transitions"])
+    return render_action_panel("Waveform Inspect", "\n".join(body))
 
 
 def render_runs_payload(payload: list[dict[str, object]]) -> str:
@@ -724,17 +809,38 @@ def _parse_gen_sva_args(parts: list[str]) -> tuple[str, str, str | None, str | N
     return spec, rtl, output, provider
 
 
-def _parse_repeated_option(parts: list[str], option_name: str) -> list[str]:
+def _parse_repeated_option(parts: list[str], option_name: str, strict: bool = True) -> list[str]:
     values: list[str] = []
     index = 0
     while index < len(parts):
-        if parts[index] != option_name:
+        if parts[index] == option_name:
+            if index + 1 >= len(parts):
+                raise ValueError(f"{option_name} requires a value")
+            values.append(parts[index + 1])
+            index += 2
+            continue
+        if strict:
             raise ValueError(f"unrecognized argument: {parts[index]}")
-        if index + 1 >= len(parts):
-            raise ValueError(f"{option_name} requires a value")
-        values.append(parts[index + 1])
-        index += 2
+        index += 1
     return values
+
+
+def _parse_required_argument(parts: list[str], option_name: str) -> str:
+    value = _parse_optional_argument(parts, option_name)
+    if value is None:
+        raise ValueError(f"{option_name} requires a value")
+    return value
+
+
+def _parse_optional_argument(parts: list[str], option_name: str) -> str | None:
+    index = 0
+    while index < len(parts):
+        if parts[index] == option_name:
+            if index + 1 >= len(parts):
+                raise ValueError(f"{option_name} requires a value")
+            return parts[index + 1]
+        index += 1
+    return None
 
 
 def _resolve_path(cwd: Path, value: str) -> Path:

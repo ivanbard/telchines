@@ -243,6 +243,8 @@ def test_cli_triage(sample_project: Path, monkeypatch) -> None:
     payload = json.loads(result.stdout)
     assert payload["cluster_count"] == 2
     assert payload["clusters"][0]["evidence_hits"]
+    assert payload["waveform_count"] == 1
+    assert payload["clusters"][0]["waveform_evidence"]
 
 
 def test_cli_triage_human_and_ci_formats(sample_project: Path, monkeypatch) -> None:
@@ -251,11 +253,13 @@ def test_cli_triage_human_and_ci_formats(sample_project: Path, monkeypatch) -> N
     human = runner.invoke(app, ["triage", "--logs", "logs/regressions", "--format", "human"])
     assert human.exit_code == 0
     assert "likely cause:" in human.stdout.lower()
+    assert "waveforms:" in human.stdout.lower()
     ci = runner.invoke(app, ["triage", "--logs", "logs/regressions", "--format", "ci"])
     assert ci.exit_code == 0
     payload = json.loads(ci.stdout)
     assert payload["status"] == "needs_attention"
     assert payload["clusters"][0]["evidence"]
+    assert payload["clusters"][0]["waveforms"]
 
 
 def test_cli_triage_accepts_multiple_log_paths(retrieval_corpus_project: Path, monkeypatch) -> None:
@@ -277,6 +281,28 @@ def test_cli_triage_accepts_multiple_log_paths(retrieval_corpus_project: Path, m
     payload = json.loads(result.stdout)
     assert payload["cluster_count"] == 2
     assert any(cluster["signature"] == "SV_UNKNOWN_IDENTIFIER" for cluster in payload["clusters"])
+
+
+def test_cli_waveform_commands(sample_project: Path, monkeypatch) -> None:
+    monkeypatch.chdir(sample_project)
+    show_result = runner.invoke(app, ["waveforms", "show", "logs/regressions/uart_rx_trace.vcd"])
+    assert show_result.exit_code == 0
+    show_payload = json.loads(show_result.stdout)
+    assert show_payload["format"] == "vcd"
+
+    signals_result = runner.invoke(app, ["waveforms", "signals", "logs/regressions/uart_rx_trace.vcd", "--filter", "start"])
+    assert signals_result.exit_code == 0
+    signals_payload = json.loads(signals_result.stdout)
+    assert any(item["name"] == "start_seen" for item in signals_payload["signals"])
+
+    inspect_result = runner.invoke(
+        app,
+        ["waveforms", "inspect", "logs/regressions/uart_rx_trace.vcd", "--signal", "start_seen", "--window", "4"],
+    )
+    assert inspect_result.exit_code == 0
+    inspect_payload = json.loads(inspect_result.stdout)
+    assert inspect_payload["signal_name"] == "start_seen"
+    assert inspect_payload["transitions"]
 
 
 def test_cli_reports_project_config_error(work_root: Path, monkeypatch) -> None:
@@ -554,3 +580,15 @@ def test_cli_shell_supports_gen_sva(sample_project: Path, monkeypatch) -> None:
     assert result.exit_code == 0
     assert "Spec-to-SVA Result" in result.stdout
     assert "uart_rx_assertions.sv" in result.stdout
+
+
+def test_cli_shell_supports_waveform_commands(sample_project: Path, monkeypatch) -> None:
+    monkeypatch.chdir(sample_project)
+    result = runner.invoke(
+        app,
+        [],
+        input="/waveforms show logs/regressions/uart_rx_trace.vcd\n/waveforms inspect logs/regressions/uart_rx_trace.vcd --signal start_seen\n/exit\n",
+    )
+    assert result.exit_code == 0
+    assert "Waveform Summary" in result.stdout
+    assert "Waveform Inspect" in result.stdout

@@ -5,10 +5,11 @@ from pathlib import Path
 
 from telchines.adapters.parsing import parse_common_output
 from telchines.config import ProjectConfig
-from telchines.models import FailureCluster, Observation, RetrievalContext, SimilarRunMatch, ToolReference, VerificationRun
+from telchines.models import FailureCluster, Observation, RetrievalContext, SimilarRunMatch, ToolReference, VerificationRun, WaveformSummary
 from telchines.retrieval import RetrievalService
 from telchines.run_store import RunStore
 from telchines.utils import stable_id, tokenize, unique_preserve_order, utc_now
+from telchines.waveforms import discover_waveforms, ingest_waveform, summarize_for_cluster
 
 SUPPORTED_LOG_EXTENSIONS = {".log", ".txt", ".out", ".err"}
 
@@ -18,9 +19,13 @@ def triage_logs(
     store: RunStore,
     retrieval: RetrievalService,
     logs_path: Path | list[Path],
+    waveform_paths: list[Path] | None = None,
 ) -> tuple[VerificationRun, list[FailureCluster], RetrievalContext]:
     requested_paths = _normalize_input_paths(logs_path)
     log_files = _collect_log_files(requested_paths)
+    explicit_waveforms = _normalize_input_paths(waveform_paths or [])
+    waveform_files = _collect_waveform_files(explicit_waveforms) if explicit_waveforms else discover_waveforms(requested_paths)
+    waveform_summaries = [ingest_waveform(config, store, path) for path in waveform_files]
     run_id = stable_id(
         "run",
         config.project.project_id,
@@ -41,7 +46,7 @@ def triage_logs(
     context = retrieval.search(query=overall_query, mode="triage", focus_paths=overall_focus)
     store.save_context(context)
 
-    clusters = build_clusters(store, retrieval, all_observations)
+    clusters = build_clusters(store, retrieval, all_observations, waveform_summaries)
     clusters_path = store.save_clusters(run_id, clusters)
     run = VerificationRun(
         run_id=run_id,
@@ -52,12 +57,17 @@ def triage_logs(
         inputs={
             "logs_path": [str(path) for path in requested_paths],
             "log_file_count": len(log_files),
+            "waveform_count": len(waveform_summaries),
         },
         status="passed",
         started_at=utc_now(),
         finished_at=utc_now(),
         exit_code=0,
-        artifacts={"clusters_path": str(clusters_path), "context_id": context.context_id},
+        artifacts={
+            "clusters_path": str(clusters_path),
+            "context_id": context.context_id,
+            "waveform_ids": ",".join(summary.waveform_id for summary in waveform_summaries),
+        },
         observation_ids=[observation.observation_id for observation in all_observations],
         summary=f"clustered {len(all_observations)} observations from {len(log_files)} log files into {len(clusters)} evidence-backed failure clusters",
         replay_command=[],
@@ -66,9 +76,15 @@ def triage_logs(
     return run, clusters, context
 
 
-def build_clusters(store: RunStore, retrieval: RetrievalService, observations: list[Observation]) -> list[FailureCluster]:
+def build_clusters(
+    store: RunStore,
+    retrieval: RetrievalService,
+    observations: list[Observation],
+    waveform_summaries: list[WaveformSummary] | None = None,
+) -> list[FailureCluster]:
     grouped = _group_observations(observations)
     previous_runs = store.list_runs_by_workflow("regression_triage")
+    waveform_summaries = waveform_summaries or []
     clusters: list[FailureCluster] = []
     for items in sorted(grouped, key=lambda group: (-len(group), _cluster_signature(group))):
         signature = _cluster_signature(items)
@@ -94,6 +110,7 @@ def build_clusters(store: RunStore, retrieval: RetrievalService, observations: l
                 evidence_context_id=evidence_context.context_id,
                 evidence_hits=evidence_context.hits,
                 similar_runs=_find_similar_runs(store, previous_runs, items),
+                waveform_evidence=_waveform_evidence(signature, files, items, waveform_summaries),
             )
         )
     return clusters
@@ -123,6 +140,14 @@ def _collect_log_files(paths: list[Path]) -> list[Path]:
                 seen.add(resolved)
                 log_files.append(candidate)
     return log_files
+
+
+def _collect_waveform_files(paths: list[Path]) -> list[Path]:
+    waveform_files = discover_waveforms(paths)
+    if paths and not waveform_files:
+        requested = ", ".join(str(path) for path in paths)
+        raise ValueError(f"no supported waveform files were found under: {requested}")
+    return waveform_files
 
 
 def _group_observations(observations: list[Observation]) -> list[list[Observation]]:
@@ -204,6 +229,16 @@ def _find_similar_runs(store: RunStore, previous_runs: list[VerificationRun], it
         matches.append(SimilarRunMatch(run_id=run.run_id, score=round(score, 3), summary=run.summary))
     matches.sort(key=lambda match: (-match.score, match.run_id))
     return matches[:3]
+
+
+def _waveform_evidence(
+    signature: str,
+    files: list[str],
+    items: list[Observation],
+    waveform_summaries: list[WaveformSummary],
+):
+    messages = [item.message for item in items[:3]]
+    return [summarize_for_cluster(summary, signature, files, messages) for summary in waveform_summaries[:3]]
 
 
 def _run_similarity(cluster_items: list[Observation], prior_items: list[Observation]) -> float:
