@@ -405,6 +405,15 @@
           ]
         },
         {
+          "title": "Redesign the shell into a console-first layout",
+          "body": "Replace the current multi-pane shell split with a console-dominant layout that integrates input into the main console flow, keeps only compact persistent status context, and removes the separate discover and command-input panes.",
+          "labels": [
+            "cli",
+            "ux",
+            "shell"
+          ]
+        },
+        {
           "title": "Improve shell command autocomplete and contextual suggestions",
           "body": "Add command-aware autocomplete, contextual suggestions, and shell-native discovery hints so common slash commands and workflow arguments are easier to enter interactively.",
           "labels": [

@@ -15,7 +15,6 @@ from prompt_toolkit.widgets import Frame, TextArea
 from rich.console import Console, Group
 from rich.panel import Panel
 from rich.table import Table
-from rich.text import Text
 
 from telchines.config import ProjectConfig
 from telchines.errors import AdapterExecutionError, ConfigError, ProviderError, TelchinesError
@@ -154,9 +153,17 @@ def _run_fullscreen_shell(session: ShellSession) -> None:
         wrap_lines=False,
     )
 
-    header_window = Window(height=3, content=FormattedTextControl(text=lambda: _header_fragments(session)))
+    header_window = Window(height=1, content=FormattedTextControl(text=lambda: _header_fragments(session)))
     sidebar_window = Window(content=FormattedTextControl(text=lambda: _sidebar_text(session)), wrap_lines=True)
-    hint_window = Window(height=2, content=FormattedTextControl(text=lambda: _hint_fragments(session)))
+    footer_window = Window(height=1, content=FormattedTextControl(text=lambda: _hint_fragments(session)))
+
+    console_body = HSplit(
+        [
+            transcript_area,
+            Window(height=1, char="-", style="class:subtle"),
+            input_area,
+        ]
+    )
 
     layout = Layout(
         HSplit(
@@ -164,12 +171,11 @@ def _run_fullscreen_shell(session: ShellSession) -> None:
                 header_window,
                 VSplit(
                     [
-                        Frame(sidebar_window, title="Verification Context", width=Dimension(preferred=38)),
-                        Frame(transcript_area, title="Transcript"),
+                        Frame(console_body, title="Console"),
+                        Frame(sidebar_window, title="Status", width=Dimension(preferred=28, max=32)),
                     ]
                 ),
-                Frame(hint_window, title="Discover"),
-                Frame(input_area, title="Command Input"),
+                footer_window,
             ]
         )
     )
@@ -198,7 +204,7 @@ def _run_fullscreen_shell(session: ShellSession) -> None:
         if not user_input:
             return
         session.history.append(user_input)
-        session.transcript.append(f"> {user_input}")
+        session.transcript.append(f"{session.prompt()}{user_input}")
         try:
             should_exit, rendered = dispatch_input(session, user_input)
         except (ConfigError, ProviderError, AdapterExecutionError, ValueError, KeyError, TelchinesError) as exc:
@@ -367,18 +373,16 @@ def render_welcome(session: ShellSession) -> str:
     table = Table.grid(padding=(0, 1))
     table.add_column(style="cyan", justify="right")
     table.add_column(style="white")
+    table.add_row("Shell", "ready")
     table.add_row("Project", config.project.name if config else "No Telchines project detected")
-    table.add_row("CWD", str(session.cwd))
-    table.add_row("Repair Provider", session.active_provider())
-    table.add_row("Generation Provider", session.active_generation_provider())
-    table.add_row("Indexed", "yes" if session.indexed() else "no")
-    table.add_row("Logs Hint", session.logs_hint())
-    table.add_row("Try", "/help, /providers, /index, /triage --logs logs/regressions")
+    table.add_row("Repair", session.active_provider())
+    table.add_row("Generate", session.active_generation_provider())
+    table.add_row("Try", "/help  /providers  /index  /triage --logs logs/regressions")
     return _render_rich(
         Panel(
             table,
-            title="Telchines Verification Cockpit",
-            subtitle="Full-screen interactive shell",
+            title="Telchines",
+            subtitle="Console-first shell",
             border_style="cyan",
         )
     )
@@ -533,41 +537,35 @@ def _render_intent(title: str, body: str) -> str:
 
 def _header_fragments(session: ShellSession) -> list[tuple[str, str]]:
     project = session.project_config().project.name if session.project_config() else "no-project"
-    text = f" Telchines  |  Project: {project}  |  CWD: {session.cwd}  |  Repair Provider: {session.active_provider()} "
+    text = (
+        f" Telchines | {project} | cwd: {session.cwd} | "
+        f"repair: {session.active_provider()} | gen: {session.active_generation_provider()} "
+    )
     return [("class:header", text)]
 
 
 def _sidebar_text(session: ShellSession) -> str:
+    config = session.project_config()
     lines = [
-        "Status",
-        f"project: {session.project_config().project.name if session.project_config() else 'none'}",
+        f"project: {config.project.name if config else 'none'}",
+        f"cwd: {session.cwd.name}",
         f"indexed: {'yes' if session.indexed() else 'no'}",
-        f"logs: {session.logs_hint()}",
+        f"repair: {session.active_provider()}",
+        f"gen: {session.active_generation_provider()}",
         f"last ctx: {session.last_context_id or 'none'}",
+        f"logs: {session.logs_hint()}",
         "",
-        "Recent Runs",
+        "recent runs",
     ]
     if session.recent_run_ids:
         lines.extend(f"- {run_id}" for run_id in session.recent_run_ids)
     else:
         lines.append("- none")
-    lines.extend(
-        [
-            "",
-            "Quick Actions",
-            "- /help",
-            "- /providers",
-            "- /index",
-            "- /triage --logs logs/regressions",
-            "- /repair --tool verilator --file rtl/foo.sv",
-            "- /gen-sva --spec docs/uart.md --rtl rtl/uart_rx.sv",
-        ]
-    )
     return "\n".join(lines)
 
 
 def _hint_fragments(session: ShellSession) -> list[tuple[str, str]]:
-    hint = "Slash commands are the reliable path. Plain text can infer providers, indexing, retrieval, triage, and runs."
+    hint = " /help for commands | Enter executes | Ctrl-C exits "
     return [("class:subtle", f" {hint}")]
 
 

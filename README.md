@@ -41,7 +41,7 @@ Running `tel` with no arguments now opens the interactive Telchines shell. One-s
 
 ## Interactive Shell
 
-Telchines now supports a persistent full-screen shell oriented around slash commands, visible verification context, and lightweight plain-text prompts:
+Telchines now supports a persistent full-screen shell with a console-first layout, compact status context, slash commands, and lightweight plain-text prompts:
 
 ```text
 tel> /help

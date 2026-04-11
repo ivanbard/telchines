@@ -10,10 +10,10 @@ def test_shell_welcome_renders_project_context(sample_project: Path) -> None:
     session = ShellSession(cwd=sample_project)
     rendered = render_welcome(session)
     config = ProjectConfig.load(sample_project)
-    assert "Verification Cockpit" in rendered
+    assert "Console-first shell" in rendered
     assert config.project.name in rendered
-    assert "Repair Provider" in rendered
-    assert "Generation Provider" in rendered
+    assert "Repair" in rendered
+    assert "Generate" in rendered
 
 
 def test_shell_help_renders_core_commands() -> None:
