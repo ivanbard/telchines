@@ -11,13 +11,9 @@ from telchines.models import (
     Observation,
     PatchProposal,
     RetrievalContext,
-    RetrievalHit,
     SvaCandidate,
-    SvaProperty,
     ToolReference,
-    ValidationAttempt,
     VerificationRun,
-    WaveformEvidence,
     WaveformSample,
     WaveformSignal,
     WaveformSummary,
@@ -72,16 +68,8 @@ class RunStore:
         payload["hits"] = [asdict(hit) for hit in context.hits]
         write_json(self.contexts_dir / f"{context.context_id}.json", payload)
 
-    def load_context(self, context_id: str) -> RetrievalContext:
-        payload = read_json(self.contexts_dir / f"{context_id}.json")
-        payload["hits"] = [RetrievalHit(**hit) for hit in payload["hits"]]
-        return RetrievalContext(**payload)
-
     def save_task(self, task: AgentTask) -> None:
         write_json(self.tasks_dir / f"{task.task_id}.json", dataclass_to_dict(task))
-
-    def load_task(self, task_id: str) -> AgentTask:
-        return AgentTask(**read_json(self.tasks_dir / f"{task_id}.json"))
 
     def save_task_artifact(self, task_id: str, name: str, payload: dict[str, Any]) -> Path:
         path = self.task_artifacts_dir / f"{task_id}_{name}.json"
@@ -93,22 +81,11 @@ class RunStore:
         payload["validation_attempts"] = [asdict(attempt) for attempt in patch.validation_attempts]
         write_json(self.patches_dir / f"{patch.patch_id}.json", payload)
 
-    def load_patch(self, patch_id: str) -> PatchProposal:
-        payload = read_json(self.patches_dir / f"{patch_id}.json")
-        payload["validation_attempts"] = [ValidationAttempt(**attempt) for attempt in payload["validation_attempts"]]
-        return PatchProposal(**payload)
-
     def save_sva_candidate(self, candidate: SvaCandidate) -> None:
         payload = dataclass_to_dict(candidate)
         payload["properties"] = [asdict(item) for item in candidate.properties]
         payload["validation_attempts"] = [asdict(attempt) for attempt in candidate.validation_attempts]
         write_json(self.generations_dir / f"{candidate.candidate_id}.json", payload)
-
-    def load_sva_candidate(self, candidate_id: str) -> SvaCandidate:
-        payload = read_json(self.generations_dir / f"{candidate_id}.json")
-        payload["properties"] = [SvaProperty(**item) for item in payload["properties"]]
-        payload["validation_attempts"] = [ValidationAttempt(**attempt) for attempt in payload["validation_attempts"]]
-        return SvaCandidate(**payload)
 
     def save_waveform_summary(self, summary: WaveformSummary) -> None:
         payload = dataclass_to_dict(summary)

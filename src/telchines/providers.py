@@ -66,7 +66,6 @@ class ProviderStatus:
 
 class RepairProvider:
     name = "base"
-    is_remote = False
 
     def propose_patch(self, request: RepairRequest) -> RepairProviderResult:
         raise NotImplementedError
@@ -74,7 +73,6 @@ class RepairProvider:
 
 class GenerationProvider:
     name = "base"
-    is_remote = False
 
     def generate_sva(self, request: GenerationRequest) -> GenerationProviderResult:
         raise NotImplementedError
@@ -265,8 +263,6 @@ class HeuristicGenerationProvider(GenerationProvider):
 
 
 class OpenAICompatibleRepairProvider(RepairProvider):
-    is_remote = True
-
     def __init__(self, provider_name: str, config: dict[str, Any]) -> None:
         self.provider_name = provider_name
         self.config = config
@@ -302,8 +298,6 @@ class OpenAICompatibleRepairProvider(RepairProvider):
 
 
 class OpenAICompatibleGenerationProvider(GenerationProvider):
-    is_remote = True
-
     def __init__(self, provider_name: str, config: dict[str, Any]) -> None:
         self.provider_name = provider_name
         self.config = config

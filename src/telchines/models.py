@@ -20,17 +20,6 @@ class VerificationProject:
 
 
 @dataclass(slots=True)
-class DesignArtifact:
-    artifact_id: str
-    project_id: str
-    path: str
-    kind: str
-    content_hash: str
-    source: str
-    schema_version: str = SCHEMA_VERSION
-
-
-@dataclass(slots=True)
 class ToolReference:
     kind: str
     name: str
@@ -210,16 +199,6 @@ class BenchmarkCase:
     fixture_root: str
     config: dict[str, Any]
     scoring: dict[str, Any]
-    schema_version: str = SCHEMA_VERSION
-
-
-@dataclass(slots=True)
-class CoverageItem:
-    coverage_id: str
-    project_id: str
-    name: str
-    status: str
-    detail: str
     schema_version: str = SCHEMA_VERSION
 
 

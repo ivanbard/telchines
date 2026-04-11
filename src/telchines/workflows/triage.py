@@ -215,7 +215,7 @@ def _suggested_action(signature: str, files: list[str]) -> str:
     if signature == "ASSERTION_FAILURE":
         return f"Trace the first failing assertion in {target} and compare waveform or log evidence against the checker intent."
     if signature == "FILE_NOT_FOUND":
-        return f"Confirm the missing file is present and included in the tool invocation before rerunning the regression."
+        return "Confirm the missing file is present and included in the tool invocation before rerunning the regression."
     return f"Start from {target}, inspect the first cited evidence block, and rerun the smallest reproducer before scaling back to the full regression."
 
 

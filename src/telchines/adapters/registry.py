@@ -18,6 +18,3 @@ class AdapterRegistry:
             return self._adapters[name]
         except KeyError as exc:
             raise KeyError(f"unknown adapter: {name}") from exc
-
-    def list_adapters(self) -> list[ToolAdapter]:
-        return list(self._adapters.values())

@@ -7,7 +7,6 @@ from pathlib import Path
 
 from telchines.adapters.registry import AdapterRegistry
 from telchines.config import ProjectConfig
-from telchines.errors import AdapterExecutionError
 from telchines.eval import run_default_suite
 from telchines.models import VerificationRun
 from telchines.providers import build_generation_provider, build_repair_provider, list_provider_statuses
