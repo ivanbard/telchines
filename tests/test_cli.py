@@ -536,6 +536,15 @@ def test_cli_shell_supports_explicit_shell_subcommand(sample_project: Path, monk
     assert str(sample_project) in result.stdout
 
 
+def test_cli_shell_help_still_works_in_plain_mode(sample_project: Path, monkeypatch) -> None:
+    monkeypatch.chdir(sample_project)
+    monkeypatch.setenv("TELCHINES_PLAIN_SHELL", "1")
+    result = runner.invoke(app, [], input="/help\n/exit\n")
+    assert result.exit_code == 0
+    assert "Telchines Shell Commands" in result.stdout
+    assert "leaving telchines shell" in result.stdout.lower()
+
+
 def test_cli_shell_supports_gen_sva(sample_project: Path, monkeypatch) -> None:
     _write_local_sva_provider(sample_project)
     _set_model_policy(sample_project, _generation_model_policy(sys.executable, "tools/local_sva_provider.py"))

@@ -8,9 +8,11 @@ from pathlib import Path
 
 import typer
 from prompt_toolkit import Application
+from prompt_toolkit.filters import Condition
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.layout import Dimension, FormattedTextControl, HSplit, Layout, VSplit, Window
 from prompt_toolkit.styles import Style
+from prompt_toolkit.layout.containers import ConditionalContainer
 from prompt_toolkit.widgets import Frame, TextArea
 from rich.console import Console, Group
 from rich.panel import Panel
@@ -93,6 +95,14 @@ class ShellSession:
         return str(candidate.relative_to(self.cwd)) if candidate and candidate.exists() else "none"
 
 
+@dataclass(slots=True)
+class ShellViewState:
+    help_visible: bool = False
+    help_text: str = ""
+    saved_input_text: str = ""
+    saved_cursor_position: int = 0
+
+
 def run_shell(initial_cwd: Path | None = None) -> None:
     session = ShellSession(cwd=(initial_cwd or Path.cwd()).resolve())
     session.add_transcript("Telchines", render_welcome(session))
@@ -139,6 +149,7 @@ def _run_basic_shell(session: ShellSession) -> None:
 
 
 def _run_fullscreen_shell(session: ShellSession) -> None:
+    view_state = ShellViewState()
     transcript_area = TextArea(
         text="\n\n".join(session.transcript),
         read_only=True,
@@ -151,6 +162,13 @@ def _run_fullscreen_shell(session: ShellSession) -> None:
         prompt=session.prompt(),
         multiline=False,
         wrap_lines=False,
+    )
+    help_area = TextArea(
+        text="",
+        read_only=True,
+        scrollbar=True,
+        focusable=True,
+        wrap_lines=True,
     )
 
     header_window = Window(height=1, content=FormattedTextControl(text=lambda: _header_fragments(session)))
@@ -165,16 +183,25 @@ def _run_fullscreen_shell(session: ShellSession) -> None:
         ]
     )
 
+    console_frame = Frame(console_body, title="Console")
+    help_frame = Frame(help_area, title="Help")
+    left_pane = HSplit(
+        [
+            ConditionalContainer(content=console_frame, filter=Condition(lambda: not view_state.help_visible)),
+            ConditionalContainer(content=help_frame, filter=Condition(lambda: view_state.help_visible)),
+        ]
+    )
+    main_content = VSplit(
+        [
+            left_pane,
+            Frame(sidebar_window, title="Status", width=Dimension(preferred=28, max=32)),
+        ]
+    )
     layout = Layout(
         HSplit(
             [
                 header_window,
-                VSplit(
-                    [
-                        Frame(console_body, title="Console"),
-                        Frame(sidebar_window, title="Status", width=Dimension(preferred=28, max=32)),
-                    ]
-                ),
+                main_content,
                 footer_window,
             ]
         )
@@ -199,11 +226,44 @@ def _run_fullscreen_shell(session: ShellSession) -> None:
             transcript_area.text = "\n\n".join(session.transcript)
             transcript_area.buffer.cursor_position = len(transcript_area.text)
 
+    def force_reflow() -> None:
+        app.renderer.reset()
+        app.renderer.clear()
+        app.layout.reset()
+        app.invalidate()
+
+    def show_help_overlay() -> None:
+        view_state.saved_input_text = input_area.text
+        view_state.saved_cursor_position = input_area.buffer.cursor_position
+        view_state.help_visible = True
+        view_state.help_text = render_help()
+        help_area.text = view_state.help_text
+        help_area.buffer.cursor_position = 0
+        force_reflow()
+        app.layout.focus(help_area)
+
+    def hide_help_overlay() -> None:
+        if not view_state.help_visible:
+            return
+        view_state.help_visible = False
+        input_area.text = view_state.saved_input_text
+        input_area.buffer.cursor_position = min(view_state.saved_cursor_position, len(input_area.text))
+        force_reflow()
+        app.layout.focus(input_area)
+
     def submit() -> None:
+        if view_state.help_visible:
+            hide_help_overlay()
+            return
         user_input = input_area.text.strip()
         if not user_input:
             return
         session.history.append(user_input)
+        if _is_help_command(user_input):
+            show_help_overlay()
+            input_area.text = ""
+            input_area.prompt = session.prompt()
+            return
         session.transcript.append(f"{session.prompt()}{user_input}")
         try:
             should_exit, rendered = dispatch_input(session, user_input)
@@ -224,14 +284,23 @@ def _run_fullscreen_shell(session: ShellSession) -> None:
     def _(event) -> None:  # noqa: ANN001
         submit()
 
+    @kb.add("escape", filter=Condition(lambda: view_state.help_visible))
+    @kb.add("q", filter=Condition(lambda: view_state.help_visible))
+    def _(event) -> None:  # noqa: ANN001
+        hide_help_overlay()
+
     @kb.add("c-c")
     @kb.add("c-d")
     def _(event) -> None:  # noqa: ANN001
+        if view_state.help_visible:
+            hide_help_overlay()
+            return
         session.transcript.append("leaving Telchines shell")
         transcript_area.text = "\n\n".join(session.transcript)
         event.app.exit()
 
     app = Application(layout=layout, key_bindings=kb, full_screen=True, mouse_support=False, style=style)
+    app.layout.focus(input_area)
     app.run()
 
 
@@ -411,6 +480,11 @@ def render_help() -> str:
     for command, purpose in commands:
         table.add_row(command, purpose)
     return _render_rich(table)
+
+
+def _is_help_command(user_input: str) -> bool:
+    stripped = user_input.strip().lower()
+    return stripped in {"/help", "help"}
 
 
 def render_provider_payload(payload: dict[str, object]) -> str:
