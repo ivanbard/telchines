@@ -18,9 +18,10 @@ def test_eval_default_suite(work_root: Path) -> None:
     store = RunStore(config)
     report = run_default_suite(config, store)
     assert report["passed"] == report["total"]
-    assert report["total"] == 11
-    assert report["metrics"]["retrieval"]["cases"] == 2
+    assert report["total"] == 12
+    assert report["metrics"]["retrieval"]["cases"] == 3
     assert report["metrics"]["retrieval"]["avg_recall_at_k"] == 1.0
+    assert report["metrics"]["retrieval"]["avg_external_recall_at_k"] == 1.0
     assert report["metrics"]["sva"]["cases"] == 3
     assert report["metrics"]["sva"]["generation_rate"] == 1.0
     assert report["metrics"]["sva"]["validation_pass_rate"] == 0.667

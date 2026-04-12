@@ -4,6 +4,7 @@ from pathlib import Path
 
 from telchines.config import ProjectConfig
 from telchines.retrieval import RetrievalService
+from telchines.utils import read_json, write_json
 
 
 def test_retrieval_builds_and_searches(sample_project: Path) -> None:
@@ -58,3 +59,31 @@ def test_retrieval_handles_larger_fixture_corpus(retrieval_corpus_project: Path)
     assert any(hit.path.endswith("uart_rx.sv") for hit in context.hits)
     assert any(hit.path.endswith("uart_spec.md") for hit in context.hits)
     assert any(hit.kind == "log" for hit in context.hits)
+
+
+def test_retrieval_merges_external_corpus_with_provenance(sample_project: Path) -> None:
+    knowledge_root = sample_project / "knowledge" / "verification"
+    knowledge_root.mkdir(parents=True, exist_ok=True)
+    (knowledge_root / "uart_timeout.md").write_text(
+        "# UART timeout debugging\n\nObjection drain time can hide the first timeout waiting for start bit in UART regressions.\n",
+        encoding="utf-8",
+    )
+    config_path = sample_project / ".tel" / "config.json"
+    payload = read_json(config_path)
+    payload["retrieval"]["external_roots"] = ["knowledge/verification"]
+    write_json(config_path, payload)
+
+    config = ProjectConfig.load(sample_project)
+    retrieval = RetrievalService(config)
+    chunk_count = retrieval.build_index()
+    external_only = retrieval.search("objection drain time", mode="generation", limit=4)
+    mixed = retrieval.search("timeout waiting for start bit", mode="triage", focus_paths=["rtl/uart_rx.sv"], limit=12)
+
+    assert chunk_count > 0
+    assert external_only.hits
+    assert external_only.hits[0].source_domain == "external"
+    assert external_only.hits[0].source_label == "knowledge/verification"
+    assert external_only.hits[0].source_uri == "knowledge/verification"
+    assert external_only.hits[0].ingested_at
+    assert any(hit.source_domain == "external" for hit in mixed.hits)
+    assert mixed.hits[0].source_domain == "project"

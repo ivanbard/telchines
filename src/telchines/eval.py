@@ -121,6 +121,10 @@ def _run_retrieval_case(config: ProjectConfig, case: BenchmarkCase) -> dict[str,
     temp_root = copy_tree_to_temp(fixture_root)
     try:
         temp_config = ProjectConfig.init_project(temp_root)
+        retrieval_overrides = case.config.get("retrieval", {})
+        if isinstance(retrieval_overrides, dict) and retrieval_overrides:
+            temp_config.retrieval.update(retrieval_overrides)
+            temp_config.save()
         retrieval = RetrievalService(temp_config)
         retrieval.build_index()
         context = retrieval.search(
@@ -134,9 +138,13 @@ def _run_retrieval_case(config: ProjectConfig, case: BenchmarkCase) -> dict[str,
         matched_paths = sorted(path for path in expected_paths if any(hit_path.endswith(path) for hit_path in hit_paths))
         recall = len(matched_paths) / max(len(expected_paths), 1)
         citation_coverage = sum(1 for hit in context.hits if hit.citation) / max(len(context.hits), 1)
+        expected_external = {path.replace("\\", "/") for path in case.scoring.get("expected_external_paths", [])}
+        matched_external = sorted(path for path in expected_external if any(hit_path.endswith(path) for hit_path in hit_paths))
+        external_recall = len(matched_external) / max(len(expected_external), 1) if expected_external else 1.0
         min_recall = float(case.scoring.get("min_recall", 1.0))
         min_citation_coverage = float(case.scoring.get("min_citation_coverage", 1.0))
-        passed = recall >= min_recall and citation_coverage >= min_citation_coverage
+        min_external_recall = float(case.scoring.get("min_external_recall", 1.0)) if expected_external else 1.0
+        passed = recall >= min_recall and citation_coverage >= min_citation_coverage and external_recall >= min_external_recall
         return {
             "benchmark_id": case.benchmark_id,
             "task_type": case.task_type,
@@ -145,7 +153,9 @@ def _run_retrieval_case(config: ProjectConfig, case: BenchmarkCase) -> dict[str,
             "query": context.query,
             "hit_count": len(context.hits),
             "matched_paths": matched_paths,
+            "matched_external_paths": matched_external,
             "recall_at_k": round(recall, 3),
+            "external_recall_at_k": round(external_recall, 3),
             "citation_coverage": round(citation_coverage, 3),
         }
     finally:
@@ -232,6 +242,10 @@ def _aggregate_metrics(results: list[dict[str, object]]) -> dict[str, object]:
         metrics["retrieval"] = {
             "cases": len(retrieval_results),
             "avg_recall_at_k": round(sum(float(result["recall_at_k"]) for result in retrieval_results) / len(retrieval_results), 3),
+            "avg_external_recall_at_k": round(
+                sum(float(result["external_recall_at_k"]) for result in retrieval_results) / len(retrieval_results),
+                3,
+            ),
             "avg_citation_coverage": round(
                 sum(float(result["citation_coverage"]) for result in retrieval_results) / len(retrieval_results),
                 3,

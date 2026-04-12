@@ -58,3 +58,12 @@ def test_config_rejects_invalid_local_command_provider(sample_project: Path) -> 
     write_json(config_path, payload)
     with pytest.raises(ConfigError):
         ProjectConfig.load(sample_project)
+
+
+def test_config_rejects_absolute_external_roots(sample_project: Path) -> None:
+    config_path = sample_project / ".tel" / "config.json"
+    payload = read_json(config_path)
+    payload["retrieval"]["external_roots"] = [str((sample_project / "docs").resolve())]
+    write_json(config_path, payload)
+    with pytest.raises(ConfigError):
+        ProjectConfig.load(sample_project)

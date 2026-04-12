@@ -27,6 +27,19 @@ class ToolReference:
 
 
 @dataclass(slots=True)
+class AdapterDescriptor:
+    name: str
+    kind: str
+    category: str
+    binary_names: list[str] = field(default_factory=list)
+    supported_workflows: list[str] = field(default_factory=list)
+    artifact_types: list[str] = field(default_factory=list)
+    available: bool = False
+    enabled: bool = False
+    version: str = "unknown"
+
+
+@dataclass(slots=True)
 class VerificationRun:
     run_id: str
     project_id: str
@@ -39,6 +52,7 @@ class VerificationRun:
     finished_at: str | None = None
     exit_code: int | None = None
     artifacts: dict[str, str] = field(default_factory=dict)
+    tool_result: dict[str, Any] = field(default_factory=dict)
     observation_ids: list[str] = field(default_factory=list)
     summary: str = ""
     replay_command: list[str] = field(default_factory=list)
@@ -68,6 +82,10 @@ class RetrievalHit:
     snippet: str
     citation: str = ""
     source_hash: str = ""
+    source_domain: str = "project"
+    source_label: str = "project"
+    source_uri: str = ""
+    ingested_at: str = ""
 
 
 @dataclass(slots=True)

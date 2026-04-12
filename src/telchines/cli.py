@@ -14,6 +14,7 @@ from telchines.operations import (
     index_project as index_project_op,
     inspect_waveform as inspect_waveform_op,
     initialize_project,
+    list_adapters as list_adapters_op,
     list_providers as list_providers_op,
     list_runs as list_runs_op,
     list_waveforms as list_waveforms_op,
@@ -33,11 +34,13 @@ app = typer.Typer(help="Telchines CLI", invoke_without_command=True, add_complet
 project_app = typer.Typer(no_args_is_help=True)
 runs_app = typer.Typer(no_args_is_help=True)
 eval_app = typer.Typer(no_args_is_help=True)
+adapters_app = typer.Typer(no_args_is_help=True)
 providers_app = typer.Typer(no_args_is_help=True)
 waveforms_app = typer.Typer(no_args_is_help=True)
 app.add_typer(project_app, name="project")
 app.add_typer(runs_app, name="runs")
 app.add_typer(eval_app, name="eval")
+app.add_typer(adapters_app, name="adapters")
 app.add_typer(providers_app, name="providers")
 app.add_typer(waveforms_app, name="waveforms")
 
@@ -176,6 +179,15 @@ def gen_sva(
 def providers_list() -> None:
     try:
         payload = list_providers_op()
+    except ConfigError as exc:
+        _fail(f"config error: {exc}")
+    typer.echo(dump_json(payload))
+
+
+@adapters_app.command("list")
+def adapters_list(category: str | None = typer.Option(None, "--category")) -> None:
+    try:
+        payload = list_adapters_op(category=category)
     except ConfigError as exc:
         _fail(f"config error: {exc}")
     typer.echo(dump_json(payload))

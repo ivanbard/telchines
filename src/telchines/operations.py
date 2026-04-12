@@ -42,6 +42,13 @@ def retrieve_query(root: Path | None, query: str, limit: int = 5, mode: str = "g
     return {"context_id": context.context_id, "mode": context.mode, "hits": [asdict(hit) for hit in context.hits]}
 
 
+def list_adapters(root: Path | None = None, category: str | None = None) -> dict[str, object]:
+    config, _, _ = load_services(root)
+    registry = AdapterRegistry()
+    adapters = [adapter.describe(enabled=adapter.name in config.adapters) for adapter in registry.list(category=category)]
+    return {"adapters": [dataclass_to_dict(adapter) for adapter in adapters]}
+
+
 def list_runs(root: Path | None = None) -> list[dict[str, object]]:
     _, store, _ = load_services(root)
     return [dataclass_to_dict(run) for run in store.list_runs()]
@@ -79,7 +86,8 @@ def repair(root: Path | None, tool: str, files: list[str], extra_arg: list[str] 
         started_at=execution.started_at,
         finished_at=execution.finished_at,
         exit_code=execution.exit_code,
-        artifacts={"log_path": execution.log_path},
+        artifacts=execution.artifacts,
+        tool_result=execution.result,
         observation_ids=[observation.observation_id for observation in execution.observations],
         summary=execution.summary,
         replay_command=execution.command,

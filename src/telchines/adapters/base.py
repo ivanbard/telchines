@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import shutil
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from telchines.adapters.parsing import parse_common_output
 from telchines.errors import AdapterExecutionError
-from telchines.models import Observation, ToolReference
+from telchines.models import AdapterDescriptor, Observation, ToolReference
 from telchines.utils import ensure_directory, utc_now
 
 
@@ -23,12 +24,17 @@ class AdapterExecution:
     finished_at: str
     observations: list[Observation]
     summary: str
+    artifacts: dict[str, str] = field(default_factory=dict)
+    result: dict[str, Any] = field(default_factory=dict)
 
 
 class ToolAdapter:
     name = "base"
     kind = "tool"
+    category = "tool"
     binary_names: tuple[str, ...] = ()
+    supported_workflows: tuple[str, ...] = ()
+    artifact_types: tuple[str, ...] = ("log",)
 
     def is_available(self) -> bool:
         if not self.binary_names:
@@ -43,6 +49,34 @@ class ToolAdapter:
 
     def parse_output(self, run_id: str, text: str) -> list[Observation]:
         return parse_common_output(run_id, text)
+
+    def parse_result(self, project_root: Path, files: list[str], stdout: str, stderr: str, combined: str) -> dict[str, Any]:
+        return {}
+
+    def collect_artifacts(
+        self,
+        project_root: Path,
+        files: list[str],
+        artifacts_dir: Path,
+        run_id: str,
+        stdout: str,
+        stderr: str,
+        combined: str,
+    ) -> dict[str, str]:
+        return {}
+
+    def describe(self, *, enabled: bool = False) -> AdapterDescriptor:
+        return AdapterDescriptor(
+            name=self.name,
+            kind=self.kind,
+            category=self.category,
+            binary_names=list(self.binary_names),
+            supported_workflows=list(self.supported_workflows),
+            artifact_types=list(self.artifact_types),
+            available=self.is_available(),
+            enabled=enabled,
+            version=self.version(),
+        )
 
     def run(self, run_id: str, project_root: Path, files: list[str], artifacts_dir: Path, extra_args: list[str] | None = None) -> AdapterExecution:
         command = self.build_command(project_root, files, extra_args)
@@ -62,7 +96,13 @@ class ToolAdapter:
         combined = process.stdout + process.stderr
         log_path.write_text(combined, encoding="utf-8")
         observations = self.parse_output(run_id, combined)
+        result = self.parse_result(project_root, files, process.stdout, process.stderr, combined)
+        artifacts = {"log_path": str(log_path)}
+        artifacts.update(self.collect_artifacts(project_root, files, artifacts_dir, run_id, process.stdout, process.stderr, combined))
         summary = f"{self.name} exited with code {process.returncode}"
+        normalized_status = str(result.get("status", "")).strip()
+        if normalized_status:
+            summary = f"{summary}; status: {normalized_status}"
         if observations:
             summary = f"{summary}; first observation: {observations[0].signature}"
         return AdapterExecution(
@@ -76,6 +116,8 @@ class ToolAdapter:
             finished_at=finished_at,
             observations=observations,
             summary=summary,
+            artifacts=artifacts,
+            result=result,
         )
 
     @property

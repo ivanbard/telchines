@@ -9,7 +9,7 @@ from telchines.models import VerificationProject
 from telchines.utils import dataclass_to_dict, ensure_directory, read_json, stable_id, utc_now, write_json
 
 SUPPORTED_MODEL_MODES = {"local", "hybrid", "remote"}
-SUPPORTED_ADAPTERS = {"verilator", "iverilog", "verible", "symbiyosys", "fixture"}
+SUPPORTED_ADAPTERS = {"verilator", "iverilog", "slang", "verible", "symbiyosys", "fixture"}
 SUPPORTED_PROVIDER_KINDS = {"heuristic", "openai_compatible", "local_command"}
 
 
@@ -21,8 +21,15 @@ class ProjectConfig:
     artifacts_dir: str = ".tel/artifacts"
     model_mode: str = "hybrid"
     no_egress: bool = False
-    adapters: list[str] = field(default_factory=lambda: ["verilator", "iverilog", "verible", "symbiyosys"])
-    retrieval: dict[str, Any] = field(default_factory=lambda: {"chunk_lines": 20, "max_hits": 5})
+    adapters: list[str] = field(default_factory=lambda: ["verilator", "iverilog", "slang", "verible", "symbiyosys"])
+    retrieval: dict[str, Any] = field(
+        default_factory=lambda: {
+            "chunk_lines": 20,
+            "max_hits": 5,
+            "external_roots": [],
+            "external_index_dir": ".tel/external-index",
+        }
+    )
 
     @property
     def project_root(self) -> Path:
@@ -71,7 +78,15 @@ class ProjectConfig:
             model_mode=payload["model_mode"],
             no_egress=payload["no_egress"],
             adapters=payload["adapters"],
-            retrieval=payload["retrieval"],
+            retrieval=payload.get(
+                "retrieval",
+                {
+                    "chunk_lines": 20,
+                    "max_hits": 5,
+                    "external_roots": [],
+                    "external_index_dir": ".tel/external-index",
+                },
+            ),
         )
         config.validate()
         return config
@@ -143,6 +158,17 @@ class ProjectConfig:
             value = self.retrieval.get(key)
             if not isinstance(value, int) or value <= 0:
                 raise ConfigError(f"retrieval.{key} must be a positive integer")
+        external_index_dir = self.retrieval.get("external_index_dir", ".tel/external-index")
+        if not isinstance(external_index_dir, str) or not external_index_dir.strip():
+            raise ConfigError("retrieval.external_index_dir must be a non-empty string")
+        if Path(external_index_dir).is_absolute():
+            raise ConfigError("retrieval.external_index_dir must be relative to the project root")
+        external_roots = self.retrieval.get("external_roots", [])
+        if not isinstance(external_roots, list) or any(not isinstance(item, str) or not item.strip() for item in external_roots):
+            raise ConfigError("retrieval.external_roots must be a list of non-empty strings")
+        for root_value in external_roots:
+            if Path(root_value).is_absolute():
+                raise ConfigError("retrieval.external_roots entries must be relative to the project root")
         for path_value, field_name in (
             (self.store_dir, "store_dir"),
             (self.index_dir, "index_dir"),

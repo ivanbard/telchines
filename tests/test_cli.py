@@ -508,6 +508,20 @@ def test_cli_lists_providers(sample_project: Path, monkeypatch) -> None:
     assert local["allowed"] is True
 
 
+def test_cli_lists_adapters(sample_project: Path, monkeypatch) -> None:
+    monkeypatch.chdir(sample_project)
+    result = runner.invoke(app, ["adapters", "list", "--category", "formal"])
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["adapters"][0]["name"] == "symbiyosys"
+    assert payload["adapters"][0]["category"] == "formal"
+
+    simulation_result = runner.invoke(app, ["adapters", "list", "--category", "simulation"])
+    assert simulation_result.exit_code == 0
+    simulation_payload = json.loads(simulation_result.stdout)
+    assert any(item["name"] == "slang" and item["enabled"] for item in simulation_payload["adapters"])
+
+
 def test_cli_gen_sva_with_local_command_provider(sample_project: Path, monkeypatch) -> None:
     _write_local_sva_provider(sample_project)
     _set_model_policy(sample_project, _generation_model_policy(sys.executable, "tools/local_sva_provider.py"))
