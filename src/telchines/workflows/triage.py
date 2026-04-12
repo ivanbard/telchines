@@ -5,7 +5,7 @@ from pathlib import Path
 
 from telchines.adapters.parsing import parse_common_output
 from telchines.config import ProjectConfig
-from telchines.models import FailureCluster, Observation, RetrievalContext, SimilarRunMatch, ToolReference, VerificationRun, WaveformSummary
+from telchines.models import FailureCluster, FormalEvidence, Observation, RetrievalContext, SimilarRunMatch, ToolReference, VerificationRun, WaveformSummary
 from telchines.retrieval import RetrievalService
 from telchines.run_store import RunStore
 from telchines.utils import stable_id, tokenize, unique_preserve_order, utc_now
@@ -84,6 +84,7 @@ def build_clusters(
 ) -> list[FailureCluster]:
     grouped = _group_observations(observations)
     previous_runs = store.list_runs_by_workflow("regression_triage")
+    formal_runs = [run for run in store.list_runs() if _is_formal_run(run)]
     waveform_summaries = waveform_summaries or []
     clusters: list[FailureCluster] = []
     for items in sorted(grouped, key=lambda group: (-len(group), _cluster_signature(group))):
@@ -110,6 +111,7 @@ def build_clusters(
                 evidence_context_id=evidence_context.context_id,
                 evidence_hits=evidence_context.hits,
                 similar_runs=_find_similar_runs(store, previous_runs, items),
+                formal_evidence=_find_formal_evidence(formal_runs, items),
                 waveform_evidence=_waveform_evidence(signature, files, items, waveform_summaries),
             )
         )
@@ -239,6 +241,41 @@ def _waveform_evidence(
 ):
     messages = [item.message for item in items[:3]]
     return [summarize_for_cluster(summary, signature, files, messages) for summary in waveform_summaries[:3]]
+
+
+def _find_formal_evidence(previous_runs: list[VerificationRun], items: list[Observation]) -> list[FormalEvidence]:
+    if not previous_runs:
+        return []
+    cluster_files = {str(item.file).replace("\\", "/") for item in items if item.file}
+    cluster_signatures = {item.signature for item in items}
+    evidence: list[FormalEvidence] = []
+    for run in previous_runs:
+        tool_result = run.tool_result or {}
+        input_files = {str(path).replace("\\", "/") for path in run.inputs.get("files", [])}
+        file_overlap = bool(cluster_files & input_files) if cluster_files and input_files else False
+        formal_status = str(tool_result.get("status", "")).strip()
+        signature_overlap = "ASSERTION_FAILURE" in cluster_signatures and formal_status == "failed"
+        if not file_overlap and not signature_overlap:
+            continue
+        evidence.append(
+            FormalEvidence(
+                run_id=run.run_id,
+                status=formal_status or run.status,
+                summary=run.summary,
+                property_ids=list(tool_result.get("property_ids", []))[:4],
+                counterexample_paths=list(tool_result.get("counterexample_paths", []))[:2],
+                report_paths=list(tool_result.get("report_paths", []))[:2],
+            )
+        )
+    evidence.sort(key=lambda item: (item.status != "failed", item.run_id))
+    return evidence[:3]
+
+
+def _is_formal_run(run: VerificationRun) -> bool:
+    if run.tool.kind == "formal":
+        return True
+    tool_result = run.tool_result or {}
+    return any(key in tool_result for key in ("property_ids", "counterexample_paths", "report_paths"))
 
 
 def _run_similarity(cluster_items: list[Observation], prior_items: list[Observation]) -> float:

@@ -661,18 +661,35 @@ def render_runs_payload(payload: list[dict[str, object]]) -> str:
 
 
 def render_run_show(payload: dict[str, object]) -> str:
-    return render_action_panel(
-        "Run Detail",
-        "\n".join(
-            [
-                f"run: {payload['run_id']}",
-                f"workflow: {payload['workflow_type']}",
-                f"status: {payload['status']}",
-                f"tool: {payload['tool']['name']}",
-                f"summary: {payload['summary']}",
-            ]
-        ),
-    )
+    lines = [
+        f"run: {payload['run_id']}",
+        f"workflow: {payload['workflow_type']}",
+        f"status: {payload['status']}",
+        f"tool: {payload['tool']['name']}",
+        f"summary: {payload['summary']}",
+    ]
+    tool_result = payload.get("tool_result") or {}
+    if isinstance(tool_result, dict) and tool_result:
+        validation_mode = tool_result.get("validation_mode")
+        if validation_mode:
+            lines.append(f"validation mode: {validation_mode}")
+        status = tool_result.get("status")
+        if status:
+            lines.append(f"tool result: {status}")
+        property_ids = tool_result.get("property_ids") or []
+        if property_ids:
+            lines.append(f"properties: {', '.join(property_ids[:4])}")
+        counterexamples = tool_result.get("counterexample_paths") or []
+        if counterexamples:
+            lines.append(f"counterexamples: {', '.join(counterexamples[:2])}")
+        report_paths = tool_result.get("report_paths") or []
+        if report_paths:
+            lines.append(f"reports: {', '.join(report_paths[:2])}")
+    artifacts = payload.get("artifacts") or {}
+    if isinstance(artifacts, dict) and artifacts:
+        artifact_items = [f"{key}={value}" for key, value in list(artifacts.items())[:3]]
+        lines.append(f"artifacts: {', '.join(artifact_items)}")
+    return render_action_panel("Run Detail", "\n".join(lines))
 
 
 def render_replay_payload(payload: dict[str, object]) -> str:

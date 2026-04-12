@@ -32,6 +32,7 @@ Running `tel` with no arguments now opens the interactive Telchines shell. One-s
 - `tel runs list`
 - `tel runs show`
 - `tel runs replay`
+- `tel adapters list`
 - `tel providers list`
 - `tel repair`
 - `tel triage`
@@ -65,6 +66,7 @@ Use `tel shell` to enter the same experience explicitly.
 
 - The run store is filesystem-backed and lives under `.tel/`.
 - Retrieval is local and provenance-aware.
+- `tel adapters list` now reports compile-only vs compile-and-run validation backends.
 - `telchines` is an equivalent fallback binary if `tel` collides with a local tool on a user machine.
 - Model routing is capability-based and provider-agnostic; the default implementation is heuristic and deterministic for benchmarkable MVP behavior.
 - The first spec-to-SVA flow writes a generated assertion artifact and returns a concise inline property summary.
@@ -105,6 +107,21 @@ The current implementation:
 - auto-discovers nearby VCD files during triage when present under the same log tree
 - attaches waveform-backed evidence summaries to triage clusters
 - renders signal inventory and simple transition timelines in the shell and one-shot CLI
+
+## Adapter Validation Modes
+
+Telchines distinguishes compile-only validation from compile-and-run validation:
+
+- `verilator`, `slang`, and `verible` are compile-oriented validation backends
+- `iverilog` uses `iverilog` plus `vvp` as a run-capable validation backend
+- `symbiyosys` persists structured formal summaries such as property IDs, reports, and counterexample paths
+
+Inspect the current adapter surface with:
+
+```bash
+tel adapters list
+tel adapters list --category simulation
+```
 
 ## Model Provider Setup
 

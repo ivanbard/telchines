@@ -81,7 +81,7 @@ def repair(root: Path | None, tool: str, files: list[str], extra_arg: list[str] 
         commit_sha="workspace",
         workflow_type="compile_repair",
         tool=adapter.tool_reference,
-        inputs={"files": files, "project_root": str(config.project_root)},
+        inputs={"files": files, "project_root": str(config.project_root), "extra_args": extra_arg, "tool_name": tool},
         status="passed" if execution.exit_code == 0 else "failed",
         started_at=execution.started_at,
         finished_at=execution.finished_at,
@@ -248,6 +248,17 @@ def format_triage_ci(payload: dict[str, object]) -> dict[str, object]:
                     }
                     for item in cluster["waveform_evidence"]
                 ],
+                "formal_evidence": [
+                    {
+                        "run_id": item["run_id"],
+                        "status": item["status"],
+                        "summary": item["summary"],
+                        "property_ids": item["property_ids"],
+                        "counterexample_paths": item["counterexample_paths"],
+                        "report_paths": item["report_paths"],
+                    }
+                    for item in cluster.get("formal_evidence", [])
+                ],
                 "similar_runs": [match["run_id"] for match in cluster["similar_runs"]],
             }
             for cluster in clusters
@@ -264,6 +275,11 @@ def format_triage_human(payload: dict[str, object]) -> str:
             f"{item['source_path']} ({', '.join(item['matched_signals']) or 'signals unavailable'})"
             for item in cluster["waveform_evidence"][:2]
         ) or "none"
+        formal = ", ".join(
+            f"{item['run_id']} [{item['status']}]"
+            + (f" props={', '.join(item['property_ids'][:2])}" if item.get("property_ids") else "")
+            for item in cluster.get("formal_evidence", [])[:2]
+        ) or "none"
         lines.extend(
             [
                 "",
@@ -271,6 +287,7 @@ def format_triage_human(payload: dict[str, object]) -> str:
                 f"likely cause: {cluster['likely_cause']}",
                 f"suggested action: {cluster['suggested_action']}",
                 f"evidence: {evidence}",
+                f"formal: {formal}",
                 f"waveforms: {waveforms}",
                 f"similar runs: {similar}",
             ]

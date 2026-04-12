@@ -32,14 +32,17 @@ class ToolAdapter:
     name = "base"
     kind = "tool"
     category = "tool"
+    validation_mode = "compile_only"
     binary_names: tuple[str, ...] = ()
+    required_binaries: tuple[str, ...] = ()
     supported_workflows: tuple[str, ...] = ()
     artifact_types: tuple[str, ...] = ("log",)
 
     def is_available(self) -> bool:
-        if not self.binary_names:
+        required = self.required_binaries or self.binary_names
+        if not required:
             return True
-        return any(shutil.which(binary) for binary in self.binary_names)
+        return all(shutil.which(binary) for binary in required)
 
     def version(self) -> str:
         return "unknown"
@@ -70,7 +73,9 @@ class ToolAdapter:
             name=self.name,
             kind=self.kind,
             category=self.category,
+            validation_mode=self.validation_mode,
             binary_names=list(self.binary_names),
+            required_binaries=list(self.required_binaries or self.binary_names),
             supported_workflows=list(self.supported_workflows),
             artifact_types=list(self.artifact_types),
             available=self.is_available(),

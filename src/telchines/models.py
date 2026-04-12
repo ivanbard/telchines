@@ -31,7 +31,9 @@ class AdapterDescriptor:
     name: str
     kind: str
     category: str
+    validation_mode: str = "compile_only"
     binary_names: list[str] = field(default_factory=list)
+    required_binaries: list[str] = field(default_factory=list)
     supported_workflows: list[str] = field(default_factory=list)
     artifact_types: list[str] = field(default_factory=list)
     available: bool = False
@@ -228,6 +230,16 @@ class SimilarRunMatch:
 
 
 @dataclass(slots=True)
+class FormalEvidence:
+    run_id: str
+    status: str
+    summary: str
+    property_ids: list[str] = field(default_factory=list)
+    counterexample_paths: list[str] = field(default_factory=list)
+    report_paths: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
 class FailureCluster:
     cluster_id: str
     signature: str
@@ -240,5 +252,6 @@ class FailureCluster:
     evidence_context_id: str = ""
     evidence_hits: list[RetrievalHit] = field(default_factory=list)
     similar_runs: list[SimilarRunMatch] = field(default_factory=list)
+    formal_evidence: list[FormalEvidence] = field(default_factory=list)
     waveform_evidence: list[WaveformEvidence] = field(default_factory=list)
     schema_version: str = SCHEMA_VERSION

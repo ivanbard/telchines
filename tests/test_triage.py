@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from telchines.config import ProjectConfig
+from telchines.models import ToolReference, VerificationRun
 from telchines.retrieval import RetrievalService
 from telchines.run_store import RunStore
 from telchines.workflows.triage import triage_logs
@@ -51,3 +52,32 @@ def test_triage_supports_mixed_log_inputs(retrieval_corpus_project: Path) -> Non
     assert len(clusters) == 2
     assert any(cluster.signature == "SIM_TIMEOUT" for cluster in clusters)
     assert any(cluster.signature == "SV_UNKNOWN_IDENTIFIER" for cluster in clusters)
+
+
+def test_triage_surfaces_related_formal_evidence(sample_project: Path) -> None:
+    config = ProjectConfig.load(sample_project)
+    store = RunStore(config)
+    retrieval = RetrievalService(config)
+    retrieval.build_index()
+    formal_run = VerificationRun(
+        run_id="formal_1",
+        project_id=config.project.project_id,
+        commit_sha="workspace",
+        workflow_type="formal_validation",
+        tool=ToolReference(kind="formal", name="symbiyosys"),
+        inputs={"files": ["rtl/uart_rx.sv"]},
+        status="failed",
+        started_at="2026-04-13T00:00:00+00:00",
+        summary="Formal run found a UART receiver start-bit failure",
+        tool_result={
+            "status": "failed",
+            "property_ids": ["uart_start_seen_after_start_bit"],
+            "counterexample_paths": ["formal/uart_rx_trace.vcd"],
+            "report_paths": ["formal/summary.txt"],
+        },
+    )
+    store.save_run(formal_run)
+    _, clusters, _ = triage_logs(config, store, retrieval, sample_project / "logs" / "regressions")
+    assert clusters[0].formal_evidence
+    assert clusters[0].formal_evidence[0].run_id == "formal_1"
+    assert clusters[0].formal_evidence[0].property_ids == ["uart_start_seen_after_start_bit"]
