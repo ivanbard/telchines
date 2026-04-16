@@ -181,6 +181,40 @@ def _generation_model_policy(command: str, *args: str) -> dict[str, object]:
     }
 
 
+def _write_coverage_report(project_root: Path, name: str = "coverage.json") -> Path:
+    report_path = project_root / "cov" / name
+    write_json(
+        report_path,
+        {
+            "tool": "fixture_cov",
+            "generated_at": "2026-04-15T00:00:00+00:00",
+            "design": "uart_rx",
+            "focus_paths": ["rtl/uart_rx.sv", "docs/uart.md"],
+            "items": [
+                {
+                    "item_id": "rx_start_bit_bin",
+                    "module": "uart_rx",
+                    "metric": "functional",
+                    "name": "start_bit_seen",
+                    "hits": 0,
+                    "goal": 2,
+                    "detail": "Start bit stimulus bin remains uncovered.",
+                },
+                {
+                    "item_id": "rx_start_checker",
+                    "module": "uart_rx",
+                    "metric": "assertion",
+                    "name": "start_bit_assertion",
+                    "hits": 0,
+                    "goal": 1,
+                    "detail": "Checker coverage for the start bit assertion is still empty.",
+                },
+            ],
+        },
+    )
+    return report_path
+
+
 def test_cli_index_retrieve_and_repair(sample_project: Path, monkeypatch) -> None:
     monkeypatch.chdir(sample_project)
     monkeypatch.setattr("telchines.operations.AdapterRegistry", FixtureRegistry)
@@ -586,6 +620,30 @@ def test_cli_gen_cocotb_with_heuristic_provider(sample_project: Path, monkeypatc
     assert "@cocotb.test()" in artifact_path.read_text(encoding="utf-8")
 
 
+def test_cli_coverage_plan(sample_project: Path, monkeypatch) -> None:
+    _write_coverage_report(sample_project)
+    monkeypatch.chdir(sample_project)
+    runner.invoke(app, ["index"])
+    result = runner.invoke(
+        app,
+        [
+            "coverage-plan",
+            "--report",
+            "cov/coverage.json",
+            "--rtl",
+            "rtl/uart_rx.sv",
+            "--spec",
+            "docs/uart.md",
+        ],
+    )
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["recommendation_count"] == 2
+    assert payload["recommendations"][0]["classification"] == "missing_stimulus"
+    assert payload["recommendations"][1]["classification"] == "missing_checker"
+    assert payload["recommendations"][0]["evidence_citations"]
+
+
 def test_cli_enters_shell_by_default(sample_project: Path, monkeypatch) -> None:
     monkeypatch.chdir(sample_project)
     result = runner.invoke(app, [], input="/exit\n")
@@ -640,6 +698,16 @@ def test_cli_shell_supports_gen_cocotb(sample_project: Path, monkeypatch) -> Non
     assert result.exit_code == 0
     assert "DUT-to-Cocotb Result" in result.stdout
     assert "test_uart_rx.py" in result.stdout
+
+
+def test_cli_shell_supports_coverage_plan(sample_project: Path, monkeypatch) -> None:
+    _write_coverage_report(sample_project)
+    monkeypatch.chdir(sample_project)
+    runner.invoke(app, ["index"])
+    result = runner.invoke(app, [], input="/coverage-plan --report cov/coverage.json --rtl rtl/uart_rx.sv --spec docs/uart.md\n/exit\n")
+    assert result.exit_code == 0
+    assert "Coverage Plan" in result.stdout
+    assert "missing_stimulus" in result.stdout
 
 
 def test_cli_shell_supports_waveform_commands(sample_project: Path, monkeypatch) -> None:

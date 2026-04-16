@@ -13,6 +13,7 @@ from telchines.providers import build_generation_provider, build_repair_provider
 from telchines.retrieval import RetrievalService
 from telchines.run_store import RunStore
 from telchines.utils import dataclass_to_dict, stable_id, utc_now
+from telchines.workflows.coverage import execute_coverage_plan, format_coverage_human
 from telchines.workflows.gen_cocotb import execute_cocotb_generation
 from telchines.workflows.gen_sva import execute_generation
 from telchines.workflows.repair import execute_repair
@@ -185,6 +186,45 @@ def gen_cocotb(
         "validation_run_id": validation_run.run_id if validation_run else None,
         "validation_status": validation_run.status if validation_run else None,
         "validation_summary": validation_run.summary if validation_run else None,
+    }
+
+
+def coverage_plan(
+    root: Path | None,
+    report: Path,
+    *,
+    exclusions: Path | None = None,
+    formal_run_id: str | None = None,
+    rtl: list[Path] | None = None,
+    spec: list[Path] | None = None,
+) -> dict[str, object]:
+    config, store, retrieval = load_services(root)
+    report_path = report if report.is_absolute() else (config.project_root / report).resolve()
+    exclusions_path = None if exclusions is None else (exclusions if exclusions.is_absolute() else (config.project_root / exclusions).resolve())
+    rtl_paths = [(path if path.is_absolute() else (config.project_root / path).resolve()) for path in (rtl or [])]
+    spec_paths = [(path if path.is_absolute() else (config.project_root / path).resolve()) for path in (spec or [])]
+    plan, run, context = execute_coverage_plan(
+        config,
+        store,
+        retrieval,
+        report_path,
+        exclusions_path=exclusions_path,
+        formal_run_id=formal_run_id,
+        rtl_paths=rtl_paths,
+        spec_paths=spec_paths,
+    )
+    return {
+        "run_id": run.run_id,
+        "context_id": context.context_id,
+        "plan_id": plan.plan_id,
+        "report_path": plan.report_path,
+        "exclusions_path": plan.exclusions_path,
+        "formal_run_id": plan.formal_run_id,
+        "recommendation_count": len(plan.recommendations),
+        "excluded_count": len(plan.excluded_item_ids),
+        "summary": plan.summary,
+        "focus_paths": plan.focus_paths,
+        "recommendations": [dataclass_to_dict(item) for item in plan.recommendations],
     }
 
 

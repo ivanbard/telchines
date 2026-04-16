@@ -36,6 +36,7 @@ Running `tel` with no arguments now opens the interactive Telchines shell. One-s
 - `tel providers list`
 - `tel repair`
 - `tel triage`
+- `tel coverage-plan`
 - `tel waveforms list`
 - `tel waveforms show`
 - `tel waveforms signals`
@@ -54,6 +55,7 @@ tel> /help
 tel> /providers
 tel> /index
 tel> /triage --logs logs/regressions
+tel> /coverage-plan --report cov/coverage.json
 tel> /waveforms show logs/regressions/uart_rx_trace.vcd
 tel> /gen-sva --spec docs/uart.md --rtl rtl/uart_rx.sv
 tel> /gen-cocotb --dut rtl/uart_rx.sv --spec docs/uart.md --intent "smoke start bit"
@@ -73,6 +75,7 @@ Use `tel shell` to enter the same experience explicitly.
 - `telchines` is an equivalent fallback binary if `tel` collides with a local tool on a user machine.
 - Model routing is capability-based and provider-agnostic; the default implementation is heuristic and deterministic for benchmarkable MVP behavior.
 - The first spec-to-SVA flow writes a generated assertion artifact and returns a concise inline property summary.
+- Coverage closure is recommendation-first in v1 and consumes a normalized JSON report format.
 
 ## Spec-to-SVA
 
@@ -109,6 +112,24 @@ The command:
 - validates the generated Python through `py_compile` without requiring a cocotb installation
 
 Use `--output-dir` to override the generated artifact directory and `--provider` to select a specific configured generation provider.
+
+## Coverage Planning
+
+Telchines now supports a first coverage-closure planning workflow:
+
+```bash
+tel coverage-plan --report cov/coverage.json --rtl rtl/uart_rx.sv --spec docs/uart.md
+```
+
+The command:
+
+- ingests a normalized JSON coverage report plus optional exclusions and formal hints
+- builds a coverage-focused retrieval context around the top uncovered items
+- classifies likely causes such as missing stimulus, missing checker, unreachable logic, or environment issues
+- writes a replayable coverage plan artifact under `.tel/task-artifacts/`
+- stores the resulting workflow run in the run store with cited evidence and recommendation metadata
+
+Use `--exclusions` to provide an additional exclusions file, `--formal-run` to attach a prior formal run, and `--format human` for a concise terminal report.
 
 ## Waveform Debug
 

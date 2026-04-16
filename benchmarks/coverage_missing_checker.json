@@ -1,0 +1,28 @@
+{
+  "benchmark_id": "coverage_missing_checker",
+  "task_type": "coverage",
+  "title": "Classify a checker-oriented coverage gap",
+  "fixture_root": "benchmarks/assets/coverage_missing_checker",
+  "config": {
+    "report_path": "cov/coverage.json",
+    "rtl_paths": [
+      "rtl/uart_tx.sv"
+    ],
+    "spec_paths": [
+      "docs/uart.md"
+    ]
+  },
+  "scoring": {
+    "expected_classifications": [
+      "missing_checker"
+    ],
+    "expected_item_ids": [
+      "tx_ready_checker"
+    ],
+    "min_recommendations": 1,
+    "min_classification_matches": 1,
+    "min_item_matches": 1,
+    "min_evidence_citations": 1
+  },
+  "schema_version": "0.1"
+}

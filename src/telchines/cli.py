@@ -7,7 +7,9 @@ import typer
 
 from telchines.errors import AdapterExecutionError, ConfigError, ProviderError
 from telchines.operations import (
+    coverage_plan as coverage_plan_op,
     dump_json,
+    format_coverage_human,
     format_triage_ci,
     format_triage_human,
     gen_cocotb as gen_cocotb_op,
@@ -156,6 +158,27 @@ def triage(
         return
     if output_format == "ci":
         typer.echo(dump_json(format_triage_ci(payload)))
+        return
+    typer.echo(dump_json(payload))
+
+
+@app.command("coverage-plan")
+def coverage_plan(
+    report: Path = typer.Option(..., "--report"),
+    exclusions: Path | None = typer.Option(None, "--exclusions"),
+    formal_run: str | None = typer.Option(None, "--formal-run"),
+    rtl: list[Path] = typer.Option([], "--rtl"),
+    spec: list[Path] = typer.Option([], "--spec"),
+    output_format: str = typer.Option("json", "--format"),
+) -> None:
+    try:
+        payload = coverage_plan_op(None, report=report, exclusions=exclusions, formal_run_id=formal_run, rtl=rtl, spec=spec)
+    except ConfigError as exc:
+        _fail(f"config error: {exc}")
+    except ValueError as exc:
+        _fail(str(exc))
+    if output_format == "human":
+        typer.echo(format_coverage_human(payload))
         return
     typer.echo(dump_json(payload))
 

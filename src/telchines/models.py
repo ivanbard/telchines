@@ -196,6 +196,76 @@ class CocotbCandidate:
 
 
 @dataclass(slots=True)
+class CoverageItem:
+    item_id: str
+    module: str
+    metric: str
+    name: str
+    hits: int = 0
+    goal: int = 1
+    coverage: float = 0.0
+    detail: str = ""
+
+
+@dataclass(slots=True)
+class CoverageExclusion:
+    item_id: str
+    reason: str
+    status: str = "active"
+
+
+@dataclass(slots=True)
+class CoverageReachabilityHint:
+    item_id: str
+    status: str
+    source: str = ""
+    summary: str = ""
+
+
+@dataclass(slots=True)
+class CoverageRecommendation:
+    item_id: str
+    module: str
+    metric: str
+    name: str
+    classification: str
+    priority: int
+    suggested_action: str
+    rationale: str
+    confidence: float
+    evidence_citations: list[str] = field(default_factory=list)
+    evidence_paths: list[str] = field(default_factory=list)
+    supporting_run_ids: list[str] = field(default_factory=list)
+    reachability_status: str = "unknown"
+
+
+@dataclass(slots=True)
+class CoveragePlan:
+    plan_id: str
+    task_id: str
+    report_path: str
+    exclusions_path: str | None
+    formal_run_id: str | None
+    summary: str
+    focus_paths: list[str] = field(default_factory=list)
+    recommendations: list[CoverageRecommendation] = field(default_factory=list)
+    excluded_item_ids: list[str] = field(default_factory=list)
+    schema_version: str = SCHEMA_VERSION
+
+
+@dataclass(slots=True)
+class CoverageReport:
+    tool: str
+    generated_at: str
+    design: str
+    items: list[CoverageItem] = field(default_factory=list)
+    focus_paths: list[str] = field(default_factory=list)
+    exclusions: list[CoverageExclusion] = field(default_factory=list)
+    reachability_hints: list[CoverageReachabilityHint] = field(default_factory=list)
+    schema_version: str = SCHEMA_VERSION
+
+
+@dataclass(slots=True)
 class WaveformTransition:
     timestamp: int
     value: str

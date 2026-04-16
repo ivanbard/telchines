@@ -13,6 +13,7 @@ from telchines.providers import build_generation_provider, build_repair_provider
 from telchines.retrieval import RetrievalService
 from telchines.run_store import RunStore
 from telchines.utils import copy_tree_to_temp, read_json, remove_tree, stable_id, utc_now
+from telchines.workflows.coverage import execute_coverage_plan
 from telchines.workflows.gen_cocotb import execute_cocotb_generation
 from telchines.workflows.gen_sva import execute_generation
 from telchines.workflows.repair import execute_repair
@@ -44,6 +45,8 @@ def run_default_suite(config: ProjectConfig, store: RunStore) -> dict[str, objec
             results.append(_run_sva_case(config, case))
         elif case.task_type == "cocotb":
             results.append(_run_cocotb_case(config, case))
+        elif case.task_type == "coverage":
+            results.append(_run_coverage_case(config, case))
     passed = sum(1 for result in results if result["passed"])
     report = {
         "suite": "default",
@@ -301,10 +304,83 @@ def _run_cocotb_case(config: ProjectConfig, case: BenchmarkCase) -> dict[str, ob
         remove_tree(temp_root)
 
 
+def _run_coverage_case(config: ProjectConfig, case: BenchmarkCase) -> dict[str, object]:
+    fixture_root = config.project_root / case.fixture_root
+    temp_root = copy_tree_to_temp(fixture_root)
+    try:
+        temp_config = ProjectConfig.init_project(temp_root)
+        temp_store = RunStore(temp_config)
+        retrieval = RetrievalService(temp_config)
+        retrieval.build_index()
+        formal_run_id = None
+        formal_seed = case.config.get("formal_run")
+        if isinstance(formal_seed, dict):
+            formal_run_id = str(formal_seed.get("run_id", "formal_seed"))
+            formal_run = VerificationRun(
+                run_id=formal_run_id,
+                project_id=temp_config.project.project_id,
+                commit_sha="benchmark",
+                workflow_type=str(formal_seed.get("workflow_type", "formal_validation")),
+                tool=ToolReference(kind="formal", name=str(formal_seed.get("tool_name", "symbiyosys")), version="0.1"),
+                inputs={},
+                status=str(formal_seed.get("status", "passed")),
+                started_at=utc_now(),
+                finished_at=utc_now(),
+                exit_code=0,
+                artifacts=dict(formal_seed.get("artifacts", {})),
+                tool_result=dict(formal_seed.get("tool_result", {})),
+                summary=str(formal_seed.get("summary", "")),
+            )
+            temp_store.save_run(formal_run)
+        plan, run, context = execute_coverage_plan(
+            temp_config,
+            temp_store,
+            retrieval,
+            temp_root / case.config["report_path"],
+            exclusions_path=(temp_root / case.config["exclusions_path"]) if case.config.get("exclusions_path") else None,
+            formal_run_id=formal_run_id,
+            rtl_paths=[temp_root / value for value in case.config.get("rtl_paths", [])],
+            spec_paths=[temp_root / value for value in case.config.get("spec_paths", [])],
+        )
+        expected_classifications = {str(value) for value in case.scoring.get("expected_classifications", [])}
+        expected_item_ids = {str(value) for value in case.scoring.get("expected_item_ids", [])}
+        actual_classifications = [item.classification for item in plan.recommendations]
+        actual_item_ids = [item.item_id for item in plan.recommendations]
+        matched_classifications = sorted(expected_classifications & set(actual_classifications))
+        matched_item_ids = sorted(expected_item_ids & set(actual_item_ids))
+        evidence_count = sum(len(item.evidence_citations) for item in plan.recommendations[: int(case.scoring.get("inspect_recommendations", 3))])
+        top_supporting_runs = {run_id for item in plan.recommendations[:3] for run_id in item.supporting_run_ids}
+        expected_supporting_runs = {str(value) for value in case.scoring.get("expected_supporting_runs", [])}
+        passed = (
+            run is not None
+            and len(plan.recommendations) >= int(case.scoring.get("min_recommendations", 1))
+            and len(matched_classifications) >= int(case.scoring.get("min_classification_matches", len(expected_classifications)))
+            and len(matched_item_ids) >= int(case.scoring.get("min_item_matches", len(expected_item_ids)))
+            and evidence_count >= int(case.scoring.get("min_evidence_citations", 1))
+            and expected_supporting_runs.issubset(top_supporting_runs)
+        )
+        return {
+            "benchmark_id": case.benchmark_id,
+            "task_type": case.task_type,
+            "passed": passed,
+            "context_id": context.context_id,
+            "run_id": run.run_id,
+            "plan_id": plan.plan_id,
+            "recommendation_count": len(plan.recommendations),
+            "matched_classifications": matched_classifications,
+            "matched_item_ids": matched_item_ids,
+            "evidence_count": evidence_count,
+            "supporting_run_count": len(top_supporting_runs),
+        }
+    finally:
+        remove_tree(temp_root)
+
+
 def _aggregate_metrics(results: list[dict[str, object]]) -> dict[str, object]:
     retrieval_results = [result for result in results if result["task_type"] == "retrieval"]
     sva_results = [result for result in results if result["task_type"] == "sva"]
     cocotb_results = [result for result in results if result["task_type"] == "cocotb"]
+    coverage_results = [result for result in results if result["task_type"] == "coverage"]
     triage_results = [result for result in results if result["task_type"] == "triage"]
     metrics: dict[str, object] = {}
     if retrieval_results:
@@ -369,6 +445,22 @@ def _aggregate_metrics(results: list[dict[str, object]]) -> dict[str, object]:
             ),
             "avg_identifier_match_rate": round(
                 sum(float(result["identifier_match_rate"]) for result in cocotb_results) / len(cocotb_results),
+                3,
+            ),
+        }
+    if coverage_results:
+        metrics["coverage"] = {
+            "cases": len(coverage_results),
+            "avg_recommendation_count": round(
+                sum(int(result["recommendation_count"]) for result in coverage_results) / len(coverage_results),
+                3,
+            ),
+            "avg_evidence_count": round(
+                sum(int(result["evidence_count"]) for result in coverage_results) / len(coverage_results),
+                3,
+            ),
+            "avg_supporting_run_count": round(
+                sum(int(result["supporting_run_count"]) for result in coverage_results) / len(coverage_results),
                 3,
             ),
         }

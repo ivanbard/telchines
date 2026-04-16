@@ -21,7 +21,9 @@ from rich.table import Table
 from telchines.config import ProjectConfig
 from telchines.errors import AdapterExecutionError, ConfigError, ProviderError, TelchinesError
 from telchines.operations import (
+    coverage_plan,
     dump_json,
+    format_coverage_human,
     format_triage_human,
     gen_cocotb,
     gen_sva,
@@ -358,6 +360,8 @@ def _dispatch_plain_text(session: ShellSession, user_input: str) -> tuple[bool, 
         payload = triage(session.cwd, [logs_path])
         session.note_context(payload)
         return False, _render_intent("Run triage", format_triage_human(payload))
+    if "coverage" in lowered:
+        return False, "I can run coverage planning, but I need a coverage report path. Try `/coverage-plan --report cov/coverage.json`."
     if "waveform" in lowered or "trace" in lowered:
         payload = list_waveforms(session.cwd)
         return False, _render_intent("Inspect waveforms", render_waveform_list_payload(payload))
@@ -421,6 +425,19 @@ def _execute_command(session: ShellSession, parts: list[str], raw: bool) -> str 
         )
         session.note_context(payload)
         return dump_json(payload) if raw else render_triage_payload(payload)
+
+    if command == "coverage-plan":
+        report, exclusions, formal_run, rtl_paths, spec_paths = _parse_coverage_plan_args(parts[1:])
+        payload = coverage_plan(
+            session.cwd,
+            report=_resolve_path(session.cwd, report),
+            exclusions=None if exclusions is None else _resolve_path(session.cwd, exclusions),
+            formal_run_id=formal_run,
+            rtl=[_resolve_path(session.cwd, value) for value in rtl_paths],
+            spec=[_resolve_path(session.cwd, value) for value in spec_paths],
+        )
+        session.note_context(payload)
+        return dump_json(payload) if raw else render_coverage_payload(payload)
 
     if command == "gen-sva":
         spec, rtl, output, provider = _parse_gen_sva_args(parts[1:])
@@ -516,6 +533,7 @@ def render_help() -> str:
         ("/providers", "Show configured providers and policy status"),
         ("/repair --tool TOOL --file PATH", "Run repair workflow"),
         ("/triage --logs PATH [--logs PATH] [--waveform PATH]", "Run regression triage"),
+        ("/coverage-plan --report PATH [--exclusions PATH] [--formal-run RUN_ID]", "Generate coverage closure recommendations"),
         ("/gen-sva --spec PATH --rtl PATH [--output PATH]", "Generate assertion draft from spec and RTL"),
         ("/gen-cocotb --dut PATH [--spec PATH] [--output-dir PATH]", "Generate a cocotb scaffold from DUT context"),
         ("/waveforms [list|show TARGET|signals TARGET|inspect TARGET --signal NAME]", "Inspect waveform summaries and signals"),
@@ -595,6 +613,10 @@ def render_repair_payload(payload: dict[str, object]) -> str:
 
 def render_triage_payload(payload: dict[str, object]) -> str:
     return render_action_panel("Triage Summary", format_triage_human(payload))
+
+
+def render_coverage_payload(payload: dict[str, object]) -> str:
+    return render_action_panel("Coverage Plan", format_coverage_human(payload))
 
 
 def render_sva_payload(payload: dict[str, object]) -> str:
@@ -709,12 +731,24 @@ def render_run_show(payload: dict[str, object]) -> str:
         status = tool_result.get("status")
         if status:
             lines.append(f"tool result: {status}")
+        report_source = tool_result.get("report_source")
+        if report_source:
+            lines.append(f"report source: {report_source}")
+        recommendation_count = tool_result.get("recommendation_count")
+        if recommendation_count is not None:
+            lines.append(f"recommendations: {recommendation_count}")
+        formal_run_id = tool_result.get("formal_run_id")
+        if formal_run_id:
+            lines.append(f"formal run: {formal_run_id}")
         top_module = tool_result.get("top_module")
         if top_module:
             lines.append(f"top module: {top_module}")
         assumptions = tool_result.get("assumptions") or []
         if assumptions:
             lines.append(f"assumptions: {'; '.join(str(item) for item in assumptions[:2])}")
+        classifications = tool_result.get("classifications") or []
+        if classifications:
+            lines.append(f"classifications: {', '.join(str(item) for item in classifications[:3])}")
         property_ids = tool_result.get("property_ids") or []
         if property_ids:
             lines.append(f"properties: {', '.join(property_ids[:4])}")
@@ -898,6 +932,41 @@ def _parse_gen_cocotb_args(parts: list[str]) -> tuple[str, str | None, str | Non
     if not dut:
         raise ValueError("/gen-cocotb requires --dut")
     return dut, spec, output_dir, intent, provider
+
+
+def _parse_coverage_plan_args(parts: list[str]) -> tuple[str, str | None, str | None, list[str], list[str]]:
+    report: str | None = None
+    exclusions: str | None = None
+    formal_run: str | None = None
+    rtl_paths: list[str] = []
+    spec_paths: list[str] = []
+    index = 0
+    while index < len(parts):
+        part = parts[index]
+        if part == "--report":
+            report = parts[index + 1]
+            index += 2
+            continue
+        if part == "--exclusions":
+            exclusions = parts[index + 1]
+            index += 2
+            continue
+        if part == "--formal-run":
+            formal_run = parts[index + 1]
+            index += 2
+            continue
+        if part == "--rtl":
+            rtl_paths.append(parts[index + 1])
+            index += 2
+            continue
+        if part == "--spec":
+            spec_paths.append(parts[index + 1])
+            index += 2
+            continue
+        raise ValueError(f"unrecognized coverage-plan argument: {part}")
+    if not report:
+        raise ValueError("/coverage-plan requires --report")
+    return report, exclusions, formal_run, rtl_paths, spec_paths
 
 
 def _parse_repeated_option(parts: list[str], option_name: str, strict: bool = True) -> list[str]:

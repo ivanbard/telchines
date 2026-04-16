@@ -20,6 +20,7 @@ def test_shell_help_renders_core_commands() -> None:
     rendered = render_help()
     assert "/providers" in rendered
     assert "/triage --logs PATH" in rendered
+    assert "/coverage-plan --report PATH" in rendered
     assert "/gen-sva --spec PATH --rtl PATH" in rendered
     assert "/gen-cocotb --dut PATH" in rendered
     assert "/waveforms" in rendered
@@ -80,3 +81,27 @@ def test_render_run_show_includes_cocotb_generation_details() -> None:
     assert "top module: uart_rx" in rendered
     assert "assumptions: Inferred `clk` as the primary clock." in rendered
     assert "generated_file=.tel/artifacts/generated/cocotb/test_uart_rx.py" in rendered
+
+
+def test_render_run_show_includes_coverage_plan_details() -> None:
+    rendered = render_run_show(
+        {
+            "run_id": "coverage_1",
+            "workflow_type": "coverage_plan",
+            "status": "passed",
+            "tool": {"name": "coverage_assistant"},
+            "summary": "Planned coverage actions",
+            "tool_result": {
+                "status": "planned",
+                "report_source": "cov/coverage.json",
+                "recommendation_count": 2,
+                "formal_run_id": "formal_cov_1",
+                "classifications": ["missing_stimulus", "missing_checker"],
+            },
+            "artifacts": {"coverage_plan_artifact": ".tel/task-artifacts/task_cov_plan.json"},
+        }
+    )
+    assert "report source: cov/coverage.json" in rendered
+    assert "recommendations: 2" in rendered
+    assert "formal run: formal_cov_1" in rendered
+    assert "classifications: missing_stimulus, missing_checker" in rendered
