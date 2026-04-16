@@ -19,10 +19,11 @@ def test_run_store_round_trip(sample_project: Path) -> None:
         inputs={"files": ["rtl/broken_counter.sv"]},
         status="failed",
         started_at="2026-04-07T00:00:00+00:00",
-        tool_result={"status": "failed", "validation_mode": "compile_only"},
+        tool_result={"status": "failed", "validation_mode": "compile_only", "assumptions": ["compile only fallback"]},
     )
     store.save_run(run)
     loaded = store.load_run("run_1")
     assert loaded.tool.name == "verilator"
     assert loaded.inputs["files"] == ["rtl/broken_counter.sv"]
     assert loaded.tool_result["validation_mode"] == "compile_only"
+    assert loaded.tool_result["assumptions"] == ["compile only fallback"]

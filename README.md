@@ -41,6 +41,7 @@ Running `tel` with no arguments now opens the interactive Telchines shell. One-s
 - `tel waveforms signals`
 - `tel waveforms inspect`
 - `tel gen-sva`
+- `tel gen-cocotb`
 - `tel eval run`
 - `tel eval report`
 
@@ -55,6 +56,7 @@ tel> /index
 tel> /triage --logs logs/regressions
 tel> /waveforms show logs/regressions/uart_rx_trace.vcd
 tel> /gen-sva --spec docs/uart.md --rtl rtl/uart_rx.sv
+tel> /gen-cocotb --dut rtl/uart_rx.sv --spec docs/uart.md --intent "smoke start bit"
 tel> show my providers
 tel> triage the regression logs
 tel> /exit
@@ -66,6 +68,7 @@ Use `tel shell` to enter the same experience explicitly.
 
 - The run store is filesystem-backed and lives under `.tel/`.
 - Retrieval is local and provenance-aware.
+- External verification references are curated and offline-first via `retrieval.external_roots`; repair and triage still rank project-local evidence ahead of external docs.
 - `tel adapters list` now reports compile-only vs compile-and-run validation backends.
 - `telchines` is an equivalent fallback binary if `tel` collides with a local tool on a user machine.
 - Model routing is capability-based and provider-agnostic; the default implementation is heuristic and deterministic for benchmarkable MVP behavior.
@@ -88,6 +91,24 @@ The command:
 - validates the generated artifact through the built-in SVA syntax gate
 
 Use `--output` to override the default generated artifact path and `--provider` to pick a specific configured generation provider.
+
+## DUT-to-Cocotb
+
+Telchines now supports a first DUT-to-cocotb scaffold workflow:
+
+```bash
+tel gen-cocotb --dut rtl/uart_rx.sv --spec docs/uart.md --intent "smoke the start-bit path"
+```
+
+The command:
+
+- builds a generation-focused retrieval context around the DUT, optional spec, and user intent
+- routes generation through the configured `generation` provider capability
+- writes a generated cocotb scaffold plus a manifest under `.tel/artifacts/generated/cocotb/`
+- persists request, response, replay, generation, and validation artifacts in the run store
+- validates the generated Python through `py_compile` without requiring a cocotb installation
+
+Use `--output-dir` to override the generated artifact directory and `--provider` to select a specific configured generation provider.
 
 ## Waveform Debug
 

@@ -13,6 +13,7 @@ from telchines.providers import build_generation_provider, build_repair_provider
 from telchines.retrieval import RetrievalService
 from telchines.run_store import RunStore
 from telchines.utils import dataclass_to_dict, stable_id, utc_now
+from telchines.workflows.gen_cocotb import execute_cocotb_generation
 from telchines.workflows.gen_sva import execute_generation
 from telchines.workflows.repair import execute_repair
 from telchines.workflows.triage import triage_logs
@@ -133,6 +134,52 @@ def gen_sva(
         "rtl_path": candidate.rtl_path if candidate else str(rtl_path.relative_to(config.project_root)).replace("\\", "/"),
         "explanation": candidate.explanation if candidate else None,
         "property_summaries": [dataclass_to_dict(item) for item in candidate.properties] if candidate else [],
+        "evidence_paths": candidate.evidence_paths if candidate else [],
+        "replay_artifacts": candidate.replay_artifacts if candidate else {},
+        "validation_run_id": validation_run.run_id if validation_run else None,
+        "validation_status": validation_run.status if validation_run else None,
+        "validation_summary": validation_run.summary if validation_run else None,
+    }
+
+
+def gen_cocotb(
+    root: Path | None,
+    dut: Path,
+    spec: Path | None = None,
+    output_dir: Path | None = None,
+    intent: str = "",
+    provider_name: str | None = None,
+) -> dict[str, object]:
+    config, store, retrieval = load_services(root)
+    dut_path = dut if dut.is_absolute() else (config.project_root / dut).resolve()
+    spec_path = None if spec is None else (spec if spec.is_absolute() else (config.project_root / spec).resolve())
+    target_output_dir = None if output_dir is None else (output_dir if output_dir.is_absolute() else (config.project_root / output_dir).resolve())
+    provider = build_generation_provider(config, provider_name=provider_name)
+    candidate, run, validation_run, context = execute_cocotb_generation(
+        config,
+        store,
+        retrieval,
+        provider,
+        dut_path,
+        spec_path=spec_path,
+        output_dir=target_output_dir,
+        intent=intent,
+    )
+    return {
+        "context_id": context.context_id,
+        "run_id": run.run_id if run else None,
+        "candidate_id": candidate.candidate_id if candidate else None,
+        "provider": candidate.provider if candidate else getattr(provider, "name", ""),
+        "status": candidate.status if candidate else "no_generation",
+        "artifact_path": candidate.file_path if candidate else None,
+        "manifest_path": candidate.manifest_path if candidate else None,
+        "dut_path": candidate.dut_path if candidate else str(dut_path.relative_to(config.project_root)).replace("\\", "/"),
+        "spec_path": candidate.spec_path if candidate else (str(spec_path.relative_to(config.project_root)).replace("\\", "/") if spec_path else None),
+        "top_module": candidate.top_module if candidate else None,
+        "intent": candidate.intent if candidate else intent,
+        "explanation": candidate.explanation if candidate else None,
+        "assumptions": candidate.assumptions if candidate else [],
+        "ports": [dataclass_to_dict(item) for item in candidate.ports] if candidate else [],
         "evidence_paths": candidate.evidence_paths if candidate else [],
         "replay_artifacts": candidate.replay_artifacts if candidate else {},
         "validation_run_id": validation_run.run_id if validation_run else None,

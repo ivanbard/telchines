@@ -10,6 +10,7 @@ from telchines.operations import (
     dump_json,
     format_triage_ci,
     format_triage_human,
+    gen_cocotb as gen_cocotb_op,
     gen_sva as gen_sva_op,
     index_project as index_project_op,
     inspect_waveform as inspect_waveform_op,
@@ -168,6 +169,23 @@ def gen_sva(
 ) -> None:
     try:
         payload = gen_sva_op(None, spec=spec, rtl=rtl, output=output, provider_name=provider)
+    except ConfigError as exc:
+        _fail(f"config error: {exc}")
+    except ProviderError as exc:
+        _fail(f"provider error: {exc}")
+    typer.echo(dump_json(payload))
+
+
+@app.command("gen-cocotb")
+def gen_cocotb(
+    dut: Path = typer.Option(..., "--dut"),
+    spec: Path | None = typer.Option(None, "--spec"),
+    output_dir: Path | None = typer.Option(None, "--output-dir"),
+    intent: str = typer.Option("", "--intent"),
+    provider: str | None = typer.Option(None, "--provider"),
+) -> None:
+    try:
+        payload = gen_cocotb_op(None, dut=dut, spec=spec, output_dir=output_dir, intent=intent, provider_name=provider)
     except ConfigError as exc:
         _fail(f"config error: {exc}")
     except ProviderError as exc:

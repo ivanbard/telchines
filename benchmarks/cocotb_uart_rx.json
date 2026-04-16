@@ -1,0 +1,23 @@
+{
+  "benchmark_id": "cocotb_uart_rx",
+  "task_type": "cocotb",
+  "title": "Generate a cocotb scaffold for the UART RX DUT",
+  "fixture_root": "benchmarks/assets/cocotb_uart_rx",
+  "config": {
+    "dut_path": "rtl/uart_rx.sv",
+    "spec_path": "docs/uart.md",
+    "intent": "smoke the start-bit detection path"
+  },
+  "scoring": {
+    "expected_validation": "passed",
+    "expected_identifiers": [
+      "clk",
+      "rst_n",
+      "serial_i",
+      "start_seen"
+    ],
+    "min_assumptions": 2,
+    "min_identifier_match_rate": 1.0
+  },
+  "schema_version": "0.1"
+}

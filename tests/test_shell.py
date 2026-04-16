@@ -21,6 +21,7 @@ def test_shell_help_renders_core_commands() -> None:
     assert "/providers" in rendered
     assert "/triage --logs PATH" in rendered
     assert "/gen-sva --spec PATH --rtl PATH" in rendered
+    assert "/gen-cocotb --dut PATH" in rendered
     assert "/waveforms" in rendered
     assert "/raw <slash command>" in rendered
 
@@ -52,3 +53,30 @@ def test_render_run_show_includes_formal_and_validation_details() -> None:
     assert "validation mode: compile_and_run" in rendered
     assert "properties: uart_prop" in rendered
     assert "counterexamples: formal/trace.vcd" in rendered
+
+
+def test_render_run_show_includes_cocotb_generation_details() -> None:
+    rendered = render_run_show(
+        {
+            "run_id": "cocotb_1",
+            "workflow_type": "dut_to_cocotb",
+            "status": "validated",
+            "tool": {"name": "heuristic"},
+            "summary": "Generated cocotb scaffold",
+            "tool_result": {
+                "status": "validated",
+                "top_module": "uart_rx",
+                "assumptions": [
+                    "Inferred `clk` as the primary clock.",
+                    "Inferred `rst_n` as an active-low reset.",
+                ],
+            },
+            "artifacts": {
+                "generated_file": ".tel/artifacts/generated/cocotb/test_uart_rx.py",
+                "manifest_path": ".tel/artifacts/generated/cocotb/uart_rx_cocotb_manifest.json",
+            },
+        }
+    )
+    assert "top module: uart_rx" in rendered
+    assert "assumptions: Inferred `clk` as the primary clock." in rendered
+    assert "generated_file=.tel/artifacts/generated/cocotb/test_uart_rx.py" in rendered

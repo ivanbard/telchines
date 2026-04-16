@@ -553,6 +553,39 @@ def test_cli_gen_sva_reports_validation_failure(sample_project: Path, monkeypatc
     assert "validation failed" in payload["validation_summary"].lower()
 
 
+def test_cli_gen_cocotb_with_heuristic_provider(sample_project: Path, monkeypatch) -> None:
+    monkeypatch.chdir(sample_project)
+    runner.invoke(app, ["index"])
+    result = runner.invoke(
+        app,
+        [
+            "gen-cocotb",
+            "--dut",
+            "rtl/uart_rx.sv",
+            "--spec",
+            "docs/uart.md",
+            "--intent",
+            "smoke the start-bit path",
+        ],
+    )
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["provider"] == "heuristic"
+    assert payload["status"] == "validated"
+    assert payload["validation_status"] == "passed"
+    assert payload["top_module"] == "uart_rx"
+    assert payload["artifact_path"].endswith("test_uart_rx.py")
+    assert payload["manifest_path"].endswith("uart_rx_cocotb_manifest.json")
+    assert payload["run_id"] is not None
+    assert payload["assumptions"]
+    assert any(item["name"] == "serial_i" for item in payload["ports"])
+    artifact_path = sample_project / payload["artifact_path"]
+    manifest_path = sample_project / payload["manifest_path"]
+    assert artifact_path.exists()
+    assert manifest_path.exists()
+    assert "@cocotb.test()" in artifact_path.read_text(encoding="utf-8")
+
+
 def test_cli_enters_shell_by_default(sample_project: Path, monkeypatch) -> None:
     monkeypatch.chdir(sample_project)
     result = runner.invoke(app, [], input="/exit\n")
@@ -594,6 +627,19 @@ def test_cli_shell_supports_gen_sva(sample_project: Path, monkeypatch) -> None:
     assert result.exit_code == 0
     assert "Spec-to-SVA Result" in result.stdout
     assert "uart_rx_assertions.sv" in result.stdout
+
+
+def test_cli_shell_supports_gen_cocotb(sample_project: Path, monkeypatch) -> None:
+    monkeypatch.chdir(sample_project)
+    runner.invoke(app, ["index"])
+    result = runner.invoke(
+        app,
+        [],
+        input="/gen-cocotb --dut rtl/uart_rx.sv --spec docs/uart.md --intent \"smoke start bit\"\n/exit\n",
+    )
+    assert result.exit_code == 0
+    assert "DUT-to-Cocotb Result" in result.stdout
+    assert "test_uart_rx.py" in result.stdout
 
 
 def test_cli_shell_supports_waveform_commands(sample_project: Path, monkeypatch) -> None:

@@ -166,6 +166,36 @@ class SvaCandidate:
 
 
 @dataclass(slots=True)
+class CocotbPort:
+    name: str
+    direction: str
+    width: int = 1
+    role: str = ""
+
+
+@dataclass(slots=True)
+class CocotbCandidate:
+    candidate_id: str
+    task_id: str
+    dut_path: str
+    spec_path: str | None
+    top_module: str
+    file_path: str
+    manifest_path: str
+    candidate_content: str
+    explanation: str
+    status: str
+    provider: str = ""
+    intent: str = ""
+    evidence_paths: list[str] = field(default_factory=list)
+    assumptions: list[str] = field(default_factory=list)
+    ports: list[CocotbPort] = field(default_factory=list)
+    replay_artifacts: dict[str, str] = field(default_factory=dict)
+    validation_attempts: list[ValidationAttempt] = field(default_factory=list)
+    schema_version: str = SCHEMA_VERSION
+
+
+@dataclass(slots=True)
 class WaveformTransition:
     timestamp: int
     value: str

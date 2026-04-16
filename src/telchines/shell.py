@@ -23,6 +23,7 @@ from telchines.errors import AdapterExecutionError, ConfigError, ProviderError, 
 from telchines.operations import (
     dump_json,
     format_triage_human,
+    gen_cocotb,
     gen_sva,
     inspect_waveform,
     index_project,
@@ -368,6 +369,8 @@ def _dispatch_plain_text(session: ShellSession, user_input: str) -> tuple[bool, 
         return False, _render_intent("Inspect recent runs", render_runs_payload(list_runs(session.cwd)))
     if "repair" in lowered:
         return False, "I can run repair, but I need an explicit tool and file. Try `/repair --tool verilator --file rtl/foo.sv`."
+    if "cocotb" in lowered or "testbench" in lowered:
+        return False, "I can generate a cocotb scaffold, but I need a DUT path. Try `/gen-cocotb --dut rtl/uart_rx.sv --spec docs/uart.md`."
     if "assert" in lowered or "sva" in lowered:
         return False, "I can generate assertions, but I need a spec and RTL target. Try `/gen-sva --spec docs/uart.md --rtl rtl/uart_rx.sv`."
     return False, "I did not recognize that request. Use /help or try `/providers`, `/index`, or `/triage --logs logs/regressions`."
@@ -424,6 +427,19 @@ def _execute_command(session: ShellSession, parts: list[str], raw: bool) -> str 
         payload = gen_sva(session.cwd, spec=_resolve_path(session.cwd, spec), rtl=_resolve_path(session.cwd, rtl), output=None if output is None else _resolve_path(session.cwd, output), provider_name=provider)
         session.note_context(payload)
         return dump_json(payload) if raw else render_sva_payload(payload)
+
+    if command == "gen-cocotb":
+        dut, spec, output_dir, intent, provider = _parse_gen_cocotb_args(parts[1:])
+        payload = gen_cocotb(
+            session.cwd,
+            dut=_resolve_path(session.cwd, dut),
+            spec=None if spec is None else _resolve_path(session.cwd, spec),
+            output_dir=None if output_dir is None else _resolve_path(session.cwd, output_dir),
+            intent=intent,
+            provider_name=provider,
+        )
+        session.note_context(payload)
+        return dump_json(payload) if raw else render_cocotb_payload(payload)
 
     if command == "runs":
         if len(parts) == 1 or parts[1] == "list":
@@ -501,6 +517,7 @@ def render_help() -> str:
         ("/repair --tool TOOL --file PATH", "Run repair workflow"),
         ("/triage --logs PATH [--logs PATH] [--waveform PATH]", "Run regression triage"),
         ("/gen-sva --spec PATH --rtl PATH [--output PATH]", "Generate assertion draft from spec and RTL"),
+        ("/gen-cocotb --dut PATH [--spec PATH] [--output-dir PATH]", "Generate a cocotb scaffold from DUT context"),
         ("/waveforms [list|show TARGET|signals TARGET|inspect TARGET --signal NAME]", "Inspect waveform summaries and signals"),
         ("/runs [list|show RUN_ID|replay RUN_ID]", "Inspect stored runs"),
         ("/eval [run|report]", "Run or show benchmarks"),
@@ -594,6 +611,22 @@ def render_sva_payload(payload: dict[str, object]) -> str:
     return render_action_panel("Spec-to-SVA Result", "\n".join(body))
 
 
+def render_cocotb_payload(payload: dict[str, object]) -> str:
+    body = [
+        f"provider: {payload['provider']}",
+        f"status: {payload['status']}",
+        f"top module: {payload['top_module']}",
+        f"artifact: {payload['artifact_path']}",
+        f"manifest: {payload['manifest_path']}",
+        f"validation: {payload['validation_status']}",
+    ]
+    if payload["explanation"]:
+        body.append(f"explanation: {payload['explanation']}")
+    for assumption in payload.get("assumptions", [])[:3]:
+        body.append(f"assumption: {assumption}")
+    return render_action_panel("DUT-to-Cocotb Result", "\n".join(body))
+
+
 def render_waveform_list_payload(payload: dict[str, object]) -> str:
     waveforms = payload["waveforms"]
     if not waveforms:
@@ -676,6 +709,12 @@ def render_run_show(payload: dict[str, object]) -> str:
         status = tool_result.get("status")
         if status:
             lines.append(f"tool result: {status}")
+        top_module = tool_result.get("top_module")
+        if top_module:
+            lines.append(f"top module: {top_module}")
+        assumptions = tool_result.get("assumptions") or []
+        if assumptions:
+            lines.append(f"assumptions: {'; '.join(str(item) for item in assumptions[:2])}")
         property_ids = tool_result.get("property_ids") or []
         if property_ids:
             lines.append(f"properties: {', '.join(property_ids[:4])}")
@@ -824,6 +863,41 @@ def _parse_gen_sva_args(parts: list[str]) -> tuple[str, str, str | None, str | N
     if not rtl:
         raise ValueError("/gen-sva requires --rtl")
     return spec, rtl, output, provider
+
+
+def _parse_gen_cocotb_args(parts: list[str]) -> tuple[str, str | None, str | None, str, str | None]:
+    dut: str | None = None
+    spec: str | None = None
+    output_dir: str | None = None
+    intent = ""
+    provider: str | None = None
+    index = 0
+    while index < len(parts):
+        part = parts[index]
+        if part == "--dut":
+            dut = parts[index + 1]
+            index += 2
+            continue
+        if part == "--spec":
+            spec = parts[index + 1]
+            index += 2
+            continue
+        if part == "--output-dir":
+            output_dir = parts[index + 1]
+            index += 2
+            continue
+        if part == "--intent":
+            intent = parts[index + 1]
+            index += 2
+            continue
+        if part == "--provider":
+            provider = parts[index + 1]
+            index += 2
+            continue
+        raise ValueError(f"unrecognized gen-cocotb argument: {part}")
+    if not dut:
+        raise ValueError("/gen-cocotb requires --dut")
+    return dut, spec, output_dir, intent, provider
 
 
 def _parse_repeated_option(parts: list[str], option_name: str, strict: bool = True) -> list[str]:

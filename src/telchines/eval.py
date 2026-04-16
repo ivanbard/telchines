@@ -13,6 +13,7 @@ from telchines.providers import build_generation_provider, build_repair_provider
 from telchines.retrieval import RetrievalService
 from telchines.run_store import RunStore
 from telchines.utils import copy_tree_to_temp, read_json, remove_tree, stable_id, utc_now
+from telchines.workflows.gen_cocotb import execute_cocotb_generation
 from telchines.workflows.gen_sva import execute_generation
 from telchines.workflows.repair import execute_repair
 from telchines.workflows.triage import triage_logs
@@ -41,6 +42,8 @@ def run_default_suite(config: ProjectConfig, store: RunStore) -> dict[str, objec
             results.append(_run_retrieval_case(config, case))
         elif case.task_type == "sva":
             results.append(_run_sva_case(config, case))
+        elif case.task_type == "cocotb":
+            results.append(_run_cocotb_case(config, case))
     passed = sum(1 for result in results if result["passed"])
     report = {
         "suite": "default",
@@ -233,9 +236,75 @@ def _run_sva_case(config: ProjectConfig, case: BenchmarkCase) -> dict[str, objec
         remove_tree(temp_root)
 
 
+def _run_cocotb_case(config: ProjectConfig, case: BenchmarkCase) -> dict[str, object]:
+    fixture_root = config.project_root / case.fixture_root
+    temp_root = copy_tree_to_temp(fixture_root)
+    try:
+        temp_config = ProjectConfig.init_project(temp_root)
+        model_policy = _resolve_runtime_placeholders(deepcopy(case.config.get("model_policy", {})))
+        if model_policy:
+            temp_config.project.model_policy = model_policy
+            temp_config.save()
+        temp_store = RunStore(temp_config)
+        retrieval = RetrievalService(temp_config)
+        retrieval.build_index()
+        provider_name = case.config.get("provider")
+        provider = build_generation_provider(temp_config, provider_name=str(provider_name) if provider_name else None)
+        candidate, run, validation_run, context = execute_cocotb_generation(
+            temp_config,
+            temp_store,
+            retrieval,
+            provider,
+            temp_root / case.config["dut_path"],
+            spec_path=(temp_root / case.config["spec_path"]) if case.config.get("spec_path") else None,
+            output_dir=(temp_root / case.config["output_dir"]) if case.config.get("output_dir") else None,
+            intent=str(case.config.get("intent", "")),
+        )
+        expected_validation = str(case.scoring.get("expected_validation", "passed"))
+        expected_identifiers = {str(name) for name in case.scoring.get("expected_identifiers", [])}
+        matched_identifiers = sorted(
+            name for name in expected_identifiers if candidate and (f"dut.{name}" in candidate.candidate_content or f"\"{name}\"" in candidate.candidate_content)
+        )
+        identifier_match_rate = len(matched_identifiers) / max(len(expected_identifiers), 1)
+        assumption_count = len(candidate.assumptions) if candidate else 0
+        validation_status = validation_run.status if validation_run else "not_run"
+        artifact_exists = bool(candidate and (temp_root / candidate.file_path).exists())
+        manifest_exists = bool(candidate and (temp_root / candidate.manifest_path).exists())
+        passed = (
+            candidate is not None
+            and run is not None
+            and validation_status == expected_validation
+            and artifact_exists
+            and manifest_exists
+            and assumption_count >= int(case.scoring.get("min_assumptions", 1))
+            and identifier_match_rate >= float(case.scoring.get("min_identifier_match_rate", 1.0))
+        )
+        return {
+            "benchmark_id": case.benchmark_id,
+            "task_type": case.task_type,
+            "passed": passed,
+            "provider": provider.name,
+            "context_id": context.context_id,
+            "run_id": run.run_id if run else None,
+            "candidate_id": candidate.candidate_id if candidate else None,
+            "validation_run_id": validation_run.run_id if validation_run else None,
+            "validation_status": validation_status,
+            "artifact_generated": artifact_exists,
+            "manifest_generated": manifest_exists,
+            "artifact_path": candidate.file_path if candidate else None,
+            "manifest_path": candidate.manifest_path if candidate else None,
+            "assumption_count": assumption_count,
+            "matched_identifiers": matched_identifiers,
+            "identifier_match_rate": round(identifier_match_rate, 3),
+        }
+    finally:
+        remove_tree(temp_root)
+
+
 def _aggregate_metrics(results: list[dict[str, object]]) -> dict[str, object]:
     retrieval_results = [result for result in results if result["task_type"] == "retrieval"]
     sva_results = [result for result in results if result["task_type"] == "sva"]
+    cocotb_results = [result for result in results if result["task_type"] == "cocotb"]
     triage_results = [result for result in results if result["task_type"] == "triage"]
     metrics: dict[str, object] = {}
     if retrieval_results:
@@ -276,6 +345,30 @@ def _aggregate_metrics(results: list[dict[str, object]]) -> dict[str, object]:
             ),
             "avg_citation_match_rate": round(
                 sum(float(result["citation_match_rate"]) for result in sva_results) / len(sva_results),
+                3,
+            ),
+        }
+    if cocotb_results:
+        metrics["cocotb"] = {
+            "cases": len(cocotb_results),
+            "generation_rate": round(
+                sum(1 for result in cocotb_results if bool(result["artifact_generated"])) / len(cocotb_results),
+                3,
+            ),
+            "validation_pass_rate": round(
+                sum(1 for result in cocotb_results if result["validation_status"] == "passed") / len(cocotb_results),
+                3,
+            ),
+            "manifest_generation_rate": round(
+                sum(1 for result in cocotb_results if bool(result["manifest_generated"])) / len(cocotb_results),
+                3,
+            ),
+            "avg_assumption_count": round(
+                sum(int(result["assumption_count"]) for result in cocotb_results) / len(cocotb_results),
+                3,
+            ),
+            "avg_identifier_match_rate": round(
+                sum(float(result["identifier_match_rate"]) for result in cocotb_results) / len(cocotb_results),
                 3,
             ),
         }

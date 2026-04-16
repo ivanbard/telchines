@@ -13,7 +13,7 @@ from urllib.parse import urljoin
 
 from telchines.config import ProjectConfig
 from telchines.errors import ConfigError, ProviderError
-from telchines.models import Observation, PatchProposal, RetrievalContext, SvaCandidate, SvaProperty, VerificationRun
+from telchines.models import CocotbCandidate, CocotbPort, Observation, PatchProposal, RetrievalContext, SvaCandidate, SvaProperty, VerificationRun
 from telchines.utils import stable_id
 
 
@@ -55,6 +55,26 @@ class GenerationProviderResult:
 
 
 @dataclass(slots=True)
+class CocotbGenerationRequest:
+    task_id: str
+    project_root: Path
+    dut_path: str
+    spec_path: str | None
+    output_dir: str
+    intent: str
+    retrieval_context: RetrievalContext
+
+
+@dataclass(slots=True)
+class CocotbGenerationProviderResult:
+    provider_name: str
+    request_payload: dict[str, Any]
+    response_payload: dict[str, Any]
+    candidate: CocotbCandidate | None
+    summary: str
+
+
+@dataclass(slots=True)
 class ProviderStatus:
     name: str
     kind: str
@@ -75,6 +95,9 @@ class GenerationProvider:
     name = "base"
 
     def generate_sva(self, request: GenerationRequest) -> GenerationProviderResult:
+        raise NotImplementedError
+
+    def generate_cocotb(self, request: CocotbGenerationRequest) -> CocotbGenerationProviderResult:
         raise NotImplementedError
 
 
@@ -261,6 +284,25 @@ class HeuristicGenerationProvider(GenerationProvider):
             summary="heuristic provider has no SVA generator",
         )
 
+    def generate_cocotb(self, request_value: CocotbGenerationRequest) -> CocotbGenerationProviderResult:
+        generation_inputs = _load_cocotb_generation_inputs(request_value)
+        request_payload = _build_cocotb_generation_request_payload(request_value, self.name)
+        candidate = _build_heuristic_cocotb_candidate(self.name, request_value, generation_inputs)
+        return CocotbGenerationProviderResult(
+            provider_name=self.name,
+            request_payload=request_payload,
+            response_payload={
+                "provider": self.name,
+                "status": "proposed",
+                "file_path": candidate.file_path,
+                "manifest_path": candidate.manifest_path,
+                "top_module": candidate.top_module,
+                "assumptions": candidate.assumptions,
+            },
+            candidate=candidate,
+            summary="heuristic cocotb scaffold generated from DUT interface",
+        )
+
 
 class OpenAICompatibleRepairProvider(RepairProvider):
     def __init__(self, provider_name: str, config: dict[str, Any]) -> None:
@@ -321,6 +363,24 @@ class OpenAICompatibleGenerationProvider(GenerationProvider):
             summary=summary,
         )
 
+    def generate_cocotb(self, request_value: CocotbGenerationRequest) -> CocotbGenerationProviderResult:
+        request_payload = _build_cocotb_generation_request_payload(request_value, self.provider_name)
+        chat_payload = self._build_chat_payload(request_payload)
+        response_payload = _invoke_openai_compatible(self.provider_name, self.config, chat_payload)
+        candidate = _build_cocotb_candidate_from_content_payload(
+            self.provider_name,
+            request_value,
+            _extract_openai_response_content(response_payload, self.provider_name),
+        )
+        summary = "model-backed cocotb scaffold generated" if candidate else "model-backed provider returned no cocotb scaffold"
+        return CocotbGenerationProviderResult(
+            provider_name=self.provider_name,
+            request_payload={"provider_request": request_payload, "transport_request": chat_payload},
+            response_payload=response_payload,
+            candidate=candidate,
+            summary=summary,
+        )
+
     def _build_chat_payload(self, provider_request: dict[str, Any]) -> dict[str, Any]:
         system_prompt = self.config.get(
             "system_prompt",
@@ -368,6 +428,19 @@ class LocalCommandGenerationProvider(GenerationProvider):
         candidate = _build_sva_candidate_from_content_payload(self.provider_name, request_value, response_payload.get("parsed", {}))
         summary = "local command SVA candidate generated" if candidate else "local command provider returned no SVA candidate"
         return GenerationProviderResult(
+            provider_name=self.provider_name,
+            request_payload=request_payload,
+            response_payload=response_payload,
+            candidate=candidate,
+            summary=summary,
+        )
+
+    def generate_cocotb(self, request_value: CocotbGenerationRequest) -> CocotbGenerationProviderResult:
+        request_payload = _build_cocotb_generation_request_payload(request_value, self.provider_name)
+        response_payload = _invoke_local_command(self.provider_name, self.config, request_value.project_root, request_payload)
+        candidate = _build_cocotb_candidate_from_content_payload(self.provider_name, request_value, response_payload.get("parsed", {}))
+        summary = "local command cocotb scaffold generated" if candidate else "local command provider returned no cocotb scaffold"
+        return CocotbGenerationProviderResult(
             provider_name=self.provider_name,
             request_payload=request_payload,
             response_payload=response_payload,
@@ -544,6 +617,65 @@ def _build_generation_request_payload(request_value: GenerationRequest, provider
     }
 
 
+def _build_cocotb_generation_request_payload(request_value: CocotbGenerationRequest, provider_name: str) -> dict[str, Any]:
+    loaded = _load_cocotb_generation_inputs(request_value)
+    return {
+        "provider": provider_name,
+        "task_id": request_value.task_id,
+        "workflow_type": "dut_to_cocotb",
+        "dut": {
+            "path": request_value.dut_path,
+            "content": loaded["dut_content"],
+            "module_name": loaded["module_name"],
+            "ports": [
+                {
+                    "name": port.name,
+                    "direction": port.direction,
+                    "width": port.width,
+                    "role": port.role,
+                }
+                for port in loaded["ports"]
+            ],
+        },
+        "spec": (
+            {
+                "path": request_value.spec_path,
+                "content": loaded["spec_content"],
+            }
+            if request_value.spec_path and loaded["spec_content"] is not None
+            else None
+        ),
+        "intent": request_value.intent,
+        "output_dir": request_value.output_dir,
+        "default_output_file": loaded["output_file"],
+        "default_manifest_file": loaded["manifest_path"],
+        "inference": {
+            "clock_port": loaded["clock_port"],
+            "reset_port": loaded["reset_port"],
+            "reset_active_low": loaded["reset_active_low"],
+            "assumptions": loaded["assumptions"],
+        },
+        "retrieval_context": {
+            "context_id": request_value.retrieval_context.context_id,
+            "hits": [
+                {
+                    "path": hit.path,
+                    "kind": hit.kind,
+                    "score": hit.score,
+                    "citation": hit.citation,
+                    "snippet": hit.snippet,
+                }
+                for hit in request_value.retrieval_context.hits
+            ],
+        },
+        "instructions": (
+            "Return a JSON object with keys: status, file_path, candidate_content, explanation, evidence_paths, top_module, manifest_path, assumptions, ports. "
+            "Use status='no_generation' if no grounded cocotb scaffold can be produced. "
+            "The ports field must be a list of objects with keys: name, direction, width, role."
+        ),
+    }
+
+
 def _invoke_openai_compatible(provider_name: str, config: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
     api_key_env = config.get("api_key_env", "OPENAI_API_KEY")
     api_key = os.environ.get(api_key_env)
@@ -678,6 +810,59 @@ def _build_sva_candidate_from_content_payload(provider_name: str, request_value:
     )
 
 
+def _build_cocotb_candidate_from_content_payload(
+    provider_name: str,
+    request_value: CocotbGenerationRequest,
+    content_payload: dict[str, Any],
+) -> CocotbCandidate | None:
+    if not content_payload or content_payload.get("status") in {"no_generation", "no_patch"}:
+        return None
+    loaded = _load_cocotb_generation_inputs(request_value)
+    candidate_content = content_payload.get("candidate_content")
+    if not isinstance(candidate_content, str) or not candidate_content.strip():
+        raise ProviderError(f"provider {provider_name} did not return candidate_content")
+    file_path = _normalize_project_relative_path(
+        request_value.project_root,
+        str(content_payload.get("file_path") or loaded["output_file"]),
+        provider_name,
+        "file_path",
+    )
+    manifest_path = _normalize_project_relative_path(
+        request_value.project_root,
+        str(content_payload.get("manifest_path") or loaded["manifest_path"]),
+        provider_name,
+        "manifest_path",
+    )
+    raw_assumptions = content_payload.get("assumptions", loaded["assumptions"])
+    if not isinstance(raw_assumptions, list):
+        raw_assumptions = loaded["assumptions"]
+    assumptions = [str(item) for item in raw_assumptions if str(item).strip()]
+    ports = _parse_cocotb_ports(content_payload.get("ports"), loaded["ports"])
+    raw_evidence_paths = content_payload.get("evidence_paths", [])
+    if not isinstance(raw_evidence_paths, list):
+        raw_evidence_paths = []
+    evidence_paths = [str(path) for path in raw_evidence_paths]
+    top_module = str(content_payload.get("top_module") or loaded["module_name"])
+    explanation = str(content_payload.get("explanation") or "Model-backed cocotb scaffold.")
+    return CocotbCandidate(
+        candidate_id=stable_id("cocotb", request_value.task_id, file_path),
+        task_id=request_value.task_id,
+        dut_path=request_value.dut_path,
+        spec_path=request_value.spec_path,
+        top_module=top_module,
+        file_path=file_path,
+        manifest_path=manifest_path,
+        candidate_content=candidate_content,
+        explanation=explanation,
+        status="proposed",
+        provider=provider_name,
+        intent=request_value.intent,
+        evidence_paths=evidence_paths,
+        assumptions=assumptions,
+        ports=ports,
+    )
+
+
 def _parse_sva_properties(value: Any) -> list[SvaProperty]:
     if not isinstance(value, list):
         return []
@@ -700,6 +885,26 @@ def _parse_sva_properties(value: Any) -> list[SvaProperty]:
             )
         )
     return parsed
+
+
+def _parse_cocotb_ports(value: Any, default_ports: list[CocotbPort]) -> list[CocotbPort]:
+    if not isinstance(value, list):
+        return list(default_ports)
+    parsed: list[CocotbPort] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        direction = str(item.get("direction") or "").strip()
+        if not name or not direction:
+            continue
+        width = item.get("width", 1)
+        try:
+            width_value = max(int(width), 1)
+        except (TypeError, ValueError):
+            width_value = 1
+        parsed.append(CocotbPort(name=name, direction=direction, width=width_value, role=str(item.get("role") or "").strip()))
+    return parsed or list(default_ports)
 
 
 def _build_patch(
@@ -752,3 +957,254 @@ def _extract_json_object(content: str, provider_name: str) -> dict[str, Any]:
         return json.loads(stripped[start : end + 1])
     except json.JSONDecodeError as exc:
         raise ProviderError(f"provider {provider_name} returned malformed JSON content") from exc
+
+
+def _normalize_project_relative_path(project_root: Path, value: str, provider_name: str, field_name: str) -> str:
+    normalized = Path(value)
+    if normalized.is_absolute():
+        try:
+            return normalized.relative_to(project_root).as_posix()
+        except ValueError as exc:
+            raise ProviderError(f"provider {provider_name} returned {field_name} outside the project: {value}") from exc
+    return normalized.as_posix()
+
+
+def _load_cocotb_generation_inputs(request_value: CocotbGenerationRequest) -> dict[str, Any]:
+    dut = request_value.project_root / request_value.dut_path
+    if not dut.exists():
+        raise ProviderError(f"dut file does not exist: {request_value.dut_path}")
+    dut_content = dut.read_text(encoding="utf-8")
+    spec_content: str | None = None
+    if request_value.spec_path:
+        spec = request_value.project_root / request_value.spec_path
+        if not spec.exists():
+            raise ProviderError(f"spec file does not exist: {request_value.spec_path}")
+        spec_content = spec.read_text(encoding="utf-8")
+    module_name = _extract_module_name(dut_content) or dut.stem
+    ports = _extract_cocotb_ports(dut_content)
+    clock_port = next((port.name for port in ports if port.role == "clock"), None)
+    reset_port = next((port.name for port in ports if port.role == "reset"), None)
+    reset_active_low = bool(reset_port and re.search(r"(_n|n$)", reset_port, re.IGNORECASE))
+    output_dir = Path(request_value.output_dir)
+    output_file = (output_dir / f"test_{module_name}.py").as_posix()
+    manifest_path = (output_dir / f"{module_name}_cocotb_manifest.json").as_posix()
+    assumptions: list[str] = []
+    if clock_port:
+        assumptions.append(f"Inferred `{clock_port}` as the primary clock.")
+    else:
+        assumptions.append("No dedicated clock port was inferred; scaffold uses Timer-based waits.")
+    if reset_port:
+        polarity = "active-low" if reset_active_low else "active-high"
+        assumptions.append(f"Inferred `{reset_port}` as an {polarity} reset.")
+    else:
+        assumptions.append("No reset port was inferred; scaffold leaves reset sequencing as a TODO.")
+    if request_value.spec_path:
+        assumptions.append(f"Used `{request_value.spec_path}` as supplemental behavioral context.")
+    if request_value.intent.strip():
+        assumptions.append("Applied user-provided test intent to shape the scaffold focus.")
+    return {
+        "dut_content": dut_content,
+        "spec_content": spec_content,
+        "module_name": module_name,
+        "ports": ports,
+        "clock_port": clock_port,
+        "reset_port": reset_port,
+        "reset_active_low": reset_active_low,
+        "output_file": output_file,
+        "manifest_path": manifest_path,
+        "assumptions": assumptions,
+    }
+
+
+def _build_heuristic_cocotb_candidate(
+    provider_name: str,
+    request_value: CocotbGenerationRequest,
+    generation_inputs: dict[str, Any],
+) -> CocotbCandidate:
+    ports = list(generation_inputs["ports"])
+    module_name = str(generation_inputs["module_name"])
+    output_file = str(generation_inputs["output_file"])
+    manifest_path = str(generation_inputs["manifest_path"])
+    evidence_paths = [hit.path for hit in request_value.retrieval_context.hits]
+    content = _render_heuristic_cocotb(request_value, generation_inputs)
+    return CocotbCandidate(
+        candidate_id=stable_id("cocotb", request_value.task_id, output_file),
+        task_id=request_value.task_id,
+        dut_path=request_value.dut_path,
+        spec_path=request_value.spec_path,
+        top_module=module_name,
+        file_path=output_file,
+        manifest_path=manifest_path,
+        candidate_content=content,
+        explanation="Generated a reviewable cocotb smoke-test scaffold from DUT ports, retrieved context, and inferred reset/clock behavior.",
+        status="proposed",
+        provider=provider_name,
+        intent=request_value.intent,
+        evidence_paths=evidence_paths,
+        assumptions=list(generation_inputs["assumptions"]),
+        ports=ports,
+    )
+
+
+def _render_heuristic_cocotb(request_value: CocotbGenerationRequest, generation_inputs: dict[str, Any]) -> str:
+    module_name = str(generation_inputs["module_name"])
+    ports: list[CocotbPort] = list(generation_inputs["ports"])
+    clock_port = generation_inputs["clock_port"]
+    reset_port = generation_inputs["reset_port"]
+    reset_active_low = bool(generation_inputs["reset_active_low"])
+    stimulus_ports = [port for port in ports if port.direction == "input" and port.name not in {clock_port, reset_port}]
+    observed_ports = [port for port in ports if port.direction in {"output", "inout"}]
+    lines = [
+        "import cocotb",
+        "from cocotb.clock import Clock",
+        "from cocotb.triggers import RisingEdge, Timer",
+        "",
+        "",
+        "async def initialize_inputs(dut) -> None:",
+    ]
+    if stimulus_ports:
+        for port in stimulus_ports:
+            lines.append(f"    dut.{port.name}.value = {_default_signal_value(port)}")
+    else:
+        lines.append("    # TODO: Initialize DUT stimulus inputs once protocol intent is refined.")
+        lines.append("    return")
+    lines.extend(["", ""])
+    if reset_port:
+        inactive = "1" if reset_active_low else "0"
+        active = "0" if reset_active_low else "1"
+        lines.extend(
+            [
+                "async def apply_reset(dut) -> None:",
+                f"    dut.{reset_port}.value = {active}",
+            ]
+        )
+        if clock_port:
+            lines.extend([f"    await RisingEdge(dut.{clock_port})", f"    await RisingEdge(dut.{clock_port})"])
+        else:
+            lines.append("    await Timer(20, units=\"ns\")")
+        lines.extend(
+            [
+                f"    dut.{reset_port}.value = {inactive}",
+            ]
+        )
+        if clock_port:
+            lines.append(f"    await RisingEdge(dut.{clock_port})")
+        else:
+            lines.append("    await Timer(10, units=\"ns\")")
+        lines.extend(["", ""])
+    else:
+        lines.extend(
+            [
+                "async def apply_reset(dut) -> None:",
+                "    # TODO: No reset port was inferred. Add environment-specific reset handling here.",
+                "    await Timer(20, units=\"ns\")",
+                "",
+                "",
+            ]
+        )
+    lines.extend(
+        [
+            "@cocotb.test()",
+            f"async def smoke_{module_name}(dut) -> None:",
+            f"    \"\"\"Smoke scaffold for {module_name}.\"\"\"",
+        ]
+    )
+    if request_value.intent.strip():
+        lines.append(f"    # Intent: {request_value.intent.strip()}")
+    if clock_port:
+        lines.extend(
+            [
+                f"    clock = Clock(dut.{clock_port}, 10, units=\"ns\")",
+                "    cocotb.start_soon(clock.start())",
+            ]
+        )
+    else:
+        lines.append("    # No explicit clock was inferred for this DUT.")
+    lines.extend(
+        [
+            "    await initialize_inputs(dut)",
+            "    await apply_reset(dut)",
+        ]
+    )
+    if stimulus_ports:
+        first_input = stimulus_ports[0]
+        next_value = "0" if _default_signal_value(first_input) == "1" else "1"
+        lines.append(f"    dut.{first_input.name}.value = {next_value}")
+    if clock_port:
+        lines.append(f"    await RisingEdge(dut.{clock_port})")
+    else:
+        lines.append("    await Timer(10, units=\"ns\")")
+    if observed_ports:
+        lines.append("    observed = {")
+        for port in observed_ports:
+            lines.append(f"        \"{port.name}\": int(dut.{port.name}.value),")
+        lines.append("    }")
+        lines.append("    cocotb.log.info(f\"Observed DUT outputs: {observed}\")")
+    else:
+        lines.append("    cocotb.log.info(\"No DUT outputs were inferred for observation.\")")
+    lines.extend(
+        [
+            "    # TODO: Add monitors and scoreboard expectations tied to the DUT protocol.",
+            "    # TODO: Extend stimulus sequences beyond this smoke path.",
+            "    # TODO: Add functional coverage hooks or sampled observations once coverage goals are known.",
+        ]
+    )
+    return "\n".join(lines) + "\n"
+
+
+def _extract_module_name(content: str) -> str | None:
+    match = re.search(r"\bmodule\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(", content)
+    return match.group(1) if match else None
+
+
+def _extract_cocotb_ports(content: str) -> list[CocotbPort]:
+    header_match = re.search(r"\bmodule\s+[A-Za-z_][A-Za-z0-9_]*\s*\((?P<header>.*?)\)\s*;", content, re.DOTALL)
+    if not header_match:
+        return []
+    ports: list[CocotbPort] = []
+    for raw_line in header_match.group("header").splitlines():
+        line = raw_line.strip().rstrip(",")
+        if not line:
+            continue
+        match = re.match(
+            r"(?P<direction>input|output|inout)\s+(?P<body>.+)",
+            line,
+            re.IGNORECASE,
+        )
+        if not match:
+            continue
+        direction = match.group("direction").lower()
+        body = re.sub(r"\b(logic|wire|reg|bit|signed|unsigned)\b", "", match.group("body")).strip()
+        width_match = re.search(r"(\[[^\]]+\])", body)
+        width = _parse_port_width(width_match.group(1) if width_match else "")
+        if width_match:
+            body = body.replace(width_match.group(1), "").strip()
+        for name in [part.strip() for part in body.split(",") if part.strip()]:
+            ports.append(CocotbPort(name=name, direction=direction, width=width, role=_infer_port_role(name, direction)))
+    return ports
+
+
+def _parse_port_width(width_expr: str) -> int:
+    if not width_expr:
+        return 1
+    match = re.match(r"\[(\d+)\s*:\s*(\d+)\]", width_expr)
+    if not match:
+        return 1
+    upper = int(match.group(1))
+    lower = int(match.group(2))
+    return abs(upper - lower) + 1
+
+
+def _infer_port_role(name: str, direction: str) -> str:
+    lowered = name.lower()
+    if direction == "input" and re.search(r"(^|_)(clk|clock)($|_)", lowered):
+        return "clock"
+    if direction == "input" and re.search(r"(^|_)(rst|reset)($|_)", lowered):
+        return "reset"
+    return ""
+
+
+def _default_signal_value(port: CocotbPort) -> str:
+    if port.width <= 1:
+        return "0"
+    return "0"

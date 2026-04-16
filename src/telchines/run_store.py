@@ -7,6 +7,8 @@ from typing import Any
 from telchines.config import ProjectConfig
 from telchines.models import (
     AgentTask,
+    CocotbCandidate,
+    CocotbPort,
     FailureCluster,
     Observation,
     PatchProposal,
@@ -84,6 +86,12 @@ class RunStore:
     def save_sva_candidate(self, candidate: SvaCandidate) -> None:
         payload = dataclass_to_dict(candidate)
         payload["properties"] = [asdict(item) for item in candidate.properties]
+        payload["validation_attempts"] = [asdict(attempt) for attempt in candidate.validation_attempts]
+        write_json(self.generations_dir / f"{candidate.candidate_id}.json", payload)
+
+    def save_cocotb_candidate(self, candidate: CocotbCandidate) -> None:
+        payload = dataclass_to_dict(candidate)
+        payload["ports"] = [asdict(item) for item in candidate.ports]
         payload["validation_attempts"] = [asdict(attempt) for attempt in candidate.validation_attempts]
         write_json(self.generations_dir / f"{candidate.candidate_id}.json", payload)
 
