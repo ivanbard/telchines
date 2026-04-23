@@ -4,10 +4,37 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "telchines"
-version = "0.1.0"
-description = "Telchines verification workflow platform"
+version = "1.0.0"
+description = "CLI-first verification workflow platform for grounded AI-assisted hardware validation"
 readme = "README.md"
 requires-python = ">=3.11"
+license = "MIT"
+authors = [
+  {name = "Telchines contributors"},
+]
+keywords = [
+  "asic",
+  "fpga",
+  "rtl",
+  "verification",
+  "sva",
+  "cocotb",
+  "cli",
+]
+classifiers = [
+  "Development Status :: 5 - Production/Stable",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "Intended Audience :: Science/Research",
+  "Operating System :: Microsoft :: Windows",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Scientific/Engineering :: Electronic Design Automation (EDA)",
+  "Topic :: Software Development :: Testing",
+]
 dependencies = [
   "prompt_toolkit>=3.0,<4.0",
   "rich>=14.0,<15.0",
@@ -22,6 +49,13 @@ dev = [
 [project.scripts]
 tel = "telchines.cli:app"
 telchines = "telchines.cli:app"
+
+[project.urls]
+Homepage = "https://github.com/ivanbard/telchines"
+Repository = "https://github.com/ivanbard/telchines"
+Issues = "https://github.com/ivanbard/telchines/issues"
+Changelog = "https://github.com/ivanbard/telchines/blob/main/CHANGELOG.md"
+Documentation = "https://github.com/ivanbard/telchines/tree/main/docs"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

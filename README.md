@@ -1,247 +1,262 @@
 # Telchines
 
-MVP scaffold for Telchines, a CLI-first verification workflow platform focused on:
+Telchines is a CLI-first verification workflow platform for hardware teams that want grounded, replayable AI assistance instead of generic repo chat.
 
-- structured run storage
-- repo/spec/log retrieval
-- open-tool adapter abstractions
-- compile repair
-- regression triage
-- replayable evaluation
+It focuses on:
 
-## Quick Start
+- provenance-aware retrieval over RTL, specs, logs, and prior runs
+- replayable run storage under `.tel/`
+- compile-repair and regression triage workflows
+- spec-to-SVA and DUT-to-cocotb generation
+- coverage-closure recommendations
+- local-first, provider-agnostic model routing
+- benchmarkable release validation
+
+## v1 Status
+
+`v1.0.0` is the first public, CLI-first release target.
+
+Included in `v1`:
+
+- interactive shell and one-shot CLI
+- project indexing and retrieval
+- run storage and replay
+- repair, triage, waveform inspection, `gen-sva`, `gen-cocotb`, and `coverage-plan`
+- provider policy controls for `local`, `hybrid`, `remote`, and `no_egress`
+- built-in benchmark suite
+
+Explicitly out of scope for `v1`:
+
+- web UI
+- hosted service
+- enterprise-only integrations
+- command palette and richer shell UX affordances
+- regression manager integrations beyond the current adapter surface
+
+## Install
+
+From PyPI:
+
+```bash
+pip install telchines
+```
+
+From source:
 
 ```bash
 python -m venv .venv
 . .venv/Scripts/activate
 pip install -e .[dev]
-tel
-telchines --help
-pytest
 ```
 
-Running `tel` with no arguments now opens the interactive Telchines shell. One-shot commands still work when you pass arguments such as `tel repair ...` or `tel providers list`.
+Validate the install:
 
-## Current MVP Surface
+```bash
+tel --version
+telchines --help
+```
+
+## Quick Start
+
+Initialize a project, build the retrieval index, and inspect the configured providers:
+
+```bash
+tel project init .
+tel index
+tel providers list
+```
+
+Run a few common workflows:
+
+```bash
+tel retrieve "uart timeout handling"
+tel triage --logs logs/regressions --format human
+tel gen-sva --spec docs/uart.md --rtl rtl/uart_rx.sv
+tel gen-cocotb --dut rtl/uart_rx.sv --spec docs/uart.md --intent "smoke the start-bit path"
+tel coverage-plan --report cov/coverage.json --rtl rtl/uart_rx.sv --spec docs/uart.md --format human
+```
+
+Launch the interactive shell:
+
+```bash
+tel
+```
+
+## CLI Surface
 
 - `tel`
 - `tel shell`
 - `tel project init`
 - `tel index`
 - `tel retrieve`
+- `tel repair`
+- `tel triage`
+- `tel coverage-plan`
+- `tel gen-sva`
+- `tel gen-cocotb`
+- `tel waveforms list`
+- `tel waveforms show`
+- `tel waveforms signals`
+- `tel waveforms inspect`
 - `tel runs list`
 - `tel runs show`
 - `tel runs replay`
 - `tel adapters list`
 - `tel providers list`
-- `tel repair`
-- `tel triage`
-- `tel coverage-plan`
-- `tel waveforms list`
-- `tel waveforms show`
-- `tel waveforms signals`
-- `tel waveforms inspect`
-- `tel gen-sva`
-- `tel gen-cocotb`
 - `tel eval run`
 - `tel eval report`
 
 ## Interactive Shell
 
-Telchines now supports a persistent full-screen shell with a console-first layout, compact status context, slash commands, and lightweight plain-text prompts:
+Running `tel` with no arguments opens the shell. Slash commands and lightweight plain-text intents are both supported.
 
 ```text
 tel> /help
 tel> /providers
 tel> /index
 tel> /triage --logs logs/regressions
-tel> /coverage-plan --report cov/coverage.json
-tel> /waveforms show logs/regressions/uart_rx_trace.vcd
 tel> /gen-sva --spec docs/uart.md --rtl rtl/uart_rx.sv
-tel> /gen-cocotb --dut rtl/uart_rx.sv --spec docs/uart.md --intent "smoke start bit"
 tel> show my providers
 tel> triage the regression logs
 tel> /exit
 ```
 
-Use `tel shell` to enter the same experience explicitly.
+## Supported Workflows
 
-## Notes
+### Retrieval
 
-- The run store is filesystem-backed and lives under `.tel/`.
-- Retrieval is local and provenance-aware.
-- External verification references are curated and offline-first via `retrieval.external_roots`; repair and triage still rank project-local evidence ahead of external docs.
-- `tel adapters list` now reports compile-only vs compile-and-run validation backends.
-- `telchines` is an equivalent fallback binary if `tel` collides with a local tool on a user machine.
-- Model routing is capability-based and provider-agnostic; the default implementation is heuristic and deterministic for benchmarkable MVP behavior.
-- The first spec-to-SVA flow writes a generated assertion artifact and returns a concise inline property summary.
-- Coverage closure is recommendation-first in v1 and consumes a normalized JSON report format.
+`tel retrieve` builds a task-aware evidence pack from indexed project artifacts and stores the retrieval context for replay.
 
-## Spec-to-SVA
+### Repair
 
-Telchines now supports a first spec-to-SVA workflow:
+`tel repair` runs a tool adapter, stores observations, routes patch generation through the configured repair provider, and optionally applies the validated patch.
 
-```bash
-tel gen-sva --spec docs/uart.md --rtl rtl/uart_rx.sv
-```
+### Triage
 
-The command:
+`tel triage` clusters repeated failures, attaches evidence hits, surfaces similar historical runs, and optionally links waveform/formal evidence.
 
-- builds an SVA-specific retrieval context from the spec and RTL target
-- routes generation through the configured `generation` provider capability
-- writes a generated assertion artifact under `.tel/artifacts/generated/`
-- persists request, response, replay, and validation artifacts in the run store
-- validates the generated artifact through the built-in SVA syntax gate
+### Spec-to-SVA
 
-Use `--output` to override the default generated artifact path and `--provider` to pick a specific configured generation provider.
+`tel gen-sva` generates a candidate SVA artifact, stores request/response/replay artifacts, and validates the result through the built-in syntax gate.
 
-## DUT-to-Cocotb
+### DUT-to-Cocotb
 
-Telchines now supports a first DUT-to-cocotb scaffold workflow:
+`tel gen-cocotb` generates a starter cocotb scaffold and manifest, records generation artifacts, and validates the emitted Python with `py_compile`.
 
-```bash
-tel gen-cocotb --dut rtl/uart_rx.sv --spec docs/uart.md --intent "smoke the start-bit path"
-```
+### Coverage Planning
 
-The command:
+`tel coverage-plan` ingests normalized coverage JSON, classifies uncovered items, and emits cited next-step recommendations.
 
-- builds a generation-focused retrieval context around the DUT, optional spec, and user intent
-- routes generation through the configured `generation` provider capability
-- writes a generated cocotb scaffold plus a manifest under `.tel/artifacts/generated/cocotb/`
-- persists request, response, replay, generation, and validation artifacts in the run store
-- validates the generated Python through `py_compile` without requiring a cocotb installation
+### Waveform Inspection
 
-Use `--output-dir` to override the generated artifact directory and `--provider` to select a specific configured generation provider.
+`tel waveforms` commands parse and persist VCD summaries, list signals, and inspect transition windows from the CLI or shell.
 
-## Coverage Planning
+## Adapter Surface
 
-Telchines now supports a first coverage-closure planning workflow:
+Current built-in adapters:
 
-```bash
-tel coverage-plan --report cov/coverage.json --rtl rtl/uart_rx.sv --spec docs/uart.md
-```
+- `verilator`
+- `iverilog`
+- `slang`
+- `verible`
+- `symbiyosys`
 
-The command:
+Current validation modes:
 
-- ingests a normalized JSON coverage report plus optional exclusions and formal hints
-- builds a coverage-focused retrieval context around the top uncovered items
-- classifies likely causes such as missing stimulus, missing checker, unreachable logic, or environment issues
-- writes a replayable coverage plan artifact under `.tel/task-artifacts/`
-- stores the resulting workflow run in the run store with cited evidence and recommendation metadata
+- compile-oriented: `verilator`, `slang`, `verible`
+- compile-and-run: `iverilog`
+- structured formal summaries: `symbiyosys`
 
-Use `--exclusions` to provide an additional exclusions file, `--formal-run` to attach a prior formal run, and `--format human` for a concise terminal report.
-
-## Waveform Debug
-
-Telchines now supports a first waveform-aware debug slice with native VCD parsing and shell/CLI inspection commands:
-
-```bash
-tel triage --logs logs/regressions --waveform logs/regressions/uart_rx_trace.vcd
-tel waveforms list
-tel waveforms show logs/regressions/uart_rx_trace.vcd
-tel waveforms signals logs/regressions/uart_rx_trace.vcd --filter start
-tel waveforms inspect logs/regressions/uart_rx_trace.vcd --signal start_seen
-```
-
-The current implementation:
-
-- parses VCD metadata and signal transitions into `.tel/waveforms/`
-- auto-discovers nearby VCD files during triage when present under the same log tree
-- attaches waveform-backed evidence summaries to triage clusters
-- renders signal inventory and simple transition timelines in the shell and one-shot CLI
-
-## Adapter Validation Modes
-
-Telchines distinguishes compile-only validation from compile-and-run validation:
-
-- `verilator`, `slang`, and `verible` are compile-oriented validation backends
-- `iverilog` uses `iverilog` plus `vvp` as a run-capable validation backend
-- `symbiyosys` persists structured formal summaries such as property IDs, reports, and counterexample paths
-
-Inspect the current adapter surface with:
+Inspect the live adapter surface with:
 
 ```bash
 tel adapters list
 tel adapters list --category simulation
+tel adapters list --category formal
 ```
 
-## Model Provider Setup
+See [docs/adapters.md](docs/adapters.md) for support expectations and contribution rules.
 
-Telchines can route repair requests to:
+## Provider Model
 
-- the built-in `heuristic` provider
-- an `openai_compatible` hosted endpoint
-- a `local_command` provider that reads JSON on stdin and writes JSON on stdout
+Telchines supports three provider kinds:
 
-Example hosted provider config:
+- `heuristic`
+- `openai_compatible`
+- `local_command`
 
-```json
-{
-  "model_mode": "hybrid",
-  "no_egress": false,
-  "project": {
-    "model_policy": {
-      "default_provider_by_capability": {
-        "repair": "remote-repair",
-        "generation": "remote-repair"
-      },
-      "providers": {
-        "heuristic": {
-          "kind": "heuristic",
-          "capabilities": ["repair", "generation"]
-        },
-        "remote-repair": {
-          "kind": "openai_compatible",
-          "capabilities": ["repair", "generation"],
-          "base_url": "https://example-provider.local/v1",
-          "model": "demo-model",
-          "api_key_env": "TELCHINES_API_KEY",
-          "timeout_seconds": 30
-        }
-      }
-    }
-  }
-}
+Provider routing is capability-based. `repair` and `generation` can point at different providers.
+
+Policy controls:
+
+- `model_mode=local` blocks remote providers
+- `model_mode=remote` blocks local command providers
+- `model_mode=hybrid` allows both, subject to capability routing
+- `no_egress=true` blocks all networked providers
+
+See [docs/providers.md](docs/providers.md) for configuration examples.
+
+## Benchmarks And Release Validation
+
+Telchines ships with an offline benchmark suite covering:
+
+- repair
+- triage
+- retrieval
+- spec-to-SVA
+- DUT-to-cocotb
+- coverage planning
+
+Run it with:
+
+```bash
+tel eval run
+tel eval report
 ```
 
-Example local command provider config:
+See [docs/evaluation.md](docs/evaluation.md) for expected outputs and release-gate usage.
 
-```json
-{
-  "model_mode": "hybrid",
-  "project": {
-    "model_policy": {
-      "default_provider_by_capability": {
-        "repair": "local-repair",
-        "generation": "local-repair"
-      },
-      "providers": {
-        "heuristic": {
-          "kind": "heuristic",
-          "capabilities": ["repair", "generation"]
-        },
-        "local-repair": {
-          "kind": "local_command",
-          "capabilities": ["repair", "generation"],
-          "command": "python",
-          "args": ["tools/local_provider.py"],
-          "timeout_seconds": 30
-        }
-      }
-    }
-  }
-}
+## Stability Promise For v1
+
+The `1.x` line treats these interfaces as stable unless explicitly deprecated:
+
+- top-level CLI command names
+- `.tel/config.json` layout
+- run-store replay artifacts
+- JSON output shape for the main workflow commands
+
+Details are documented in [docs/compatibility.md](docs/compatibility.md).
+
+## Documentation
+
+- [Quickstart](docs/quickstart.md)
+- [Worked Examples](docs/examples.md)
+- [Provider Configuration](docs/providers.md)
+- [Adapter Support And Contribution Contract](docs/adapters.md)
+- [External Retrieval Policy](docs/external-retrieval-policy.md)
+- [Evaluation And Benchmarks](docs/evaluation.md)
+- [Compatibility Promise](docs/compatibility.md)
+- [Release Checklist](docs/release-checklist.md)
+
+## Development
+
+```bash
+pip install -e .[dev]
+pytest
 ```
 
-`model_mode=local` blocks remote providers, `model_mode=remote` blocks local command providers, and `no_egress=true` blocks all networked providers. Use `tel providers list` to inspect configured providers, defaults, and policy blockers.
+Project contribution and disclosure guidelines:
+
+- [CONTRIBUTING.md](CONTRIBUTING.md)
+- [SECURITY.md](SECURITY.md)
 
 ## GitHub Backlog Automation
 
-- Backlog definition: `ops/github-backlog.json`
-- Local sync script: `scripts/sync-github-backlog.ps1`
-- Manual GitHub Action: `.github/workflows/sync-backlog.yml`
+- backlog definition: `ops/github-backlog.json`
+- local sync script: `scripts/sync-github-backlog.ps1`
+- manual workflow: `.github/workflows/sync-backlog.yml`
 
-Example local dry run:
+Dry run:
 
 ```powershell
 ./scripts/sync-github-backlog.ps1 -Repo OWNER/REPO -WhatIf

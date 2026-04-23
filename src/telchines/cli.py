@@ -6,6 +6,7 @@ from typing import Optional
 import typer
 
 from telchines.errors import AdapterExecutionError, ConfigError, ProviderError
+from telchines import __version__
 from telchines.operations import (
     coverage_plan as coverage_plan_op,
     dump_json,
@@ -53,8 +54,24 @@ def _fail(message: str, exit_code: int = 2) -> None:
     raise typer.Exit(code=exit_code)
 
 
+def _version_callback(value: bool) -> None:
+    if not value:
+        return
+    typer.echo(f"telchines {__version__}")
+    raise typer.Exit()
+
+
 @app.callback()
-def main(ctx: typer.Context) -> None:
+def main(
+    ctx: typer.Context,
+    version: bool = typer.Option(
+        False,
+        "--version",
+        help="Show the installed Telchines version and exit.",
+        callback=_version_callback,
+        is_eager=True,
+    ),
+) -> None:
     if ctx.invoked_subcommand is None:
         run_shell(Path.cwd())
         raise typer.Exit()

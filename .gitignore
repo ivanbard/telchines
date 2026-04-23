@@ -7,3 +7,5 @@ __pycache__/
 .ovai/
 .test-work/
 pytest-cache-files-*/
+build/
+dist/
