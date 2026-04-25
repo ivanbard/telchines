@@ -17,9 +17,9 @@
 </p>
 
 <p align="center">
-  <a href="#quick-start"><strong>Quick Start</strong></a> ·
-  <a href="#what-you-can-do-with-v1"><strong>v1 Workflows</strong></a> ·
-  <a href="#how-it-works"><strong>How It Works</strong></a> ·
+  <a href="#quick-start"><strong>Quick Start</strong></a> |
+  <a href="#what-you-can-do-with-v1"><strong>v1 Workflows</strong></a> |
+  <a href="#how-it-works"><strong>How It Works</strong></a> |
   <a href="#documentation"><strong>Documentation</strong></a>
 </p>
 
@@ -276,15 +276,3 @@ Project contribution and disclosure guidance:
 - [CONTRIBUTING.md](CONTRIBUTING.md)
 - [SECURITY.md](SECURITY.md)
 - [CHANGELOG.md](CHANGELOG.md)
-
-## GitHub Backlog Automation
-
-- backlog definition: `ops/github-backlog.json`
-- local sync script: `scripts/sync-github-backlog.ps1`
-- manual workflow: `.github/workflows/sync-backlog.yml`
-
-Dry run:
-
-```powershell
-./scripts/sync-github-backlog.ps1 -Repo OWNER/REPO -WhatIf
-```
