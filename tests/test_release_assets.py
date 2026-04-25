@@ -40,6 +40,9 @@ def test_release_files_exist() -> None:
         repo_root / "docs" / "evaluation.md",
         repo_root / "docs" / "compatibility.md",
         repo_root / "docs" / "release-checklist.md",
+        repo_root / "docs" / "assets" / "readme-hero.svg",
+        repo_root / "docs" / "assets" / "readme-workflow.svg",
+        repo_root / "docs" / "assets" / "readme-architecture.svg",
     ]
     for path in expected:
         assert path.exists(), path
