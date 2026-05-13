@@ -12,6 +12,7 @@
 - build sdist and wheel
 - install the built package in a clean environment
 - verify both `tel` and `telchines` entrypoints
+- verify `tel eval run` executes 18 bundled benchmark cases from the clean install
 
 ## Docs
 
@@ -21,6 +22,7 @@
 
 ## Release Artifacts
 
+- confirm the PyPI trusted publisher matches the `pypi` GitHub environment and `.github/workflows/publish-pypi.yml`
 - tag the release as `vX.Y.Z`
 - publish GitHub release notes
 - publish to PyPI

@@ -6,7 +6,7 @@
 
 <p align="center">
   <a href="https://github.com/ivanbard/telchines/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/ivanbard/telchines/ci.yml?branch=main&style=flat-square&label=CI" alt="CI status"></a>
-  <img src="https://img.shields.io/badge/version-v1.0.0-0f172a?style=flat-square" alt="Version 1.0.0">
+  <img src="https://img.shields.io/badge/version-v1.0.1-0f172a?style=flat-square" alt="Version 1.0.1">
   <img src="https://img.shields.io/badge/python-3.11%2B-0b7285?style=flat-square" alt="Python 3.11+">
   <img src="https://img.shields.io/badge/license-MIT-14532d?style=flat-square" alt="MIT License">
   <img src="https://img.shields.io/badge/benchmarks-18%20cases-7c2d12?style=flat-square" alt="18 benchmark cases">
@@ -97,18 +97,18 @@ Telchines keeps the loop explicit:
 
 ## Quick Start
 
-Install from PyPI:
-
-```bash
-pip install telchines
-```
-
-Or from source:
+Install from source while PyPI trusted publishing is being finalized:
 
 ```bash
 python -m venv .venv
 . .venv/Scripts/activate
 pip install -e .[dev]
+```
+
+After the PyPI publisher is configured, the package install path will be:
+
+```bash
+pip install telchines
 ```
 
 Validate the install:

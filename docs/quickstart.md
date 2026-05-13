@@ -2,16 +2,18 @@
 
 ## Install
 
-```bash
-pip install telchines
-```
-
-Or from source:
+Use the source install while PyPI trusted publishing is being finalized:
 
 ```bash
 python -m venv .venv
 . .venv/Scripts/activate
 pip install -e .[dev]
+```
+
+After the PyPI publisher is configured, the package install path will be:
+
+```bash
+pip install telchines
 ```
 
 Verify the install:

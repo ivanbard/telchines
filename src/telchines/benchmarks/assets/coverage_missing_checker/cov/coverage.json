@@ -1,0 +1,21 @@
+{
+  "tool": "fixture_cov",
+  "generated_at": "2026-04-15T00:00:00+00:00",
+  "design": "uart_tx",
+  "focus_paths": [
+    "rtl/uart_tx.sv",
+    "docs/uart.md"
+  ],
+  "items": [
+    {
+      "item_id": "tx_ready_checker",
+      "module": "uart_tx",
+      "metric": "assertion",
+      "name": "ready_o_assertion",
+      "hits": 0,
+      "goal": 1,
+      "detail": "Checker coverage for ready_o assertion remains empty."
+    }
+  ],
+  "schema_version": "0.1"
+}

@@ -1,0 +1,21 @@
+{
+  "tool": "fixture_cov",
+  "generated_at": "2026-04-15T00:00:00+00:00",
+  "design": "counter",
+  "focus_paths": [
+    "rtl/counter.sv",
+    "docs/counter.md"
+  ],
+  "items": [
+    {
+      "item_id": "dead_state_bin",
+      "module": "counter",
+      "metric": "fsm",
+      "name": "unreachable_dead_state",
+      "hits": 0,
+      "goal": 1,
+      "detail": "Dead state bin remains uncovered."
+    }
+  ],
+  "schema_version": "0.1"
+}

@@ -1,0 +1,2 @@
+ERROR: rtl/uart_tx.sv:88: unknown identifier tx_fifo_level
+ERROR: rtl/uart_tx.sv:89: unknown identifier tx_fifo_level in scheduler

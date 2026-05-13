@@ -37,3 +37,17 @@ def test_eval_default_suite(work_root: Path) -> None:
     assert report["metrics"]["coverage"]["avg_recommendation_count"] >= 1.0
     assert report["metrics"]["coverage"]["avg_evidence_count"] >= 1.0
     assert report["metrics"]["triage"]["cases"] == 2
+
+
+def test_eval_default_suite_uses_bundled_benchmarks(work_root: Path) -> None:
+    project_root = work_root / "installed_style_project"
+    project_root.mkdir()
+    ProjectConfig.init_project(project_root)
+    config = ProjectConfig.load(project_root)
+    store = RunStore(config)
+
+    report = run_default_suite(config, store)
+
+    assert report["passed"] == report["total"]
+    assert report["total"] == 18
+    assert store.load_report("latest_eval")["total"] == 18

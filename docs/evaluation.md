@@ -1,6 +1,6 @@
 # Evaluation And Benchmarks
 
-Telchines ships with an offline benchmark suite under `benchmarks/`.
+Telchines ships with an offline benchmark suite. In a source checkout the suite lives under `benchmarks/`; installed packages use the bundled benchmark assets.
 
 Covered task types:
 

@@ -4,6 +4,7 @@ import hashlib
 import json
 import re
 import shutil
+import tempfile
 import uuid
 from dataclasses import asdict, is_dataclass
 from datetime import datetime, timezone
@@ -77,8 +78,8 @@ def load_text(path: Path) -> str:
 
 
 def copy_tree_to_temp(source: Path) -> Path:
-    scratch_root = ensure_directory(source.parent / ".tel-scratch")
-    destination = scratch_root / f"{source.name}-{uuid.uuid4().hex}"
+    destination = Path(tempfile.mkdtemp(prefix=f"telchines-{source.name}-{uuid.uuid4().hex}-"))
+    shutil.rmtree(destination)
     shutil.copytree(source, destination)
     return destination
 

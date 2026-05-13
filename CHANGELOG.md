@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.1 - Unreleased
+
+Release hardening patch.
+
+- packaged the offline benchmark suite in the installed wheel
+- made `tel eval run` fall back to bundled benchmarks when a project does not provide a local `benchmarks/` directory
+- configured the PyPI publish workflow to use the `pypi` GitHub environment for trusted publishing
+- improved temporary benchmark copying so installed packages do not need write access to package directories
+
 ## 1.0.0 - 2026-04-23
 
 First public CLI-first `v1` release target.

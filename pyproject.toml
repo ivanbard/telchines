@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "telchines"
-version = "1.0.0"
+version = "1.0.1"
 description = "CLI-first verification workflow platform for grounded AI-assisted hardware validation"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -62,6 +62,9 @@ package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+telchines = ["benchmarks/*.json", "benchmarks/assets/**/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

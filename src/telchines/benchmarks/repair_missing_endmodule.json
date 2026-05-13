@@ -1,0 +1,17 @@
+{
+  "benchmark_id": "repair_missing_endmodule",
+  "task_type": "repair",
+  "title": "Repair missing endmodule in small RTL module",
+  "fixture_root": "benchmarks/assets/repair_missing_endmodule",
+  "config": {
+    "validator_command": [
+      "tools/fixture_lint.py",
+      "rtl/logic_gate.sv"
+    ],
+    "target_file": "rtl/logic_gate.sv"
+  },
+  "scoring": {
+    "must_pass": true
+  },
+  "schema_version": "0.1"
+}
