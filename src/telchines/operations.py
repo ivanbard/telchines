@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import difflib
 import json
 import shutil
 import subprocess
@@ -13,7 +14,7 @@ from telchines.models import VerificationRun
 from telchines.providers import build_generation_provider, build_repair_provider, check_provider_statuses, list_provider_statuses
 from telchines.retrieval import RetrievalService
 from telchines.run_store import RunStore
-from telchines.utils import SECRET_KEY_RE, dataclass_to_dict, ensure_directory, remove_tree, stable_id, utc_now
+from telchines.utils import SECRET_KEY_RE, dataclass_to_dict, ensure_directory, read_json, remove_tree, stable_id, utc_now
 from telchines.workflows.coverage import execute_coverage_plan, format_coverage_human
 from telchines.workflows.gen_cocotb import execute_cocotb_generation
 from telchines.workflows.gen_sva import execute_generation
@@ -81,6 +82,50 @@ def purge_artifacts(root: Path | None = None, *, dry_run: bool = True) -> dict[s
     }
 
 
+def review_artifact(root: Path | None = None, reference: str = "", *, max_diff_lines: int = 200) -> dict[str, object]:
+    config, store, _ = load_services(root)
+    max_diff_lines = max(1, max_diff_lines)
+    candidate = _resolve_generation_candidate(store, reference)
+    file_path = str(candidate.get("file_path", ""))
+    if not file_path:
+        raise ValueError(f"generation candidate does not have a generated file path: {reference}")
+    generated_path = _safe_project_path(config, file_path)
+    baseline = str(candidate.get("candidate_content", ""))
+    current = generated_path.read_text(encoding="utf-8") if generated_path.exists() else ""
+    diff_lines = list(
+        difflib.unified_diff(
+            baseline.splitlines(),
+            current.splitlines(),
+            fromfile=f"stored:{file_path}",
+            tofile=f"workspace:{file_path}",
+            lineterm="",
+        )
+    )
+    truncated = len(diff_lines) > max_diff_lines
+    if truncated:
+        diff_lines = diff_lines[:max_diff_lines]
+    status = "missing" if not generated_path.exists() else "unchanged" if baseline == current else "modified"
+    validation_attempts = candidate.get("validation_attempts", [])
+    return {
+        "reference": reference,
+        "candidate_id": candidate.get("candidate_id"),
+        "workflow_type": candidate.get("workflow_type", _generation_workflow_type(candidate)),
+        "provider": candidate.get("provider"),
+        "status": status,
+        "generated_file": file_path,
+        "exists": generated_path.exists(),
+        "baseline_line_count": len(baseline.splitlines()),
+        "current_line_count": len(current.splitlines()) if generated_path.exists() else 0,
+        "diff_line_count": len(diff_lines),
+        "diff_truncated": truncated,
+        "diff": "\n".join(diff_lines),
+        "validation_attempts": validation_attempts,
+        "evidence_paths": candidate.get("evidence_paths", []),
+        "replay_artifacts": candidate.get("replay_artifacts", {}),
+        "summary": _artifact_review_summary(status, file_path, len(diff_lines), truncated),
+    }
+
+
 def privacy_report(root: Path | None = None) -> dict[str, object]:
     config, _, _ = load_services(root)
     providers = config.project.model_policy.get("providers", {})
@@ -138,6 +183,50 @@ def _directory_summary(path: Path) -> dict[str, object]:
         "file_count": len(files),
         "byte_count": sum(item.stat().st_size for item in files),
     }
+
+
+def _resolve_generation_candidate(store: RunStore, reference: str) -> dict[str, object]:
+    if not reference.strip():
+        raise ValueError("artifact review requires a candidate id or validation run id")
+    for path in sorted(store.generations_dir.glob("*.json")):
+        payload = read_json(path)
+        if payload.get("candidate_id") == reference:
+            return payload
+        if payload.get("file_path") == reference or payload.get("manifest_path") == reference:
+            return payload
+        validation_attempts = payload.get("validation_attempts", [])
+        if isinstance(validation_attempts, list) and any(item.get("run_id") == reference for item in validation_attempts if isinstance(item, dict)):
+            return payload
+    raise ValueError(f"no generated artifact found for reference: {reference}")
+
+
+def _safe_project_path(config: ProjectConfig, relative_path: str) -> Path:
+    candidate = Path(relative_path)
+    if candidate.is_absolute():
+        raise ValueError(f"generated artifact path must be relative to the project root: {relative_path}")
+    resolved = (config.project_root / candidate).resolve()
+    try:
+        resolved.relative_to(config.project_root.resolve())
+    except ValueError as exc:
+        raise ValueError(f"generated artifact path escapes the project root: {relative_path}") from exc
+    return resolved
+
+
+def _generation_workflow_type(candidate: dict[str, object]) -> str:
+    if "manifest_path" in candidate:
+        return "dut_to_cocotb"
+    if "properties" in candidate:
+        return "spec_to_sva"
+    return "generation"
+
+
+def _artifact_review_summary(status: str, file_path: str, diff_line_count: int, truncated: bool) -> str:
+    if status == "missing":
+        return f"generated artifact is missing from workspace: {file_path}"
+    if status == "unchanged":
+        return f"generated artifact matches stored candidate content: {file_path}"
+    suffix = " (truncated)" if truncated else ""
+    return f"generated artifact has workspace edits: {file_path}; {diff_line_count} diff line(s){suffix}"
 
 
 def retrieve_query(root: Path | None, query: str, limit: int = 5, mode: str = "general") -> dict[str, object]:

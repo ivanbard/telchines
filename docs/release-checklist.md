@@ -6,6 +6,7 @@
 - run `tel eval run`
 - verify `tel --version`
 - verify `tel --help`
+- run the plain shell smoke through `python -m telchines shell --plain`
 - run `tel providers check heuristic`
 - optionally run `pytest tests/test_provider_integration.py` with `TELCHINES_INTEGRATION_OPENAI_*` set
 - run `tel index status` before and after `tel index`
@@ -41,9 +42,12 @@
 - `tel index`
 - `tel index status`
 - `tel retrieve "query"`
+- `python -m telchines shell --plain` with `/pwd`, `/providers`, an invalid command, and EOF or `/exit`
 - one workflow command such as `tel triage --logs logs/regressions`
 - `tel runs replay RUN_ID` and confirm it previews without execution
 - one generation command such as `tel gen-cocotb --dut rtl/uart_rx.sv` and inspect `validation_mode`
 - one SVA generation command and confirm `validation_mode` is `adapter_backed` when Slang or Verilator is installed, otherwise `builtin_structural` with fallback reasons
+- `tel artifacts review CANDIDATE_OR_VALIDATION_RUN_ID` for a generated artifact
+- optionally run `python -m pip install -e ".[cocotb-smoke]"` plus `pytest tests/test_cocotb_smoke.py` on a machine with cocotb, `make`, Icarus, and `vvp`
 - `tel artifacts purge` as a dry run
 - `python scripts/tool_smoke.py --adapters verilator iverilog` when those tools are installed

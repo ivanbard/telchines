@@ -910,6 +910,19 @@ def test_cli_gen_cocotb_with_heuristic_provider(sample_project: Path, monkeypatc
     manifest = read_json(manifest_path)
     assert manifest["validation"]["mode"] == "python_syntax_plus_structure"
 
+    unchanged = runner.invoke(app, ["artifacts", "review", payload["candidate_id"]])
+    assert unchanged.exit_code == 0
+    review_payload = json.loads(unchanged.stdout)
+    assert review_payload["status"] == "unchanged"
+    assert review_payload["generated_file"] == payload["artifact_path"]
+
+    artifact_path.write_text(artifact_path.read_text(encoding="utf-8") + "\n# human review note\n", encoding="utf-8")
+    modified = runner.invoke(app, ["artifacts", "review", payload["validation_run_id"], "--max-diff-lines", "20"])
+    assert modified.exit_code == 0
+    modified_payload = json.loads(modified.stdout)
+    assert modified_payload["status"] == "modified"
+    assert "+# human review note" in modified_payload["diff"]
+
 
 def test_cli_gen_cocotb_uses_generation_conventions(sample_project: Path, monkeypatch) -> None:
     config_path = sample_project / ".tel" / "config.json"
@@ -982,6 +995,47 @@ def test_cli_shell_supports_plain_mode_flag(sample_project: Path, monkeypatch) -
     monkeypatch.chdir(sample_project)
     result = runner.invoke(app, ["shell", "--plain"], input="/pwd\n/exit\n")
     assert result.exit_code == 0
+    assert "mode: plain" in result.stdout
+    assert str(sample_project) in result.stdout
+
+
+def test_cli_plain_shell_subprocess_smoke(sample_project: Path) -> None:
+    env = os.environ.copy()
+    src_root = Path(__file__).resolve().parents[1] / "src"
+    env["PYTHONPATH"] = str(src_root) + os.pathsep + env.get("PYTHONPATH", "")
+    result = subprocess.run(
+        [sys.executable, "-m", "telchines", "shell", "--plain"],
+        cwd=sample_project,
+        input="/pwd\n/providers\n/repair --tool fixture --file\n/exit\n",
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=30,
+        env=env,
+    )
+    assert result.returncode == 0
+    assert "mode: plain" in result.stdout
+    assert str(sample_project) in result.stdout
+    assert "Default Providers" in result.stdout
+    assert "error: --file requires a value" in result.stdout
+    assert "leaving Telchines shell" in result.stdout
+
+
+def test_cli_plain_shell_subprocess_exits_on_eof(sample_project: Path) -> None:
+    env = os.environ.copy()
+    src_root = Path(__file__).resolve().parents[1] / "src"
+    env["PYTHONPATH"] = str(src_root) + os.pathsep + env.get("PYTHONPATH", "")
+    result = subprocess.run(
+        [sys.executable, "-m", "telchines", "shell", "--plain"],
+        cwd=sample_project,
+        input="/pwd\n",
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=30,
+        env=env,
+    )
+    assert result.returncode == 0
     assert "mode: plain" in result.stdout
     assert str(sample_project) in result.stdout
 

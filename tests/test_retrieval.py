@@ -121,3 +121,26 @@ def test_retrieval_status_clean_and_include_exclude_patterns(sample_project: Pat
     assert cleaned["removed_count"] == 2
     assert not (sample_project / ".tel" / "index").exists()
     assert not (sample_project / ".tel" / "external-index").exists()
+
+
+def test_retrieval_expands_configured_domain_aliases(sample_project: Path) -> None:
+    baseline_config = ProjectConfig.load(sample_project)
+    baseline_retrieval = RetrievalService(baseline_config)
+    baseline_retrieval.build_index()
+    baseline = baseline_retrieval.search("framing pulse", mode="generation")
+    assert baseline.hits == []
+
+    config_path = sample_project / ".tel" / "config.json"
+    payload = read_json(config_path)
+    payload["retrieval"]["aliases"] = {"framing pulse": ["start bit", "serial_i"]}
+    write_json(config_path, payload)
+
+    config = ProjectConfig.load(sample_project)
+    retrieval = RetrievalService(config)
+    assert retrieval.status()["alias_count"] == 1
+    aliased = retrieval.search("framing pulse", mode="generation")
+
+    assert aliased.hits
+    assert any(hit.path.endswith(("uart.md", "uart_rx.sv")) for hit in aliased.hits)
+    assert aliased.metadata["query_aliases"] == {"framing pulse": ["start bit", "serial_i"]}
+    assert "serial_i" in aliased.metadata["expanded_query_tokens"]

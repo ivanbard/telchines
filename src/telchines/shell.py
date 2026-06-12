@@ -46,6 +46,7 @@ from telchines.operations import (
     repair,
     replay_run,
     retrieve_query,
+    review_artifact,
     run_eval,
     show_run,
     show_waveform,
@@ -69,7 +70,7 @@ SHELL_COMMAND_HELP = [
     ("/eval [run|report]", "Run or show benchmarks"),
     ("/doctor", "Show project/provider/adapter diagnostics"),
     ("/doctor privacy", "Show privacy and artifact-storage diagnostics"),
-    ("/artifacts purge [--yes]", "Report or purge stored generated/task artifacts"),
+    ("/artifacts [purge [--yes]|review REF]", "Report, purge, or review generated artifacts"),
     ("/history", "Show shell command history"),
     ("/transcript", "Show the current shell transcript"),
     ("/clear", "Clear the shell transcript"),
@@ -508,7 +509,10 @@ def _execute_command(session: ShellSession, parts: list[str], raw: bool) -> str 
         if len(parts) > 1 and parts[1] == "purge":
             payload = purge_artifacts(session.cwd, dry_run="--yes" not in parts[2:])
             return dump_json(payload) if raw else render_artifact_purge_payload(payload)
-        raise ValueError("supported /artifacts command is purge [--yes]")
+        if len(parts) > 2 and parts[1] == "review":
+            payload = review_artifact(session.cwd, reference=parts[2])
+            return dump_json(payload) if raw else render_artifact_review_payload(payload)
+        raise ValueError("supported /artifacts commands are purge [--yes] and review <ref>")
 
     if command == "retrieve":
         query = " ".join(parts[1:]).strip()
@@ -731,6 +735,21 @@ def render_artifact_purge_payload(payload: dict[str, object]) -> str:
     for target in payload["targets"][:6]:
         body.append(f"- {target['path']} ({target['file_count']} files)")
     return render_action_panel(title, "\n".join(body))
+
+
+def render_artifact_review_payload(payload: dict[str, object]) -> str:
+    diff = str(payload.get("diff", ""))
+    diff_preview = "\n".join(diff.splitlines()[:16])
+    body = [
+        f"status: {payload['status']}",
+        f"file: {payload['generated_file']}",
+        f"candidate: {payload['candidate_id']}",
+        f"lines: stored={payload['baseline_line_count']} workspace={payload['current_line_count']}",
+        f"diff lines: {payload['diff_line_count']}" + (" (truncated)" if payload.get("diff_truncated") else ""),
+    ]
+    if diff_preview:
+        body.extend(["", diff_preview])
+    return render_action_panel("Artifact Review", "\n".join(body))
 
 
 def render_doctor_payload(session: ShellSession) -> str:

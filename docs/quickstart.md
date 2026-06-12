@@ -44,6 +44,8 @@ Indexing scans the current project for RTL, docs, and logs and writes the retrie
 
 Use `tel index status` to inspect freshness, chunk counts, and missing/stale/deleted source counts. Use `tel index clean` to remove the local project and external retrieval indexes before rebuilding.
 
+For project-specific vocabulary, add `retrieval.aliases` in `.tel/config.json` so searches for team nicknames can expand to signal names or protocol terms. See `docs/external-retrieval-policy.md`.
+
 ## Inspect Providers
 
 ```bash
@@ -115,8 +117,9 @@ Useful starting commands:
 tel doctor privacy
 tel artifacts purge
 tel artifacts purge --yes
+tel artifacts review CANDIDATE_OR_VALIDATION_RUN_ID
 tel runs replay RUN_ID
 tel runs replay RUN_ID --yes
 ```
 
-The purge and replay commands run as safe previews unless `--yes` is supplied.
+The purge and replay commands run as safe previews unless `--yes` is supplied. `artifacts review` compares the saved generated draft to the current workspace file so human edits stay visible.

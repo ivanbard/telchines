@@ -81,6 +81,15 @@ def test_config_rejects_invalid_retrieval_patterns(sample_project: Path) -> None
         ProjectConfig.load(sample_project)
 
 
+def test_config_rejects_invalid_retrieval_aliases(sample_project: Path) -> None:
+    config_path = sample_project / ".tel" / "config.json"
+    payload = read_json(config_path)
+    payload["retrieval"]["aliases"] = {"start bit": ["serial_i", ""]}
+    write_json(config_path, payload)
+    with pytest.raises(ConfigError, match="retrieval.aliases"):
+        ProjectConfig.load(sample_project)
+
+
 def test_config_rejects_invalid_generation_conventions(sample_project: Path) -> None:
     config_path = sample_project / ".tel" / "config.json"
     payload = read_json(config_path)

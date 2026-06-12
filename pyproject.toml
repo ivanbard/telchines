@@ -45,6 +45,9 @@ dependencies = [
 dev = [
   "pytest>=9.0",
 ]
+cocotb-smoke = [
+  "cocotb>=1.9",
+]
 
 [project.scripts]
 tel = "telchines.cli:app"

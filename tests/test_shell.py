@@ -10,6 +10,7 @@ from telchines.shell import (
     ShellSession,
     _dispatch_slash_command,
     _is_help_command,
+    render_artifact_review_payload,
     render_help,
     render_replay_payload,
     render_run_show,
@@ -37,6 +38,7 @@ def test_shell_help_renders_core_commands() -> None:
     assert "/gen-cocotb --dut PATH" in rendered
     assert "/waveforms" in rendered
     assert "/runs [list|show RUN_ID|replay RUN_ID [--yes]]" in rendered
+    assert "/artifacts [purge [--yes]|review REF]" in rendered
     assert "/raw <slash command>" in rendered
 
 
@@ -90,6 +92,24 @@ def test_shell_replay_confirmation_rendering() -> None:
     assert "Replay Confirmation" in rendered
     assert "not executed" in rendered
     assert "--yes" in rendered
+
+
+def test_shell_artifact_review_rendering() -> None:
+    rendered = render_artifact_review_payload(
+        {
+            "status": "modified",
+            "generated_file": ".tel/artifacts/generated/cocotb/test_uart_rx.py",
+            "candidate_id": "cocotb_1",
+            "baseline_line_count": 10,
+            "current_line_count": 11,
+            "diff_line_count": 5,
+            "diff_truncated": False,
+            "diff": "--- stored\n+++ workspace\n+# human note",
+        }
+    )
+    assert "Artifact Review" in rendered
+    assert "modified" in rendered
+    assert "human note" in rendered
 
 
 def test_shell_supports_index_status_and_clean(sample_project: Path) -> None:

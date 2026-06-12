@@ -80,6 +80,7 @@ class RetrievalService:
             "external": external_status,
             "include_patterns": self._include_patterns(),
             "exclude_patterns": self._exclude_patterns(),
+            "alias_count": len(self._alias_map()),
         }
 
     def clean(self) -> dict[str, object]:
@@ -102,7 +103,7 @@ class RetrievalService:
             self.build_index()
         payload = self._load_index_payload(self.index_path)
         external_payload = self._load_index_payload(self.external_index_path)
-        query_tokens = set(tokenize(query))
+        query_tokens = self._expanded_query_tokens(query)
         focus_paths = [path.replace("\\", "/") for path in (focus_paths or []) if path]
         focus_tokens = set(tokenize(" ".join(focus_paths)))
         limit = limit or int(self.config.retrieval.get("max_hits", 5))
@@ -156,7 +157,11 @@ class RetrievalService:
             hits=selected,
             created_at=utc_now(),
             mode=mode,
-            metadata={"focus_paths": focus_paths},
+            metadata={
+                "focus_paths": focus_paths,
+                "query_aliases": self._matched_aliases(query),
+                "expanded_query_tokens": sorted(query_tokens),
+            },
         )
 
     def format_citation(self, path: str, start_line: int, end_line: int) -> str:
@@ -469,6 +474,37 @@ class RetrievalService:
     def _exclude_patterns(self) -> list[str]:
         values = self.config.retrieval.get("exclude_patterns", [])
         return [str(value).replace("\\", "/") for value in values] if isinstance(values, list) else []
+
+    def _alias_map(self) -> dict[str, list[str]]:
+        aliases = self.config.retrieval.get("aliases", {})
+        if not isinstance(aliases, dict):
+            return {}
+        normalized: dict[str, list[str]] = {}
+        for key, values in aliases.items():
+            if not isinstance(key, str) or not isinstance(values, list):
+                continue
+            clean_values = [str(value) for value in values if isinstance(value, str) and value.strip()]
+            if key.strip() and clean_values:
+                normalized[key] = clean_values
+        return normalized
+
+    def _matched_aliases(self, query: str) -> dict[str, list[str]]:
+        query_tokens = set(tokenize(query))
+        matched: dict[str, list[str]] = {}
+        for key, values in self._alias_map().items():
+            key_tokens = set(tokenize(key))
+            value_tokens = set(tokenize(" ".join(values)))
+            if (key_tokens and key_tokens <= query_tokens) or (value_tokens and value_tokens & query_tokens):
+                matched[key] = values
+        return matched
+
+    def _expanded_query_tokens(self, query: str) -> set[str]:
+        query_tokens = set(tokenize(query))
+        expanded = set(query_tokens)
+        for key, values in self._matched_aliases(query).items():
+            expanded.update(tokenize(key))
+            expanded.update(tokenize(" ".join(values)))
+        return expanded
 
     def _is_included_project_path(self, relative: str) -> bool:
         include_patterns = self._include_patterns()

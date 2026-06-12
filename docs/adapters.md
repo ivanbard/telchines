@@ -35,6 +35,8 @@ Built-in adapters in the `1.x` line should:
 - persist artifacts and replayable metadata
 - fail clearly when the external tool is not installed or not usable
 
+The shared parser recognizes common Verilator, Icarus, Slang, Verible, and SymbiYosys-style diagnostics, including line/column forms such as `%Error: file:line:column`, `file:line:column: syntax error`, Slang's `error: file:line:column`, and assertion failure summaries. Parser fixtures live in `tests/test_adapters.py`; add real output samples there whenever adapter support is expanded.
+
 ## Contribution Contract For New Adapters
 
 A contributed adapter should:

@@ -62,6 +62,7 @@ class ProjectConfig:
             "external_index_dir": ".tel/external-index",
             "include_patterns": ["**/*"],
             "exclude_patterns": [],
+            "aliases": {},
         }
     )
     generation: dict[str, Any] = field(default_factory=default_generation_config)
@@ -123,6 +124,7 @@ class ProjectConfig:
                     "external_index_dir": ".tel/external-index",
                     "include_patterns": ["**/*"],
                     "exclude_patterns": [],
+                    "aliases": {},
                 },
             ),
             generation=payload.get("generation", default_generation_config()),
@@ -214,6 +216,14 @@ class ProjectConfig:
                 raise ConfigError(f"retrieval.{key} must be a list of non-empty strings")
             if any(Path(item).is_absolute() for item in patterns):
                 raise ConfigError(f"retrieval.{key} entries must be relative glob patterns")
+        aliases = self.retrieval.get("aliases", {})
+        if not isinstance(aliases, dict):
+            raise ConfigError("retrieval.aliases must be an object")
+        for alias_key, alias_values in aliases.items():
+            if not isinstance(alias_key, str) or not alias_key.strip():
+                raise ConfigError("retrieval.aliases keys must be non-empty strings")
+            if not isinstance(alias_values, list) or any(not isinstance(item, str) or not item.strip() for item in alias_values):
+                raise ConfigError("retrieval.aliases values must be lists of non-empty strings")
         if not isinstance(self.generation, dict):
             raise ConfigError("generation must be an object")
         self.generation = merge_generation_config(self.generation)

@@ -32,6 +32,7 @@ from telchines.operations import (
     repair as repair_op,
     replay_run as replay_run_op,
     retrieve_query,
+    review_artifact as review_artifact_op,
     run_eval as run_eval_op,
     show_run as show_run_op,
     show_waveform as show_waveform_op,
@@ -305,6 +306,20 @@ def artifacts_purge(
         payload = purge_artifacts_op(None, dry_run=not yes)
     except ConfigError as exc:
         _fail(f"config error: {exc}")
+    typer.echo(dump_json(payload))
+
+
+@artifacts_app.command("review")
+def artifacts_review(
+    reference: str = typer.Argument(..., help="Generation candidate id, validation run id, or generated artifact path."),
+    max_diff_lines: int = typer.Option(200, "--max-diff-lines", help="Maximum unified diff lines to include in JSON output."),
+) -> None:
+    try:
+        payload = review_artifact_op(None, reference=reference, max_diff_lines=max_diff_lines)
+    except ConfigError as exc:
+        _fail(f"config error: {exc}")
+    except ValueError as exc:
+        _fail(str(exc))
     typer.echo(dump_json(payload))
 
 

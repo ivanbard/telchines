@@ -64,9 +64,15 @@ Large or noisy projects can narrow indexed files with retrieval glob patterns in
     "external_roots": [],
     "external_index_dir": ".tel/external-index",
     "include_patterns": ["rtl/**", "docs/**", "logs/**/*.log"],
-    "exclude_patterns": ["logs/generated/**", "vendor/**"]
+    "exclude_patterns": ["logs/generated/**", "vendor/**"],
+    "aliases": {
+      "framing pulse": ["start bit", "serial_i"],
+      "objection drain": ["timeout", "uvm_objection"]
+    }
   }
 }
 ```
 
 Patterns are project-relative. Telchines still skips generated/cache directories such as `.git`, `.tel`, `.venv`, `.test-work`, and `__pycache__`.
+
+`retrieval.aliases` expands query tokens at search time without rewriting the index. Use it for team vocabulary, protocol nicknames, and signal-name synonyms that pure token overlap would otherwise miss. Aliases are intentionally local and explicit; they are not semantic embeddings.
