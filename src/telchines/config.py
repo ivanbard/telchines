@@ -13,6 +13,38 @@ SUPPORTED_ADAPTERS = {"verilator", "iverilog", "slang", "verible", "symbiyosys",
 SUPPORTED_PROVIDER_KINDS = {"heuristic", "openai_compatible", "local_command"}
 
 
+def default_generation_config() -> dict[str, Any]:
+    return {
+        "sva": {
+            "output_dir": ".tel/artifacts/generated",
+            "filename_template": "{module}_assertions.sv",
+            "clock_names": ["clk", "clock"],
+            "reset_names": ["rst_n", "reset_n", "rst", "reset"],
+            "active_low_reset_names": ["rst_n", "reset_n"],
+            "validation_adapters": ["slang", "verilator"],
+        },
+        "cocotb": {
+            "output_dir": ".tel/artifacts/generated/cocotb",
+            "test_file_template": "test_{module}.py",
+            "manifest_file_template": "{module}_cocotb_manifest.json",
+            "clock_names": ["clk", "clock"],
+            "reset_names": ["rst_n", "reset_n", "rst", "reset"],
+            "active_low_reset_names": ["rst_n", "reset_n"],
+        },
+    }
+
+
+def merge_generation_config(value: dict[str, Any] | None) -> dict[str, Any]:
+    merged = default_generation_config()
+    if not isinstance(value, dict):
+        return merged
+    for section_name in ("sva", "cocotb"):
+        section = value.get(section_name)
+        if isinstance(section, dict):
+            merged[section_name].update(section)
+    return merged
+
+
 @dataclass(slots=True)
 class ProjectConfig:
     project: VerificationProject
@@ -28,8 +60,11 @@ class ProjectConfig:
             "max_hits": 5,
             "external_roots": [],
             "external_index_dir": ".tel/external-index",
+            "include_patterns": ["**/*"],
+            "exclude_patterns": [],
         }
     )
+    generation: dict[str, Any] = field(default_factory=default_generation_config)
 
     @property
     def project_root(self) -> Path:
@@ -49,6 +84,7 @@ class ProjectConfig:
             "no_egress": self.no_egress,
             "adapters": self.adapters,
             "retrieval": self.retrieval,
+            "generation": self.generation,
         }
 
     def default_provider_by_capability(self) -> dict[str, str]:
@@ -85,8 +121,11 @@ class ProjectConfig:
                     "max_hits": 5,
                     "external_roots": [],
                     "external_index_dir": ".tel/external-index",
+                    "include_patterns": ["**/*"],
+                    "exclude_patterns": [],
                 },
             ),
+            generation=payload.get("generation", default_generation_config()),
         )
         config.validate()
         return config
@@ -169,6 +208,21 @@ class ProjectConfig:
         for root_value in external_roots:
             if Path(root_value).is_absolute():
                 raise ConfigError("retrieval.external_roots entries must be relative to the project root")
+        for key in ("include_patterns", "exclude_patterns"):
+            patterns = self.retrieval.get(key, ["**/*"] if key == "include_patterns" else [])
+            if not isinstance(patterns, list) or any(not isinstance(item, str) or not item.strip() for item in patterns):
+                raise ConfigError(f"retrieval.{key} must be a list of non-empty strings")
+            if any(Path(item).is_absolute() for item in patterns):
+                raise ConfigError(f"retrieval.{key} entries must be relative glob patterns")
+        if not isinstance(self.generation, dict):
+            raise ConfigError("generation must be an object")
+        self.generation = merge_generation_config(self.generation)
+        self._validate_generation_section("sva", path_keys=("output_dir",), template_keys=("filename_template",))
+        self._validate_generation_section(
+            "cocotb",
+            path_keys=("output_dir",),
+            template_keys=("test_file_template", "manifest_file_template"),
+        )
         for path_value, field_name in (
             (self.store_dir, "store_dir"),
             (self.index_dir, "index_dir"),
@@ -224,6 +278,36 @@ class ProjectConfig:
                 env = provider_config.get("env", {})
                 if not isinstance(env, dict) or any(not isinstance(key, str) or not isinstance(value, str) for key, value in env.items()):
                     raise ConfigError(f"provider {provider_name} env must be an object of string pairs")
+
+    def _validate_generation_section(self, section_name: str, *, path_keys: tuple[str, ...], template_keys: tuple[str, ...]) -> None:
+        section = self.generation.get(section_name)
+        if not isinstance(section, dict):
+            raise ConfigError(f"generation.{section_name} must be an object")
+        for key in path_keys:
+            value = section.get(key)
+            if not isinstance(value, str) or not value.strip():
+                raise ConfigError(f"generation.{section_name}.{key} must be a non-empty string")
+            if Path(value).is_absolute():
+                raise ConfigError(f"generation.{section_name}.{key} must be relative to the project root")
+        for key in template_keys:
+            value = section.get(key)
+            if not isinstance(value, str) or not value.strip():
+                raise ConfigError(f"generation.{section_name}.{key} must be a non-empty string")
+            template_path = Path(value)
+            if template_path.is_absolute() or template_path.name != value or ".." in template_path.parts:
+                raise ConfigError(f"generation.{section_name}.{key} must be a file-name template")
+            try:
+                value.format(module="example", dut_stem="example", rtl_stem="example")
+            except (KeyError, IndexError, ValueError) as exc:
+                raise ConfigError(f"generation.{section_name}.{key} has an invalid template placeholder") from exc
+        for key in ("clock_names", "reset_names", "active_low_reset_names"):
+            values = section.get(key, [])
+            if not isinstance(values, list) or any(not isinstance(item, str) or not item.strip() for item in values):
+                raise ConfigError(f"generation.{section_name}.{key} must be a list of non-empty strings")
+        if section_name == "sva":
+            adapters = section.get("validation_adapters", [])
+            if not isinstance(adapters, list) or any(not isinstance(item, str) or not item.strip() for item in adapters):
+                raise ConfigError("generation.sva.validation_adapters must be a list of non-empty strings")
 
     def save(self) -> None:
         self.validate()

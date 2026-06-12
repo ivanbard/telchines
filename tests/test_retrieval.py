@@ -87,3 +87,37 @@ def test_retrieval_merges_external_corpus_with_provenance(sample_project: Path) 
     assert external_only.hits[0].ingested_at
     assert any(hit.source_domain == "external" for hit in mixed.hits)
     assert mixed.hits[0].source_domain == "project"
+
+
+def test_retrieval_status_clean_and_include_exclude_patterns(sample_project: Path) -> None:
+    config_path = sample_project / ".tel" / "config.json"
+    payload = read_json(config_path)
+    payload["retrieval"]["include_patterns"] = ["rtl/**", "docs/**"]
+    payload["retrieval"]["exclude_patterns"] = ["docs/spec.md"]
+    write_json(config_path, payload)
+
+    config = ProjectConfig.load(sample_project)
+    retrieval = RetrievalService(config)
+    missing = retrieval.status()
+    assert missing["status"] == "stale"
+    assert missing["project"]["exists"] is False
+
+    chunk_count = retrieval.build_index()
+    assert chunk_count > 0
+    indexed = read_json(sample_project / ".tel" / "index" / "index.json")
+    indexed_paths = {chunk["path"] for chunk in indexed["chunks"]}
+    assert "docs/spec.md" not in indexed_paths
+    assert all(path.startswith(("rtl/", "docs/")) for path in indexed_paths)
+
+    fresh = retrieval.status()
+    assert fresh["status"] == "fresh"
+    uart_doc = sample_project / "docs" / "uart.md"
+    uart_doc.write_text(uart_doc.read_text(encoding="utf-8") + "\nNew stale marker.\n", encoding="utf-8")
+    stale = retrieval.status()
+    assert stale["status"] == "stale"
+    assert stale["project"]["stale_source_count"] == 1
+
+    cleaned = retrieval.clean()
+    assert cleaned["removed_count"] == 2
+    assert not (sample_project / ".tel" / "index").exists()
+    assert not (sample_project / ".tel" / "external-index").exists()

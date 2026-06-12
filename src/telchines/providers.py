@@ -4,8 +4,10 @@ import difflib
 import json
 import os
 import re
+import shutil
+import socket
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 from urllib import error, request
@@ -43,6 +45,7 @@ class GenerationRequest:
     rtl_path: str
     output_file: str
     retrieval_context: RetrievalContext
+    conventions: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -63,6 +66,7 @@ class CocotbGenerationRequest:
     output_dir: str
     intent: str
     retrieval_context: RetrievalContext
+    conventions: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -82,6 +86,18 @@ class ProviderStatus:
     default_for: list[str]
     allowed: bool
     blocked_reason: str = ""
+
+
+@dataclass(slots=True)
+class ProviderCheck:
+    name: str
+    kind: str
+    status: str
+    allowed: bool
+    summary: str
+    capabilities: list[str]
+    default_for: list[str]
+    checks: dict[str, Any]
 
 
 class RepairProvider:
@@ -496,6 +512,67 @@ class ProviderRegistry:
             )
         return statuses
 
+    def check(self, provider_name: str, *, live: bool = True) -> ProviderCheck:
+        provider_config = self.providers.get(provider_name)
+        if not isinstance(provider_config, dict):
+            raise ConfigError(f"provider {provider_name} is not configured")
+        capabilities = self.config.provider_capabilities(provider_name, provider_config)
+        default_for = [capability for capability, name in self.defaults.items() if name == provider_name]
+        blocked_reason = self._blocked_reason(provider_config)
+        kind = str(provider_config.get("kind", ""))
+        checks: dict[str, Any] = {
+            "configured": {"status": "passed"},
+            "policy": {"status": "blocked" if blocked_reason else "passed", "reason": blocked_reason or None},
+        }
+        if blocked_reason:
+            return ProviderCheck(
+                name=provider_name,
+                kind=kind,
+                status="blocked",
+                allowed=False,
+                summary=blocked_reason,
+                capabilities=capabilities,
+                default_for=default_for,
+                checks=checks,
+            )
+        if not live:
+            checks["transport"] = {"status": "skipped", "reason": "offline check requested"}
+            return ProviderCheck(
+                name=provider_name,
+                kind=kind,
+                status="passed",
+                allowed=True,
+                summary="configuration and policy checks passed",
+                capabilities=capabilities,
+                default_for=default_for,
+                checks=checks,
+            )
+        try:
+            transport = _check_provider_transport(provider_name, provider_config, self.config.project_root)
+        except ProviderError as exc:
+            checks["transport"] = {"status": "failed", "error": str(exc)}
+            return ProviderCheck(
+                name=provider_name,
+                kind=kind,
+                status="failed",
+                allowed=True,
+                summary=str(exc),
+                capabilities=capabilities,
+                default_for=default_for,
+                checks=checks,
+            )
+        checks["transport"] = transport
+        return ProviderCheck(
+            name=provider_name,
+            kind=kind,
+            status="passed",
+            allowed=True,
+            summary="provider check passed",
+            capabilities=capabilities,
+            default_for=default_for,
+            checks=checks,
+        )
+
     def _resolve_provider(self, capability: str, provider_name: str | None) -> tuple[str, dict[str, Any]]:
         selected = provider_name or self.defaults.get(capability)
         if not selected:
@@ -538,6 +615,12 @@ def build_generation_provider(config: ProjectConfig, provider_name: str | None =
 
 def list_provider_statuses(config: ProjectConfig) -> list[ProviderStatus]:
     return ProviderRegistry(config).statuses()
+
+
+def check_provider_statuses(config: ProjectConfig, provider_name: str | None = None, *, live: bool = True) -> list[ProviderCheck]:
+    registry = ProviderRegistry(config)
+    provider_names = [provider_name] if provider_name else sorted(registry.providers)
+    return [registry.check(name, live=live) for name in provider_names]
 
 
 def _build_repair_request_payload(request_value: RepairRequest, provider_name: str) -> dict[str, Any]:
@@ -596,6 +679,7 @@ def _build_generation_request_payload(request_value: GenerationRequest, provider
             "content": rtl.read_text(encoding="utf-8"),
         },
         "output_file": request_value.output_file,
+        "conventions": request_value.conventions,
         "retrieval_context": {
             "context_id": request_value.retrieval_context.context_id,
             "hits": [
@@ -649,6 +733,7 @@ def _build_cocotb_generation_request_payload(request_value: CocotbGenerationRequ
         "output_dir": request_value.output_dir,
         "default_output_file": loaded["output_file"],
         "default_manifest_file": loaded["manifest_path"],
+        "conventions": request_value.conventions,
         "inference": {
             "clock_port": loaded["clock_port"],
             "reset_port": loaded["reset_port"],
@@ -689,6 +774,8 @@ def _invoke_openai_compatible(provider_name: str, config: dict[str, Any], payloa
         "Authorization": f"Bearer {api_key}",
     }
     for key, value in config.get("headers", {}).items():
+        if str(key).lower() == "authorization":
+            raise ProviderError(f"provider {provider_name} custom headers cannot override Authorization")
         headers[key] = value
     http_request = request.Request(url, data=json.dumps(payload).encode("utf-8"), headers=headers, method="POST")
     timeout = int(config.get("timeout_seconds", 30))
@@ -699,6 +786,10 @@ def _invoke_openai_compatible(provider_name: str, config: dict[str, Any], payloa
         raise ProviderError(f"provider {provider_name} returned HTTP {exc.code}") from exc
     except error.URLError as exc:
         raise ProviderError(f"provider {provider_name} request failed: {exc.reason}") from exc
+    except TimeoutError as exc:
+        raise ProviderError(f"provider {provider_name} timed out after {timeout} second(s)") from exc
+    except socket.timeout as exc:
+        raise ProviderError(f"provider {provider_name} timed out after {timeout} second(s)") from exc
     try:
         return json.loads(body)
     except json.JSONDecodeError as exc:
@@ -740,10 +831,60 @@ def _invoke_local_command(provider_name: str, config: dict[str, Any], project_ro
     }
 
 
+def _check_provider_transport(provider_name: str, config: dict[str, Any], project_root: Path) -> dict[str, Any]:
+    kind = config.get("kind")
+    if kind == "heuristic":
+        return {"status": "passed", "mode": "builtin"}
+    if kind == "local_command":
+        command = str(config.get("command", ""))
+        resolved = shutil.which(command) if command else None
+        if resolved is None:
+            raise ProviderError(f"provider {provider_name} command was not found: {command}")
+        payload = {
+            "provider": provider_name,
+            "workflow_type": "provider_check",
+            "instructions": "Return any valid JSON object to confirm the local command provider can run.",
+        }
+        response = _invoke_local_command(provider_name, config, project_root, payload)
+        parsed = response.get("parsed", {})
+        return {
+            "status": "passed",
+            "mode": "local_command",
+            "command": [command, *config.get("args", [])],
+            "parsed_keys": sorted(parsed.keys()) if isinstance(parsed, dict) else [],
+        }
+    if kind == "openai_compatible":
+        api_key_env = str(config.get("api_key_env", "OPENAI_API_KEY"))
+        if not os.environ.get(api_key_env):
+            raise ProviderError(f"provider {provider_name} is missing credentials: set {api_key_env}")
+        payload = {
+            "model": config["model"],
+            "temperature": 0,
+            "messages": [
+                {"role": "system", "content": "Return only valid JSON."},
+                {"role": "user", "content": 'Return exactly {"status":"ok"} as JSON.'},
+            ],
+        }
+        response = _invoke_openai_compatible(provider_name, config, payload)
+        parsed = _extract_openai_response_content(response, provider_name)
+        return {
+            "status": "passed",
+            "mode": "openai_compatible",
+            "base_url": config["base_url"],
+            "endpoint": config.get("endpoint", "chat/completions"),
+            "model": config["model"],
+            "api_key_env": api_key_env,
+            "parsed_keys": sorted(parsed.keys()),
+        }
+    raise ProviderError(f"provider {provider_name} has unsupported kind: {kind}")
+
+
 def _extract_openai_response_content(response_payload: dict[str, Any], provider_name: str) -> dict[str, Any]:
     choices = response_payload.get("choices") or []
     if not choices:
-        return {}
+        raise ProviderError(f"provider {provider_name} returned no choices")
+    if not isinstance(choices[0], dict):
+        raise ProviderError(f"provider {provider_name} returned malformed choices")
     message = choices[0].get("message") or {}
     content = str(message.get("content") or "")
     return _extract_json_object(content, provider_name)
@@ -755,6 +896,7 @@ def _build_patch_from_content_payload(provider_name: str, request_value: RepairR
     file_path = str(content_payload.get("file_path") or request_value.base_run.inputs.get("files", [None])[0])
     if not file_path:
         raise ProviderError(f"provider {provider_name} did not return file_path")
+    file_path = _normalize_project_relative_path(request_value.project_root, file_path, provider_name, "file_path")
     target = request_value.project_root / file_path
     if not target.exists():
         raise ProviderError(f"provider {provider_name} referenced missing file: {file_path}")
@@ -783,15 +925,12 @@ def _build_sva_candidate_from_content_payload(provider_name: str, request_value:
     candidate_content = content_payload.get("candidate_content")
     if not isinstance(candidate_content, str) or not candidate_content.strip():
         raise ProviderError(f"provider {provider_name} did not return candidate_content")
-    file_path = str(content_payload.get("file_path") or request_value.output_file)
-    normalized = Path(file_path)
-    if normalized.is_absolute():
-        try:
-            file_path = normalized.relative_to(request_value.project_root).as_posix()
-        except ValueError as exc:
-            raise ProviderError(f"provider {provider_name} returned file_path outside the project: {file_path}") from exc
-    else:
-        file_path = normalized.as_posix()
+    file_path = _normalize_project_relative_path(
+        request_value.project_root,
+        str(content_payload.get("file_path") or request_value.output_file),
+        provider_name,
+        "file_path",
+    )
     explanation = str(content_payload.get("explanation") or "Model-backed SVA candidate.")
     evidence_paths = [str(path) for path in content_payload.get("evidence_paths", [])]
     properties = _parse_sva_properties(content_payload.get("properties", []))
@@ -961,12 +1100,15 @@ def _extract_json_object(content: str, provider_name: str) -> dict[str, Any]:
 
 def _normalize_project_relative_path(project_root: Path, value: str, provider_name: str, field_name: str) -> str:
     normalized = Path(value)
-    if normalized.is_absolute():
-        try:
-            return normalized.relative_to(project_root).as_posix()
-        except ValueError as exc:
-            raise ProviderError(f"provider {provider_name} returned {field_name} outside the project: {value}") from exc
-    return normalized.as_posix()
+    root = project_root.resolve()
+    resolved = normalized.resolve() if normalized.is_absolute() else (root / normalized).resolve()
+    try:
+        relative = resolved.relative_to(root)
+    except ValueError as exc:
+        raise ProviderError(f"provider {provider_name} returned {field_name} outside the project: {value}") from exc
+    if not relative.parts:
+        raise ProviderError(f"provider {provider_name} returned empty {field_name}")
+    return relative.as_posix()
 
 
 def _load_cocotb_generation_inputs(request_value: CocotbGenerationRequest) -> dict[str, Any]:
@@ -981,13 +1123,14 @@ def _load_cocotb_generation_inputs(request_value: CocotbGenerationRequest) -> di
             raise ProviderError(f"spec file does not exist: {request_value.spec_path}")
         spec_content = spec.read_text(encoding="utf-8")
     module_name = _extract_module_name(dut_content) or dut.stem
-    ports = _extract_cocotb_ports(dut_content)
+    conventions = _cocotb_conventions(request_value)
+    ports = _extract_cocotb_ports(dut_content, conventions)
     clock_port = next((port.name for port in ports if port.role == "clock"), None)
     reset_port = next((port.name for port in ports if port.role == "reset"), None)
-    reset_active_low = bool(reset_port and re.search(r"(_n|n$)", reset_port, re.IGNORECASE))
+    reset_active_low = bool(reset_port and _is_active_low_reset_name(reset_port, conventions))
     output_dir = Path(request_value.output_dir)
-    output_file = (output_dir / f"test_{module_name}.py").as_posix()
-    manifest_path = (output_dir / f"{module_name}_cocotb_manifest.json").as_posix()
+    output_file = (output_dir / _render_file_template(str(conventions["test_file_template"]), module_name, dut.stem)).as_posix()
+    manifest_path = (output_dir / _render_file_template(str(conventions["manifest_file_template"]), module_name, dut.stem)).as_posix()
     assumptions: list[str] = []
     if clock_port:
         assumptions.append(f"Inferred `{clock_port}` as the primary clock.")
@@ -1157,10 +1300,11 @@ def _extract_module_name(content: str) -> str | None:
     return match.group(1) if match else None
 
 
-def _extract_cocotb_ports(content: str) -> list[CocotbPort]:
+def _extract_cocotb_ports(content: str, conventions: dict[str, Any] | None = None) -> list[CocotbPort]:
     header_match = re.search(r"\bmodule\s+[A-Za-z_][A-Za-z0-9_]*\s*\((?P<header>.*?)\)\s*;", content, re.DOTALL)
     if not header_match:
         return []
+    conventions = conventions or _default_cocotb_conventions()
     ports: list[CocotbPort] = []
     for raw_line in header_match.group("header").splitlines():
         line = raw_line.strip().rstrip(",")
@@ -1180,7 +1324,7 @@ def _extract_cocotb_ports(content: str) -> list[CocotbPort]:
         if width_match:
             body = body.replace(width_match.group(1), "").strip()
         for name in [part.strip() for part in body.split(",") if part.strip()]:
-            ports.append(CocotbPort(name=name, direction=direction, width=width, role=_infer_port_role(name, direction)))
+            ports.append(CocotbPort(name=name, direction=direction, width=width, role=_infer_port_role(name, direction, conventions)))
     return ports
 
 
@@ -1195,11 +1339,12 @@ def _parse_port_width(width_expr: str) -> int:
     return abs(upper - lower) + 1
 
 
-def _infer_port_role(name: str, direction: str) -> str:
+def _infer_port_role(name: str, direction: str, conventions: dict[str, Any] | None = None) -> str:
     lowered = name.lower()
-    if direction == "input" and re.search(r"(^|_)(clk|clock)($|_)", lowered):
+    conventions = conventions or _default_cocotb_conventions()
+    if direction == "input" and (_matches_configured_name(name, conventions.get("clock_names", [])) or re.search(r"(^|_)(clk|clock)($|_)", lowered)):
         return "clock"
-    if direction == "input" and re.search(r"(^|_)(rst|reset)($|_)", lowered):
+    if direction == "input" and (_matches_configured_name(name, conventions.get("reset_names", [])) or re.search(r"(^|_)(rst|reset)($|_)", lowered)):
         return "reset"
     return ""
 
@@ -1208,3 +1353,36 @@ def _default_signal_value(port: CocotbPort) -> str:
     if port.width <= 1:
         return "0"
     return "0"
+
+
+def _cocotb_conventions(request_value: CocotbGenerationRequest) -> dict[str, Any]:
+    conventions = _default_cocotb_conventions()
+    configured = request_value.conventions.get("cocotb") if isinstance(request_value.conventions, dict) else None
+    if isinstance(configured, dict):
+        conventions.update(configured)
+    return conventions
+
+
+def _default_cocotb_conventions() -> dict[str, Any]:
+    return {
+        "test_file_template": "test_{module}.py",
+        "manifest_file_template": "{module}_cocotb_manifest.json",
+        "clock_names": ["clk", "clock"],
+        "reset_names": ["rst_n", "reset_n", "rst", "reset"],
+        "active_low_reset_names": ["rst_n", "reset_n"],
+    }
+
+
+def _matches_configured_name(name: str, values: Any) -> bool:
+    if not isinstance(values, list):
+        return False
+    lowered = name.lower()
+    return lowered in {str(value).lower() for value in values}
+
+
+def _is_active_low_reset_name(name: str, conventions: dict[str, Any]) -> bool:
+    return _matches_configured_name(name, conventions.get("active_low_reset_names", [])) or bool(re.search(r"(_n|n$)", name, re.IGNORECASE))
+
+
+def _render_file_template(template: str, module_name: str, dut_stem: str) -> str:
+    return template.format(module=module_name, dut_stem=dut_stem, rtl_stem=dut_stem)

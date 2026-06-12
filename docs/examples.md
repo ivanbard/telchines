@@ -26,7 +26,7 @@ tel gen-sva --spec docs/uart.md --rtl rtl/uart_rx.sv
 Expected outcome:
 
 - a generated assertion artifact is written under `.tel/artifacts/generated/`
-- a validation status is returned
+- validation mode, status, summary, and limitations are returned
 - property summaries include requirement linkage and evidence paths
 
 ## Example 3: DUT To Cocotb Plus Coverage Planning
@@ -40,10 +40,11 @@ tel coverage-plan --report cov/coverage.json --rtl rtl/uart_rx.sv --spec docs/ua
 Expected outcome:
 
 - a cocotb scaffold and manifest are generated
-- the scaffold is syntax-checked with `py_compile`
+- the scaffold is syntax-checked with `py_compile` and basic cocotb structure checks
 - the coverage plan classifies likely causes such as `missing_stimulus`, `missing_checker`, or `unreachable`
 
 ## Notes
 
 - `tel runs list` and `tel runs show <run_id>` let you inspect stored workflow history.
 - `tel eval run` executes the built-in benchmark suite for release validation.
+- `docs/generated-artifacts.md` documents generation conventions and validation limitations.

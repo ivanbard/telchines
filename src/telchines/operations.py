@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 from dataclasses import asdict
 from pathlib import Path
@@ -9,10 +10,10 @@ from telchines.adapters.registry import AdapterRegistry
 from telchines.config import ProjectConfig
 from telchines.eval import run_default_suite
 from telchines.models import VerificationRun
-from telchines.providers import build_generation_provider, build_repair_provider, list_provider_statuses
+from telchines.providers import build_generation_provider, build_repair_provider, check_provider_statuses, list_provider_statuses
 from telchines.retrieval import RetrievalService
 from telchines.run_store import RunStore
-from telchines.utils import dataclass_to_dict, stable_id, utc_now
+from telchines.utils import SECRET_KEY_RE, dataclass_to_dict, ensure_directory, remove_tree, stable_id, utc_now
 from telchines.workflows.coverage import execute_coverage_plan, format_coverage_human
 from telchines.workflows.gen_cocotb import execute_cocotb_generation
 from telchines.workflows.gen_sva import execute_generation
@@ -37,6 +38,108 @@ def index_project(root: Path | None = None) -> int:
     return retrieval.build_index()
 
 
+def index_status(root: Path | None = None) -> dict[str, object]:
+    _, _, retrieval = load_services(root)
+    return retrieval.status()
+
+
+def clean_index(root: Path | None = None) -> dict[str, object]:
+    _, _, retrieval = load_services(root)
+    return retrieval.clean()
+
+
+def purge_artifacts(root: Path | None = None, *, dry_run: bool = True) -> dict[str, object]:
+    config, store, _ = load_services(root)
+    targets = [
+        config.project_root / config.artifacts_dir,
+        store.task_artifacts_dir,
+        store.patches_dir,
+        store.generations_dir,
+        store.waveforms_dir,
+        store.reports_dir,
+    ]
+    unique_targets = []
+    seen: set[Path] = set()
+    for target in targets:
+        resolved = target.resolve()
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        unique_targets.append(target)
+    summaries = [_directory_summary(target) for target in unique_targets]
+    if not dry_run:
+        for target in unique_targets:
+            if target.exists():
+                remove_tree(target)
+            ensure_directory(target)
+    return {
+        "dry_run": dry_run,
+        "targets": summaries,
+        "file_count": sum(int(item["file_count"]) for item in summaries),
+        "byte_count": sum(int(item["byte_count"]) for item in summaries),
+        "status": "planned" if dry_run else "purged",
+    }
+
+
+def privacy_report(root: Path | None = None) -> dict[str, object]:
+    config, _, _ = load_services(root)
+    providers = config.project.model_policy.get("providers", {})
+    risks: list[dict[str, object]] = []
+    for name, provider_config in providers.items():
+        if not isinstance(provider_config, dict):
+            continue
+        kind = provider_config.get("kind")
+        if kind == "local_command":
+            risks.append(
+                {
+                    "provider": name,
+                    "severity": "warning",
+                    "summary": "local_command providers execute configured local processes from the project root",
+                }
+            )
+            env = provider_config.get("env", {})
+            if isinstance(env, dict):
+                secret_env_keys = [key for key, value in env.items() if SECRET_KEY_RE.search(str(key)) and str(value).strip()]
+                if secret_env_keys:
+                    risks.append(
+                        {
+                            "provider": name,
+                            "severity": "warning",
+                            "summary": f"provider env stores secret-looking keys in config: {', '.join(secret_env_keys)}",
+                        }
+                    )
+        if kind == "openai_compatible" and not config.no_egress and config.model_mode != "local":
+            risks.append(
+                {
+                    "provider": name,
+                    "severity": "info",
+                    "summary": "openai_compatible provider may send retrieved RTL/spec/log context to a configured HTTP endpoint",
+                }
+            )
+    return {
+        "model_mode": config.model_mode,
+        "no_egress": config.no_egress,
+        "artifact_dirs": [
+            str(config.project_root / config.artifacts_dir),
+            str(config.project_root / config.store_dir / "task-artifacts"),
+        ],
+        "risks": risks,
+        "status": "warning" if any(item["severity"] == "warning" for item in risks) else "ok",
+    }
+
+
+def _directory_summary(path: Path) -> dict[str, object]:
+    if not path.exists():
+        return {"path": str(path), "exists": False, "file_count": 0, "byte_count": 0}
+    files = [item for item in path.rglob("*") if item.is_file()]
+    return {
+        "path": str(path),
+        "exists": True,
+        "file_count": len(files),
+        "byte_count": sum(item.stat().st_size for item in files),
+    }
+
+
 def retrieve_query(root: Path | None, query: str, limit: int = 5, mode: str = "general") -> dict[str, object]:
     _, store, retrieval = load_services(root)
     context = retrieval.search(query, limit=limit, mode=mode)
@@ -51,6 +154,38 @@ def list_adapters(root: Path | None = None, category: str | None = None) -> dict
     return {"adapters": [dataclass_to_dict(adapter) for adapter in adapters]}
 
 
+def check_adapters(root: Path | None = None, adapter_name: str | None = None, category: str | None = None) -> dict[str, object]:
+    config, _, _ = load_services(root)
+    registry = AdapterRegistry()
+    if adapter_name:
+        adapters = [registry.get(adapter_name)]
+    else:
+        adapters = registry.list(category=category)
+    checks = []
+    for adapter in adapters:
+        descriptor = adapter.describe(enabled=adapter.name in config.adapters)
+        missing = [binary for binary in descriptor.required_binaries if not _binary_available(binary)]
+        checks.append(
+            {
+                "name": descriptor.name,
+                "kind": descriptor.kind,
+                "category": descriptor.category,
+                "enabled": descriptor.enabled,
+                "available": descriptor.available,
+                "version": descriptor.version,
+                "required_binaries": descriptor.required_binaries,
+                "missing_binaries": missing,
+                "status": "passed" if descriptor.available else "missing",
+                "summary": "adapter is available" if descriptor.available else f"missing required binaries: {', '.join(missing)}",
+            }
+        )
+    return {"adapters": checks}
+
+
+def _binary_available(binary: str) -> bool:
+    return shutil.which(binary) is not None
+
+
 def list_runs(root: Path | None = None) -> list[dict[str, object]]:
     _, store, _ = load_services(root)
     return [dataclass_to_dict(run) for run in store.list_runs()]
@@ -61,13 +196,29 @@ def show_run(root: Path | None, run_id: str) -> dict[str, object]:
     return dataclass_to_dict(store.load_run(run_id))
 
 
-def replay_run(root: Path | None, run_id: str) -> dict[str, object]:
+def replay_run(root: Path | None, run_id: str, *, confirm: bool = False) -> dict[str, object]:
     config, store, _ = load_services(root)
     run = store.load_run(run_id)
     if not run.replay_command:
         raise ValueError("run does not have a replay command")
+    if not confirm:
+        return {
+            "status": "confirmation_required",
+            "run_id": run.run_id,
+            "workflow_type": run.workflow_type,
+            "replay_command": run.replay_command,
+            "summary": "replay command was not executed; rerun with --yes to execute stored command",
+        }
     result = subprocess.run(run.replay_command, cwd=config.project_root, capture_output=True, text=True, check=False)
-    return {"exit_code": result.returncode, "stdout": result.stdout, "stderr": result.stderr}
+    return {
+        "status": "executed",
+        "run_id": run.run_id,
+        "workflow_type": run.workflow_type,
+        "replay_command": run.replay_command,
+        "exit_code": result.returncode,
+        "stdout": result.stdout,
+        "stderr": result.stderr,
+    }
 
 
 def repair(root: Path | None, tool: str, files: list[str], extra_arg: list[str] | None = None, apply_patch: bool = False) -> dict[str, object]:
@@ -140,6 +291,8 @@ def gen_sva(
         "validation_run_id": validation_run.run_id if validation_run else None,
         "validation_status": validation_run.status if validation_run else None,
         "validation_summary": validation_run.summary if validation_run else None,
+        "validation_mode": validation_run.tool_result.get("validation_mode") if validation_run else None,
+        "validation_limitations": validation_run.tool_result.get("limitations", []) if validation_run else [],
     }
 
 
@@ -186,6 +339,8 @@ def gen_cocotb(
         "validation_run_id": validation_run.run_id if validation_run else None,
         "validation_status": validation_run.status if validation_run else None,
         "validation_summary": validation_run.summary if validation_run else None,
+        "validation_mode": validation_run.tool_result.get("validation_mode") if validation_run else None,
+        "validation_limitations": validation_run.tool_result.get("limitations", []) if validation_run else [],
     }
 
 
@@ -255,6 +410,16 @@ def list_providers(root: Path | None = None) -> dict[str, object]:
             }
             for status in list_provider_statuses(config)
         ],
+    }
+
+
+def check_providers(root: Path | None = None, provider_name: str | None = None, *, live: bool = True) -> dict[str, object]:
+    config, _, _ = load_services(root)
+    checks = [dataclass_to_dict(check) for check in check_provider_statuses(config, provider_name, live=live)]
+    return {
+        "live": live,
+        "providers": checks,
+        "status": "passed" if all(item["status"] == "passed" for item in checks) else "failed",
     }
 
 

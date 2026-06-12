@@ -44,6 +44,7 @@ def run_default_suite(config: ProjectConfig, store: RunStore) -> dict[str, objec
         temp_config.model_mode = config.model_mode
         temp_config.no_egress = config.no_egress
         temp_config.retrieval = deepcopy(config.retrieval)
+        temp_config.generation = deepcopy(config.generation)
         temp_config.adapters = list(config.adapters)
         temp_config.save()
         report = _run_default_suite(temp_config, RunStore(temp_config))

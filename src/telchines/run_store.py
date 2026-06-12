@@ -21,7 +21,7 @@ from telchines.models import (
     WaveformSummary,
     WaveformTransition,
 )
-from telchines.utils import dataclass_to_dict, ensure_directory, read_json, write_json
+from telchines.utils import dataclass_to_dict, ensure_directory, read_json, redact_sensitive, write_json
 
 
 class RunStore:
@@ -75,7 +75,7 @@ class RunStore:
 
     def save_task_artifact(self, task_id: str, name: str, payload: dict[str, Any]) -> Path:
         path = self.task_artifacts_dir / f"{task_id}_{name}.json"
-        write_json(path, payload)
+        write_json(path, redact_sensitive(payload))
         return path
 
     def save_patch(self, patch: PatchProposal) -> None:

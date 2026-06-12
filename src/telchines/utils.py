@@ -11,6 +11,19 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
+TEMP_COPY_EXCLUDE_NAMES = {
+    ".git",
+    ".hg",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".tel",
+    "__pycache__",
+    "build",
+    "dist",
+    "node_modules",
+}
+
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
@@ -35,13 +48,30 @@ def write_json(path: Path, payload: Any) -> None:
 
 
 def read_json(path: Path) -> Any:
-    return json.loads(path.read_text(encoding="utf-8"))
+    return json.loads(path.read_text(encoding="utf-8-sig"))
 
 
 def dataclass_to_dict(value: Any) -> Any:
     if is_dataclass(value):
         return _normalize(asdict(value))
     return _normalize(value)
+
+
+SECRET_KEY_RE = re.compile(r"(api[_-]?key|authorization|bearer|token|secret|password|credential)", re.IGNORECASE)
+
+
+def redact_sensitive(value: Any) -> Any:
+    if isinstance(value, dict):
+        redacted: dict[Any, Any] = {}
+        for key, inner in value.items():
+            if SECRET_KEY_RE.search(str(key)):
+                redacted[key] = "<redacted>"
+            else:
+                redacted[key] = redact_sensitive(inner)
+        return redacted
+    if isinstance(value, list):
+        return [redact_sensitive(item) for item in value]
+    return value
 
 
 def _normalize(value: Any) -> Any:
@@ -78,10 +108,27 @@ def load_text(path: Path) -> str:
 
 
 def copy_tree_to_temp(source: Path) -> Path:
+    source = source.resolve()
     destination = Path(tempfile.mkdtemp(prefix=f"telchines-{source.name}-{uuid.uuid4().hex}-"))
     shutil.rmtree(destination)
-    shutil.copytree(source, destination)
+    shutil.copytree(source, destination, ignore=_copytree_ignore())
     return destination
+
+
+def _copytree_ignore():
+    def ignore(directory: str, names: list[str]) -> set[str]:
+        ignored: set[str] = set()
+        directory_path = Path(directory)
+        for name in names:
+            if name in TEMP_COPY_EXCLUDE_NAMES:
+                ignored.add(name)
+                continue
+            candidate = directory_path / name
+            if candidate.is_symlink():
+                ignored.add(name)
+        return ignored
+
+    return ignore
 
 
 def remove_tree(path: Path) -> None:

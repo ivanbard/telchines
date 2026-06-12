@@ -5,6 +5,7 @@ from pathlib import Path
 from telchines.config import ProjectConfig
 from telchines.models import ToolReference, VerificationRun
 from telchines.run_store import RunStore
+from telchines.utils import read_json
 
 
 def test_run_store_round_trip(sample_project: Path) -> None:
@@ -27,3 +28,24 @@ def test_run_store_round_trip(sample_project: Path) -> None:
     assert loaded.inputs["files"] == ["rtl/broken_counter.sv"]
     assert loaded.tool_result["validation_mode"] == "compile_only"
     assert loaded.tool_result["assumptions"] == ["compile only fallback"]
+
+
+def test_run_store_redacts_sensitive_task_artifact_fields(sample_project: Path) -> None:
+    config = ProjectConfig.load(sample_project)
+    store = RunStore(config)
+    path = store.save_task_artifact(
+        "task_secret",
+        "provider_request",
+        {
+            "headers": {"Authorization": "Bearer real-token", "X-Trace": "ok"},
+            "env": {"TELCHINES_API_KEY": "real-token", "SAFE_VALUE": "ok"},
+            "nested": {"password": "pw", "content": "keep"},
+        },
+    )
+    payload = read_json(path)
+    assert payload["headers"]["Authorization"] == "<redacted>"
+    assert payload["headers"]["X-Trace"] == "ok"
+    assert payload["env"]["TELCHINES_API_KEY"] == "<redacted>"
+    assert payload["env"]["SAFE_VALUE"] == "ok"
+    assert payload["nested"]["password"] == "<redacted>"
+    assert payload["nested"]["content"] == "keep"

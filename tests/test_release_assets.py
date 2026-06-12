@@ -35,6 +35,8 @@ def test_release_files_exist() -> None:
         repo_root / "SECURITY.md",
         repo_root / "docs" / "quickstart.md",
         repo_root / "docs" / "providers.md",
+        repo_root / "docs" / "local-llms.md",
+        repo_root / "docs" / "generated-artifacts.md",
         repo_root / "docs" / "adapters.md",
         repo_root / "docs" / "external-retrieval-policy.md",
         repo_root / "docs" / "evaluation.md",
@@ -43,6 +45,8 @@ def test_release_files_exist() -> None:
         repo_root / "docs" / "assets" / "readme-hero.svg",
         repo_root / "docs" / "assets" / "readme-workflow.svg",
         repo_root / "docs" / "assets" / "readme-architecture.svg",
+        repo_root / "examples" / "providers" / "local_command_provider.py",
+        repo_root / "scripts" / "tool_smoke.py",
     ]
     for path in expected:
         assert path.exists(), path

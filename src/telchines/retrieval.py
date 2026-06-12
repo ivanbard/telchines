@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import fnmatch
 from collections import defaultdict
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from telchines.config import ProjectConfig
 from telchines.models import RetrievalContext, RetrievalHit
-from telchines.utils import load_text, read_json, sha256_file, stable_id, tokenize, utc_now, write_json
+from telchines.utils import load_text, read_json, remove_tree, sha256_file, stable_id, tokenize, utc_now, write_json
 
 INDEX_FILENAME = "index.json"
 INDEX_FORMAT_VERSION = 2
@@ -67,6 +68,27 @@ class RetrievalService:
         self._write_index(self.index_path, project_chunks, built_at=built_at)
         self._write_index(self.external_index_path, external_chunks, built_at=built_at)
         return len(project_chunks) + len(external_chunks)
+
+    def status(self) -> dict[str, object]:
+        project_entries = self._iter_project_indexable_files()
+        external_entries = self._iter_external_indexable_files()
+        project_status = self._status_for_index(self.index_path, project_entries, "project")
+        external_status = self._status_for_index(self.external_index_path, external_entries, "external")
+        return {
+            "status": "stale" if project_status["stale"] or external_status["stale"] else "fresh",
+            "project": project_status,
+            "external": external_status,
+            "include_patterns": self._include_patterns(),
+            "exclude_patterns": self._exclude_patterns(),
+        }
+
+    def clean(self) -> dict[str, object]:
+        removed: list[str] = []
+        for root in (self.index_root, self.external_index_root):
+            if root.exists():
+                removed.append(str(root))
+                remove_tree(root)
+        return {"removed": removed, "removed_count": len(removed)}
 
     def search(
         self,
@@ -172,10 +194,12 @@ class RetrievalService:
             relative_path = path.relative_to(self.config.project_root)
             if any(part in SKIP_DIR_NAMES for part in relative_path.parts):
                 continue
+            relative = str(relative_path).replace("\\", "/")
+            if not self._is_included_project_path(relative):
+                continue
             resolved = path.resolve()
             if any(self._is_relative_to(resolved, root) for root in external_roots):
                 continue
-            relative = str(relative_path).replace("\\", "/")
             files.append((path, relative, "project", "project"))
         return files
 
@@ -195,6 +219,8 @@ class RetrievalService:
                     relative = str(path.resolve().relative_to(self.config.project_root.resolve())).replace("\\", "/")
                 except ValueError:
                     relative = f"{label}/{path.name}"
+                if not self._is_included_project_path(relative):
+                    continue
                 files.append((path, relative, "external", label))
         return files
 
@@ -396,6 +422,66 @@ class RetrievalService:
 
     def _cache_key(self, relative_path: str, source_domain: str, source_label: str) -> str:
         return f"{source_domain}::{source_label}::{relative_path}"
+
+    def _status_for_index(self, index_path: Path, entries: list[tuple[Path, str, str, str]], domain: str) -> dict[str, object]:
+        payload = read_json(index_path) if index_path.exists() else {"format_version": INDEX_FORMAT_VERSION, "built_at": "", "chunk_count": 0, "chunks": []}
+        chunks = payload.get("chunks", [])
+        indexed_by_key: dict[str, list[dict[str, object]]] = defaultdict(list)
+        for chunk in chunks:
+            key = self._cache_key(str(chunk["path"]), str(chunk.get("source_domain", domain)), str(chunk.get("source_label", domain)))
+            indexed_by_key[key].append(chunk)
+
+        current_hashes: dict[str, str] = {}
+        for path, relative, source_domain, source_label in entries:
+            try:
+                current_hashes[self._cache_key(relative, source_domain, source_label)] = sha256_file(path)
+            except OSError:
+                continue
+
+        missing = sorted(key for key in current_hashes if key not in indexed_by_key)
+        stale = sorted(
+            key
+            for key, source_hash in current_hashes.items()
+            if key in indexed_by_key and any(str(chunk.get("hash", "")) != source_hash for chunk in indexed_by_key[key])
+        )
+        deleted = sorted(key for key in indexed_by_key if key not in current_hashes)
+        is_missing = not index_path.exists()
+        is_stale = bool(is_missing or missing or stale or deleted or payload.get("format_version") != INDEX_FORMAT_VERSION)
+        return {
+            "index_path": str(index_path),
+            "exists": index_path.exists(),
+            "built_at": payload.get("built_at", ""),
+            "chunk_count": int(payload.get("chunk_count", 0) or 0),
+            "source_count": len(current_hashes),
+            "missing_source_count": len(missing),
+            "stale_source_count": len(stale),
+            "deleted_source_count": len(deleted),
+            "stale": is_stale,
+            "sample_missing_sources": missing[:5],
+            "sample_stale_sources": stale[:5],
+            "sample_deleted_sources": deleted[:5],
+        }
+
+    def _include_patterns(self) -> list[str]:
+        values = self.config.retrieval.get("include_patterns", ["**/*"])
+        return [str(value).replace("\\", "/") for value in values] if isinstance(values, list) else ["**/*"]
+
+    def _exclude_patterns(self) -> list[str]:
+        values = self.config.retrieval.get("exclude_patterns", [])
+        return [str(value).replace("\\", "/") for value in values] if isinstance(values, list) else []
+
+    def _is_included_project_path(self, relative: str) -> bool:
+        include_patterns = self._include_patterns()
+        exclude_patterns = self._exclude_patterns()
+        included = any(self._matches_pattern(relative, pattern) for pattern in include_patterns)
+        excluded = any(self._matches_pattern(relative, pattern) for pattern in exclude_patterns)
+        return included and not excluded
+
+    def _matches_pattern(self, relative: str, pattern: str) -> bool:
+        normalized = pattern.replace("\\", "/")
+        if normalized in {"*", "**", "**/*"}:
+            return True
+        return fnmatch.fnmatch(relative, normalized) or fnmatch.fnmatch(f"./{relative}", normalized)
 
     def _is_relative_to(self, candidate: Path, root: Path) -> bool:
         try:

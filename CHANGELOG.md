@@ -8,6 +8,17 @@ Release hardening patch.
 - made `tel eval run` fall back to bundled benchmarks when a project does not provide a local `benchmarks/` directory
 - configured the PyPI publish workflow to use the `pypi` GitHub environment for trusted publishing
 - improved temporary benchmark copying so installed packages do not need write access to package directories
+- added `tel providers check` for policy, credential, and live transport diagnostics
+- added env-gated live OpenAI-compatible provider integration smoke tests
+- added `tel adapters check`, adapter version detection, and optional Verilator/Icarus real-tool smoke scaffolding
+- added explicit `tel shell --plain` and `tel shell --fullscreen` modes plus shell command/path completion
+- added `tel index status`, `tel index clean`, and retrieval include/exclude patterns
+- added `tel doctor privacy` and dry-run-first `tel artifacts purge`
+- hardened provider-returned paths and redacted secret-looking task artifact fields
+- added generation convention config plus explicit SVA/cocotb validation modes and limitations
+- added optional adapter-backed SVA validation through configured Slang/Verilator-style generation adapters
+- made `tel runs replay` confirmation-gated and excluded `.tel`/build/cache/symlink content from validation temp copies
+- added clean-wheel install smoke checks to CI packaging
 
 ## 1.0.0 - 2026-04-23
 
