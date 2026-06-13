@@ -39,6 +39,54 @@ def test_config_rejects_invalid_model_provider(sample_project: Path) -> None:
         ProjectConfig.load(sample_project)
 
 
+def test_config_rejects_invalid_openai_custom_headers(sample_project: Path) -> None:
+    config_path = sample_project / ".tel" / "config.json"
+    payload = read_json(config_path)
+    payload["project"]["model_policy"]["providers"]["remote"] = {
+        "kind": "openai_compatible",
+        "capabilities": ["repair"],
+        "base_url": "http://127.0.0.1:9999/v1",
+        "model": "demo-model",
+        "headers": {"X-Trace": 42},
+    }
+    payload["project"]["model_policy"]["default_provider_by_capability"]["repair"] = "remote"
+    write_json(config_path, payload)
+    with pytest.raises(ConfigError, match="headers"):
+        ProjectConfig.load(sample_project)
+
+
+def test_config_rejects_openai_authorization_header_override(sample_project: Path) -> None:
+    config_path = sample_project / ".tel" / "config.json"
+    payload = read_json(config_path)
+    payload["project"]["model_policy"]["providers"]["remote"] = {
+        "kind": "openai_compatible",
+        "capabilities": ["repair"],
+        "base_url": "http://127.0.0.1:9999/v1",
+        "model": "demo-model",
+        "headers": {"Authorization": "Bearer hardcoded"},
+    }
+    payload["project"]["model_policy"]["default_provider_by_capability"]["repair"] = "remote"
+    write_json(config_path, payload)
+    with pytest.raises(ConfigError, match="Authorization"):
+        ProjectConfig.load(sample_project)
+
+
+def test_config_rejects_absolute_openai_endpoint(sample_project: Path) -> None:
+    config_path = sample_project / ".tel" / "config.json"
+    payload = read_json(config_path)
+    payload["project"]["model_policy"]["providers"]["remote"] = {
+        "kind": "openai_compatible",
+        "capabilities": ["repair"],
+        "base_url": "http://127.0.0.1:9999/v1",
+        "model": "demo-model",
+        "endpoint": "https://example.invalid/chat/completions",
+    }
+    payload["project"]["model_policy"]["default_provider_by_capability"]["repair"] = "remote"
+    write_json(config_path, payload)
+    with pytest.raises(ConfigError, match="endpoint"):
+        ProjectConfig.load(sample_project)
+
+
 def test_init_project_uses_capability_defaults(sample_project: Path) -> None:
     config = ProjectConfig.load(sample_project)
     assert config.default_provider_by_capability()["repair"] == "heuristic"
@@ -60,6 +108,22 @@ def test_config_rejects_invalid_local_command_provider(sample_project: Path) -> 
     payload["project"]["model_policy"]["default_provider_by_capability"]["repair"] = "local-test"
     write_json(config_path, payload)
     with pytest.raises(ConfigError):
+        ProjectConfig.load(sample_project)
+
+
+def test_config_rejects_invalid_local_command_output_limit(sample_project: Path) -> None:
+    config_path = sample_project / ".tel" / "config.json"
+    payload = read_json(config_path)
+    payload["project"]["model_policy"]["providers"]["local-test"] = {
+        "kind": "local_command",
+        "capabilities": ["repair"],
+        "command": "python",
+        "args": ["tools/local_provider.py"],
+        "output_limit_chars": 64,
+    }
+    payload["project"]["model_policy"]["default_provider_by_capability"]["repair"] = "local-test"
+    write_json(config_path, payload)
+    with pytest.raises(ConfigError, match="output_limit_chars"):
         ProjectConfig.load(sample_project)
 
 

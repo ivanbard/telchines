@@ -6,6 +6,7 @@ import sys
 from dataclasses import dataclass, field
 from collections.abc import Iterable
 from pathlib import Path
+from typing import Any
 
 import typer
 from prompt_toolkit import Application
@@ -241,6 +242,11 @@ def _run_basic_shell(session: ShellSession) -> None:
 
 
 def _run_fullscreen_shell(session: ShellSession) -> None:
+    app = _build_fullscreen_shell_app(session)
+    app.run()
+
+
+def _build_fullscreen_shell_app(session: ShellSession, **app_kwargs: Any) -> Application:
     view_state = ShellViewState()
     transcript_area = TextArea(
         text="\n\n".join(session.transcript),
@@ -393,9 +399,9 @@ def _run_fullscreen_shell(session: ShellSession) -> None:
         transcript_area.text = "\n\n".join(session.transcript)
         event.app.exit()
 
-    app = Application(layout=layout, key_bindings=kb, full_screen=True, mouse_support=False, style=style)
+    app = Application(layout=layout, key_bindings=kb, full_screen=True, mouse_support=False, style=style, **app_kwargs)
     app.layout.focus(input_area)
-    app.run()
+    return app
 
 
 def dispatch_input(session: ShellSession, user_input: str) -> tuple[bool, str]:

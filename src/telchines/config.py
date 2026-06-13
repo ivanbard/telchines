@@ -277,11 +277,22 @@ class ProjectConfig:
                     raise ConfigError(f"provider {provider_name} must define base_url")
                 if not isinstance(provider_config.get("model"), str) or not provider_config["model"].strip():
                     raise ConfigError(f"provider {provider_name} must define model")
+                endpoint = provider_config.get("endpoint", "chat/completions")
+                if not isinstance(endpoint, str) or not endpoint.strip() or "://" in endpoint:
+                    raise ConfigError(f"provider {provider_name} endpoint must be a relative path")
+                headers = provider_config.get("headers", {})
+                if not isinstance(headers, dict) or any(not isinstance(key, str) or not isinstance(value, str) for key, value in headers.items()):
+                    raise ConfigError(f"provider {provider_name} headers must be an object of string pairs")
+                if any(key.lower() == "authorization" for key in headers):
+                    raise ConfigError(f"provider {provider_name} custom headers cannot override Authorization")
 
             if kind == "local_command":
                 command = provider_config.get("command")
                 if not isinstance(command, str) or not command.strip():
                     raise ConfigError(f"provider {provider_name} must define command")
+                output_limit = provider_config.get("output_limit_chars")
+                if output_limit is not None and (not isinstance(output_limit, int) or output_limit < 1024):
+                    raise ConfigError(f"provider {provider_name} output_limit_chars must be an integer of at least 1024")
                 args = provider_config.get("args", [])
                 if not isinstance(args, list) or any(not isinstance(arg, str) for arg in args):
                     raise ConfigError(f"provider {provider_name} args must be a list of strings")

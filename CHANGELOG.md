@@ -10,10 +10,15 @@ Release hardening patch.
 - improved temporary benchmark copying so installed packages do not need write access to package directories
 - added `tel providers check` for policy, credential, and live transport diagnostics
 - added env-gated live OpenAI-compatible provider integration smoke tests
+- accepted OpenAI-compatible function/tool-call arguments as provider JSON responses
+- config-validated OpenAI-compatible custom headers and blocked Authorization overrides
+- preserved OpenAI-compatible base URL path prefixes when custom endpoints start with `/`
+- bounded and config-validated persisted stdout/stderr diagnostics for noisy `local_command` providers
 - added `tel adapters check`, adapter version detection, and optional Verilator/Icarus real-tool smoke scaffolding
 - expanded adapter diagnostic parsing for Verilator, Icarus, Slang, Verible, and SymbiYosys-style output fixtures
 - added explicit `tel shell --plain` and `tel shell --fullscreen` modes plus shell command/path completion
 - added subprocess smoke coverage for `tel shell --plain` stdin/stdout behavior, error handling, and EOF exit
+- added a prompt_toolkit pipe-input harness that drives the full-screen shell without a real terminal
 - added `tel index status`, `tel index clean`, and retrieval include/exclude patterns
 - added `retrieval.aliases` for explicit domain synonym expansion during search
 - added `tel doctor privacy` and dry-run-first `tel artifacts purge`

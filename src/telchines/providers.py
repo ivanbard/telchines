@@ -11,12 +11,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 from urllib import error, request
-from urllib.parse import urljoin
 
 from telchines.config import ProjectConfig
 from telchines.errors import ConfigError, ProviderError
 from telchines.models import CocotbCandidate, CocotbPort, Observation, PatchProposal, RetrievalContext, SvaCandidate, SvaProperty, VerificationRun
 from telchines.utils import stable_id
+
+DEFAULT_LOCAL_COMMAND_OUTPUT_LIMIT_CHARS = 65536
 
 
 @dataclass(slots=True)
@@ -766,9 +767,7 @@ def _invoke_openai_compatible(provider_name: str, config: dict[str, Any], payloa
     api_key = os.environ.get(api_key_env)
     if not api_key:
         raise ProviderError(f"provider {provider_name} is missing credentials: set {api_key_env}")
-    base_url = config["base_url"].rstrip("/") + "/"
-    endpoint = config.get("endpoint", "chat/completions")
-    url = urljoin(base_url, endpoint)
+    url = _openai_compatible_url(config)
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {api_key}",
@@ -801,6 +800,7 @@ def _invoke_local_command(provider_name: str, config: dict[str, Any], project_ro
     env = os.environ.copy()
     env.update(config.get("env", {}))
     timeout = int(config.get("timeout_seconds", 30))
+    output_limit = _local_command_output_limit(config)
     try:
         result = subprocess.run(
             command,
@@ -817,16 +817,23 @@ def _invoke_local_command(provider_name: str, config: dict[str, Any], project_ro
     except subprocess.TimeoutExpired as exc:
         raise ProviderError(f"provider {provider_name} timed out after {timeout} second(s)") from exc
     if result.returncode != 0:
-        stderr = result.stderr.strip()
+        stderr = _bounded_text(result.stderr.strip(), output_limit)["text"]
         detail = f": {stderr}" if stderr else ""
         raise ProviderError(f"provider {provider_name} command failed with exit code {result.returncode}{detail}")
     parsed = _extract_json_object(result.stdout, provider_name)
+    bounded_stdout = _bounded_text(result.stdout, output_limit)
+    bounded_stderr = _bounded_text(result.stderr, output_limit)
     return {
         "provider": provider_name,
         "command": command,
         "returncode": result.returncode,
-        "stdout": result.stdout,
-        "stderr": result.stderr,
+        "stdout": bounded_stdout["text"],
+        "stderr": bounded_stderr["text"],
+        "stdout_original_chars": bounded_stdout["original_chars"],
+        "stderr_original_chars": bounded_stderr["original_chars"],
+        "stdout_truncated": bounded_stdout["truncated"],
+        "stderr_truncated": bounded_stderr["truncated"],
+        "output_limit_chars": output_limit,
         "parsed": parsed,
     }
 
@@ -879,6 +886,12 @@ def _check_provider_transport(provider_name: str, config: dict[str, Any], projec
     raise ProviderError(f"provider {provider_name} has unsupported kind: {kind}")
 
 
+def _openai_compatible_url(config: dict[str, Any]) -> str:
+    base_url = str(config["base_url"]).rstrip("/")
+    endpoint = str(config.get("endpoint", "chat/completions")).strip().lstrip("/")
+    return f"{base_url}/{endpoint}"
+
+
 def _extract_openai_response_content(response_payload: dict[str, Any], provider_name: str) -> dict[str, Any]:
     choices = response_payload.get("choices") or []
     if not choices:
@@ -886,8 +899,28 @@ def _extract_openai_response_content(response_payload: dict[str, Any], provider_
     if not isinstance(choices[0], dict):
         raise ProviderError(f"provider {provider_name} returned malformed choices")
     message = choices[0].get("message") or {}
+    if not isinstance(message, dict):
+        raise ProviderError(f"provider {provider_name} returned malformed message")
     content = str(message.get("content") or "")
+    if not content.strip():
+        content = _extract_tool_call_arguments(message)
     return _extract_json_object(content, provider_name)
+
+
+def _extract_tool_call_arguments(message: dict[str, Any]) -> str:
+    function_call = message.get("function_call")
+    if isinstance(function_call, dict) and isinstance(function_call.get("arguments"), str):
+        return function_call["arguments"]
+    tool_calls = message.get("tool_calls") or []
+    if not isinstance(tool_calls, list):
+        return ""
+    for tool_call in tool_calls:
+        if not isinstance(tool_call, dict):
+            continue
+        function = tool_call.get("function") or {}
+        if isinstance(function, dict) and isinstance(function.get("arguments"), str):
+            return function["arguments"]
+    return ""
 
 
 def _build_patch_from_content_payload(provider_name: str, request_value: RepairRequest, content_payload: dict[str, Any]) -> PatchProposal | None:
@@ -1096,6 +1129,28 @@ def _extract_json_object(content: str, provider_name: str) -> dict[str, Any]:
         return json.loads(stripped[start : end + 1])
     except json.JSONDecodeError as exc:
         raise ProviderError(f"provider {provider_name} returned malformed JSON content") from exc
+
+
+def _local_command_output_limit(config: dict[str, Any]) -> int:
+    raw_limit = config.get("output_limit_chars", DEFAULT_LOCAL_COMMAND_OUTPUT_LIMIT_CHARS)
+    try:
+        limit = int(raw_limit)
+    except (TypeError, ValueError):
+        limit = DEFAULT_LOCAL_COMMAND_OUTPUT_LIMIT_CHARS
+    return max(limit, 1024)
+
+
+def _bounded_text(value: str, limit: int) -> dict[str, Any]:
+    original_chars = len(value)
+    if original_chars <= limit:
+        return {"text": value, "original_chars": original_chars, "truncated": False}
+    marker = f"\n... output truncated to {limit} character(s) ..."
+    keep = max(limit - len(marker), 0)
+    return {
+        "text": value[:keep] + marker,
+        "original_chars": original_chars,
+        "truncated": True,
+    }
 
 
 def _normalize_project_relative_path(project_root: Path, value: str, provider_name: str, field_name: str) -> str:

@@ -57,11 +57,14 @@ Use `local_command` when a local model needs a custom wrapper. The command is ex
   "command": "python",
   "args": ["examples/providers/local_command_provider.py"],
   "timeout_seconds": 60,
+  "output_limit_chars": 65536,
   "env": {
     "TELCHINES_PROVIDER_MODE": "local"
   }
 }
 ```
+
+Telchines parses the full stdout stream for the JSON object, then stores bounded stdout/stderr diagnostics using `output_limit_chars` so noisy local model runners do not bloat replay artifacts. The value must be at least 1024 characters.
 
 Diagnostics send `workflow_type=provider_check`; wrappers should return any JSON object for that request. Workflow requests use:
 

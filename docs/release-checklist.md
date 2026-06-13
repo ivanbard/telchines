@@ -7,6 +7,7 @@
 - verify `tel --version`
 - verify `tel --help`
 - run the plain shell smoke through `python -m telchines shell --plain`
+- run `pytest tests/test_shell.py` to cover shell parser, completion, and the full-screen prompt_toolkit harness
 - run `tel providers check heuristic`
 - optionally run `pytest tests/test_provider_integration.py` with `TELCHINES_INTEGRATION_OPENAI_*` set
 - run `tel index status` before and after `tel index`

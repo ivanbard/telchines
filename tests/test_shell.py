@@ -4,10 +4,13 @@ from pathlib import Path
 
 from telchines.config import ProjectConfig
 from prompt_toolkit.document import Document
+from prompt_toolkit.input.defaults import create_pipe_input
+from prompt_toolkit.output import DummyOutput
 
 from telchines.shell import (
     ShellCompleter,
     ShellSession,
+    _build_fullscreen_shell_app,
     _dispatch_slash_command,
     _is_help_command,
     render_artifact_review_payload,
@@ -66,6 +69,19 @@ def test_shell_completes_commands_and_paths(sample_project: Path) -> None:
 
     paths = list(completer.get_completions(Document("/triage --logs logs/reg"), None))
     assert any(item.text == "logs/regressions/" for item in paths)
+
+
+def test_fullscreen_shell_accepts_pipe_input(sample_project: Path) -> None:
+    session = ShellSession(cwd=sample_project)
+    session.add_transcript("Telchines", render_welcome(session))
+    with create_pipe_input() as pipe_input:
+        app = _build_fullscreen_shell_app(session, input=pipe_input, output=DummyOutput())
+        pipe_input.send_text("/pwd\r/exit\r")
+        app.run()
+
+    assert session.history == ["/pwd", "/exit"]
+    assert any(str(sample_project) in item for item in session.transcript)
+    assert session.transcript[-1] == "leaving Telchines shell"
 
 
 def test_shell_history_and_transcript_commands(sample_project: Path) -> None:

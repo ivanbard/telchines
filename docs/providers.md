@@ -22,6 +22,11 @@ Required fields:
 - `api_key_env`
 - `timeout_seconds`
 
+Optional fields:
+
+- `endpoint`, a relative path such as `chat/completions`; leading slashes are tolerated, and base URL path prefixes like `/v1` are preserved
+- `headers` for extra string-valued HTTP headers; `Authorization` is reserved and always derived from `api_key_env`
+
 ### `local_command`
 
 Local process that reads JSON on stdin and writes JSON on stdout.
@@ -35,6 +40,7 @@ Required fields:
 Optional fields:
 
 - `env`
+- `output_limit_chars` for persisted stdout/stderr diagnostics; it must be an integer of at least 1024 and defaults to 65536
 
 ## Example Config
 
@@ -96,6 +102,8 @@ pytest tests/test_provider_integration.py
 ```
 
 For local servers that do not require authentication, use a harmless dummy token if the server ignores `Authorization`.
+
+OpenAI-compatible responses may return the Telchines JSON object either in `choices[].message.content` or in function/tool-call `arguments`. This keeps hosted APIs and local gateways with structured-output/tool-call modes on the same contract.
 
 ## Real OpenAI-Compatible Examples
 
@@ -190,11 +198,14 @@ Minimal config:
   "command": "python",
   "args": ["examples/providers/local_command_provider.py"],
   "timeout_seconds": 30,
+  "output_limit_chars": 65536,
   "env": {
     "TELCHINES_PROVIDER_MODE": "local"
   }
 }
 ```
+
+Telchines parses the full stdout stream for the JSON object, then bounds persisted stdout/stderr in task artifacts. Use `output_limit_chars` when wrappers or local model runners emit verbose logs.
 
 Expected repair response:
 
