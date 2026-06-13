@@ -28,6 +28,7 @@ from telchines.operations import (
     coverage_plan,
     check_providers,
     clean_index,
+    doctor_runs,
     dump_json,
     format_coverage_human,
     format_triage_human,
@@ -67,7 +68,7 @@ SHELL_COMMAND_HELP = [
     ("/gen-sva --spec PATH --rtl PATH [--output PATH]", "Generate assertion draft from spec and RTL"),
     ("/gen-cocotb --dut PATH [--spec PATH] [--output-dir PATH]", "Generate a cocotb scaffold from DUT context"),
     ("/waveforms [list|show TARGET|signals TARGET|inspect TARGET --signal NAME]", "Inspect waveform summaries and signals"),
-    ("/runs [list|show RUN_ID|replay RUN_ID [--yes]]", "Inspect stored runs"),
+    ("/runs [list|doctor|show RUN_ID|replay RUN_ID [--yes]]", "Inspect stored runs"),
     ("/eval [run|report]", "Run or show benchmarks"),
     ("/doctor", "Show project/provider/adapter diagnostics"),
     ("/doctor privacy", "Show privacy and artifact-storage diagnostics"),
@@ -599,13 +600,16 @@ def _execute_command(session: ShellSession, parts: list[str], raw: bool) -> str 
         if len(parts) == 1 or parts[1] == "list":
             payload = list_runs(session.cwd)
             return dump_json(payload) if raw else render_runs_payload(payload)
+        if parts[1] == "doctor":
+            payload = doctor_runs(session.cwd)
+            return dump_json(payload) if raw else render_runs_doctor_payload(payload)
         if parts[1] == "show" and len(parts) > 2:
             payload = show_run(session.cwd, parts[2])
             return dump_json(payload) if raw else render_run_show(payload)
         if parts[1] == "replay" and len(parts) > 2:
             payload = replay_run(session.cwd, parts[2], confirm="--yes" in parts[3:])
             return dump_json(payload) if raw else render_replay_payload(payload)
-        raise ValueError("supported /runs commands are list, show <run_id>, and replay <run_id> [--yes]")
+        raise ValueError("supported /runs commands are list, doctor, show <run_id>, and replay <run_id> [--yes]")
 
     if command == "eval":
         if len(parts) == 1 or parts[1] == "run":
@@ -908,6 +912,21 @@ def render_runs_payload(payload: list[dict[str, object]]) -> str:
     for run in payload[:10]:
         table.add_row(run["run_id"], run["workflow_type"], run["status"], run["tool"]["name"])
     return _render_rich(table)
+
+
+def render_runs_doctor_payload(payload: dict[str, object]) -> str:
+    issues = payload.get("issues") or []
+    lines = [
+        f"status: {payload['status']}",
+        f"runs: {payload['run_count']}",
+        f"load issues: {payload['issue_count']}",
+    ]
+    if isinstance(issues, list) and issues:
+        lines.append("")
+        for issue in issues[:5]:
+            if isinstance(issue, dict):
+                lines.append(f"- {issue.get('path')}: {issue.get('error')}")
+    return render_action_panel("Runs Doctor", "\n".join(lines))
 
 
 def render_run_show(payload: dict[str, object]) -> str:

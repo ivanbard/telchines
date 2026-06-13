@@ -452,6 +452,38 @@ def test_cli_runs_replay_requires_confirmation(sample_project: Path, monkeypatch
     assert marker.read_text(encoding="utf-8") == "ok"
 
 
+def test_cli_runs_doctor_reports_corrupt_run_records(sample_project: Path, monkeypatch) -> None:
+    config = ProjectConfig.load(sample_project)
+    store = RunStore(config)
+    store.save_run(
+        VerificationRun(
+            run_id="run_good",
+            project_id=config.project.project_id,
+            commit_sha="workspace",
+            workflow_type="compile_repair",
+            tool=ToolReference(kind="simulator", name="verilator"),
+            inputs={"files": ["rtl/broken_counter.sv"]},
+            status="passed",
+            started_at="2026-04-07T00:00:00+00:00",
+        )
+    )
+    (store.runs_dir / "run_corrupt.json").write_text("{not json", encoding="utf-8")
+    monkeypatch.chdir(sample_project)
+
+    doctor = runner.invoke(app, ["runs", "doctor"])
+    assert doctor.exit_code == 1
+    payload = json.loads(doctor.stdout)
+    assert payload["status"] == "warning"
+    assert payload["run_count"] == 1
+    assert payload["issue_count"] == 1
+    assert payload["issues"][0]["path"] == "runs/run_corrupt.json"
+
+    listed = runner.invoke(app, ["runs", "list"])
+    assert listed.exit_code == 0
+    runs = json.loads(listed.stdout)
+    assert [run["run_id"] for run in runs] == ["run_good"]
+
+
 def test_cli_reports_project_config_error(work_root: Path, monkeypatch) -> None:
     monkeypatch.chdir(work_root)
     result = runner.invoke(app, ["index"])

@@ -45,6 +45,7 @@
 - `tel retrieve "query"`
 - `python -m telchines shell --plain` with `/pwd`, `/providers`, an invalid command, and EOF or `/exit`
 - one workflow command such as `tel triage --logs logs/regressions`
+- `tel runs doctor`
 - `tel runs replay RUN_ID` and confirm it previews without execution
 - one generation command such as `tel gen-cocotb --dut rtl/uart_rx.sv` and inspect `validation_mode`
 - one SVA generation command and confirm `validation_mode` is `adapter_backed` when Slang or Verilator is installed, otherwise `builtin_structural` with fallback reasons

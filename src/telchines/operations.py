@@ -280,6 +280,18 @@ def list_runs(root: Path | None = None) -> list[dict[str, object]]:
     return [dataclass_to_dict(run) for run in store.list_runs()]
 
 
+def doctor_runs(root: Path | None = None) -> dict[str, object]:
+    _, store, _ = load_services(root)
+    runs = store.list_runs()
+    issues = store.list_run_load_issues()
+    return {
+        "status": "passed" if not issues else "warning",
+        "run_count": len(runs),
+        "issue_count": len(issues),
+        "issues": issues,
+    }
+
+
 def show_run(root: Path | None, run_id: str) -> dict[str, object]:
     _, store, _ = load_services(root)
     return dataclass_to_dict(store.load_run(run_id))

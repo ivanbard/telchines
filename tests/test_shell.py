@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from telchines.config import ProjectConfig
 from prompt_toolkit.document import Document
 from prompt_toolkit.input.defaults import create_pipe_input
@@ -13,9 +15,15 @@ from telchines.shell import (
     _build_fullscreen_shell_app,
     _dispatch_slash_command,
     _is_help_command,
+    _parse_coverage_plan_args,
+    _parse_gen_cocotb_args,
+    _parse_gen_sva_args,
+    _parse_repair_args,
+    _parse_repeated_option,
     render_artifact_review_payload,
     render_help,
     render_replay_payload,
+    render_runs_doctor_payload,
     render_run_show,
     render_welcome,
 )
@@ -40,7 +48,8 @@ def test_shell_help_renders_core_commands() -> None:
     assert "/gen-sva --spec PATH --rtl PATH" in rendered
     assert "/gen-cocotb --dut PATH" in rendered
     assert "/waveforms" in rendered
-    assert "/runs [list|show RUN_ID|replay RUN_ID [--yes]]" in rendered
+    assert "/runs [list|doctor|show RUN_ID|replay RUN_ID" in rendered
+    assert "[--yes]]" in rendered
     assert "/artifacts [purge [--yes]|review REF]" in rendered
     assert "/raw <slash command>" in rendered
 
@@ -59,6 +68,60 @@ def test_shell_parser_reports_missing_option_values(sample_project: Path) -> Non
         assert "--file requires a value" in str(exc)
     else:
         raise AssertionError("expected missing option value to raise")
+
+
+def test_shell_parser_accepts_repeated_workflow_options() -> None:
+    tool, files, extra_args, apply_patch = _parse_repair_args(
+        ["--tool", "iverilog", "--file", "rtl/a.sv", "--file", "rtl/b.sv", "--extra-arg", "-Wall", "--apply"]
+    )
+    assert tool == "iverilog"
+    assert files == ["rtl/a.sv", "rtl/b.sv"]
+    assert extra_args == ["-Wall"]
+    assert apply_patch is True
+
+    report, exclusions, formal_run, rtl_paths, spec_paths = _parse_coverage_plan_args(
+        [
+            "--report",
+            "cov/coverage.json",
+            "--exclusions",
+            "cov/exclusions.json",
+            "--formal-run",
+            "run_formal",
+            "--rtl",
+            "rtl/a.sv",
+            "--rtl",
+            "rtl/b.sv",
+            "--spec",
+            "docs/a.md",
+            "--spec",
+            "docs/b.md",
+        ]
+    )
+    assert report == "cov/coverage.json"
+    assert exclusions == "cov/exclusions.json"
+    assert formal_run == "run_formal"
+    assert rtl_paths == ["rtl/a.sv", "rtl/b.sv"]
+    assert spec_paths == ["docs/a.md", "docs/b.md"]
+
+    assert _parse_repeated_option(["--logs", "logs/a.log", "--logs", "logs/b.log"], "--logs") == [
+        "logs/a.log",
+        "logs/b.log",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("parser", "parts", "message"),
+    [
+        (_parse_repair_args, ["--tool", "iverilog", "--file"], "--file requires a value"),
+        (_parse_coverage_plan_args, ["--report", "cov/coverage.json", "--rtl"], "--rtl requires a value"),
+        (_parse_gen_sva_args, ["--spec", "docs/spec.md", "--rtl"], "--rtl requires a value"),
+        (_parse_gen_cocotb_args, ["--dut", "rtl/dut.sv", "--provider"], "--provider requires a value"),
+        (lambda values: _parse_repeated_option(values, "--logs"), ["--logs"], "--logs requires a value"),
+    ],
+)
+def test_shell_parsers_report_missing_values(parser, parts: list[str], message: str) -> None:
+    with pytest.raises(ValueError, match=message):
+        parser(parts)
 
 
 def test_shell_completes_commands_and_paths(sample_project: Path) -> None:
@@ -108,6 +171,26 @@ def test_shell_replay_confirmation_rendering() -> None:
     assert "Replay Confirmation" in rendered
     assert "not executed" in rendered
     assert "--yes" in rendered
+
+
+def test_shell_runs_doctor_rendering() -> None:
+    rendered = render_runs_doctor_payload(
+        {
+            "status": "warning",
+            "run_count": 1,
+            "issue_count": 1,
+            "issues": [
+                {
+                    "run_id": "run_corrupt",
+                    "path": "runs/run_corrupt.json",
+                    "error": "JSONDecodeError: bad json",
+                }
+            ],
+        }
+    )
+    assert "Runs Doctor" in rendered
+    assert "load issues: 1" in rendered
+    assert "runs/run_corrupt.json" in rendered
 
 
 def test_shell_artifact_review_rendering() -> None:

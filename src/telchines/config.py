@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from telchines.errors import ConfigError, ProjectNotInitializedError
 from telchines.models import VerificationProject
@@ -275,6 +276,9 @@ class ProjectConfig:
             if kind == "openai_compatible":
                 if not isinstance(provider_config.get("base_url"), str) or not provider_config["base_url"].strip():
                     raise ConfigError(f"provider {provider_name} must define base_url")
+                parsed_base_url = urlparse(provider_config["base_url"])
+                if parsed_base_url.scheme not in {"http", "https"} or not parsed_base_url.netloc:
+                    raise ConfigError(f"provider {provider_name} base_url must be an http(s) URL")
                 if not isinstance(provider_config.get("model"), str) or not provider_config["model"].strip():
                     raise ConfigError(f"provider {provider_name} must define model")
                 endpoint = provider_config.get("endpoint", "chat/completions")

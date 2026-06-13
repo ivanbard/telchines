@@ -17,7 +17,7 @@ Remote HTTP provider for hosted generation or repair.
 
 Required fields:
 
-- `base_url`
+- `base_url`, an `http://` or `https://` URL with any path prefix such as `/v1`
 - `model`
 - `api_key_env`
 - `timeout_seconds`

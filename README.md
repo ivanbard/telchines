@@ -263,6 +263,7 @@ See [docs/compatibility.md](docs/compatibility.md) for the exact boundary.
 - `tel waveforms inspect`
 - `tel runs list`
 - `tel runs show`
+- `tel runs doctor`
 - `tel runs replay RUN_ID` preview and `tel runs replay RUN_ID --yes` execution
 - `tel adapters list`
 - `tel adapters check`

@@ -39,6 +39,21 @@ def test_config_rejects_invalid_model_provider(sample_project: Path) -> None:
         ProjectConfig.load(sample_project)
 
 
+def test_config_rejects_invalid_openai_base_url(sample_project: Path) -> None:
+    config_path = sample_project / ".tel" / "config.json"
+    payload = read_json(config_path)
+    payload["project"]["model_policy"]["providers"]["remote"] = {
+        "kind": "openai_compatible",
+        "capabilities": ["repair"],
+        "base_url": "localhost:11434/v1",
+        "model": "demo-model",
+    }
+    payload["project"]["model_policy"]["default_provider_by_capability"]["repair"] = "remote"
+    write_json(config_path, payload)
+    with pytest.raises(ConfigError, match="base_url"):
+        ProjectConfig.load(sample_project)
+
+
 def test_config_rejects_invalid_openai_custom_headers(sample_project: Path) -> None:
     config_path = sample_project / ".tel" / "config.json"
     payload = read_json(config_path)

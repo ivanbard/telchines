@@ -12,6 +12,7 @@ from telchines.operations import (
     check_providers as check_providers_op,
     clean_index as clean_index_op,
     coverage_plan as coverage_plan_op,
+    doctor_runs as doctor_runs_op,
     dump_json,
     format_coverage_human,
     format_triage_ci,
@@ -156,6 +157,17 @@ def list_runs() -> None:
     except ConfigError as exc:
         _fail(f"config error: {exc}")
     typer.echo(dump_json(payload))
+
+
+@runs_app.command("doctor")
+def doctor_runs() -> None:
+    try:
+        payload = doctor_runs_op()
+    except ConfigError as exc:
+        _fail(f"config error: {exc}")
+    typer.echo(dump_json(payload))
+    if payload.get("status") == "warning":
+        raise typer.Exit(code=1)
 
 
 @runs_app.command("show")

@@ -12,6 +12,7 @@ Release hardening patch.
 - added env-gated live OpenAI-compatible provider integration smoke tests
 - accepted OpenAI-compatible function/tool-call arguments as provider JSON responses
 - config-validated OpenAI-compatible custom headers and blocked Authorization overrides
+- config-validated OpenAI-compatible base URLs as explicit HTTP(S) URLs
 - preserved OpenAI-compatible base URL path prefixes when custom endpoints start with `/`
 - bounded and config-validated persisted stdout/stderr diagnostics for noisy `local_command` providers
 - added `tel adapters check`, adapter version detection, and optional Verilator/Icarus real-tool smoke scaffolding
@@ -23,6 +24,7 @@ Release hardening patch.
 - added `retrieval.aliases` for explicit domain synonym expansion during search
 - added `tel doctor privacy` and dry-run-first `tel artifacts purge`
 - hardened provider-returned paths and redacted secret-looking task artifact fields
+- made run listing tolerate corrupt run JSON records while exposing load diagnostics
 - added generation convention config plus explicit SVA/cocotb validation modes and limitations
 - added optional adapter-backed SVA validation through configured Slang/Verilator-style generation adapters
 - added an optional executable cocotb/Icarus smoke test for generated cocotb scaffolds
