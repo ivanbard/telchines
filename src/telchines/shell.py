@@ -13,6 +13,7 @@ from prompt_toolkit import Application
 from prompt_toolkit.completion import Completer, Completion
 from prompt_toolkit.document import Document
 from prompt_toolkit.filters import Condition
+from prompt_toolkit.history import InMemoryHistory
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.layout import Dimension, FormattedTextControl, HSplit, Layout, VSplit, Window
 from prompt_toolkit.styles import Style
@@ -172,6 +173,7 @@ class ShellViewState:
     help_text: str = ""
     saved_input_text: str = ""
     saved_cursor_position: int = 0
+    history_index: int | None = None
 
 
 class ShellCompleter(Completer):
@@ -256,6 +258,7 @@ def _build_fullscreen_shell_app(session: ShellSession, **app_kwargs: Any) -> App
         focusable=False,
         wrap_lines=True,
     )
+    input_history = InMemoryHistory()
     input_area = TextArea(
         height=1,
         prompt=session.prompt(),
@@ -263,6 +266,7 @@ def _build_fullscreen_shell_app(session: ShellSession, **app_kwargs: Any) -> App
         wrap_lines=False,
         completer=ShellCompleter(session),
         complete_while_typing=True,
+        history=input_history,
     )
     help_area = TextArea(
         text="",
@@ -360,6 +364,8 @@ def _build_fullscreen_shell_app(session: ShellSession, **app_kwargs: Any) -> App
         if not user_input:
             return
         session.history.append(user_input)
+        input_history.append_string(user_input)
+        view_state.history_index = None
         if _is_help_command(user_input):
             show_help_overlay()
             input_area.text = ""
@@ -384,6 +390,29 @@ def _build_fullscreen_shell_app(session: ShellSession, **app_kwargs: Any) -> App
     @kb.add("enter")
     def _(event) -> None:  # noqa: ANN001
         submit()
+
+    @kb.add("up", filter=Condition(lambda: not view_state.help_visible))
+    def _(event) -> None:  # noqa: ANN001
+        if not session.history:
+            return
+        if view_state.history_index is None:
+            view_state.history_index = len(session.history) - 1
+        else:
+            view_state.history_index = max(0, view_state.history_index - 1)
+        input_area.text = session.history[view_state.history_index]
+        input_area.buffer.cursor_position = len(input_area.text)
+
+    @kb.add("down", filter=Condition(lambda: not view_state.help_visible))
+    def _(event) -> None:  # noqa: ANN001
+        if view_state.history_index is None:
+            return
+        if view_state.history_index >= len(session.history) - 1:
+            view_state.history_index = None
+            input_area.text = ""
+        else:
+            view_state.history_index += 1
+            input_area.text = session.history[view_state.history_index]
+        input_area.buffer.cursor_position = len(input_area.text)
 
     @kb.add("escape", filter=Condition(lambda: view_state.help_visible))
     @kb.add("q", filter=Condition(lambda: view_state.help_visible))

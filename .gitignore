@@ -5,6 +5,7 @@ __pycache__/
 *.pyc
 *.egg-info/
 .ovai/
+.env
 .test-work/
 pytest-cache-files-*/
 build/

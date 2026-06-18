@@ -350,28 +350,37 @@ Suggested direction:
 
 ## Priority Workstreams
 
+Progress tracking below is live-maintained from repository evidence. Checked items have code, docs, and/or test evidence in the current tree; unchecked items still need stronger proof or human/environment support.
+
+Latest evidence notes:
+
+- `tests/test_provider_integration.py` passed against OpenRouter using `TELCHINES_INTEGRATION_OPENAI_*` loaded from the ignored project `.env`.
+- A disposable initialized project passed `tel providers check openrouter-dev` against OpenRouter using `OPENROUTER_API_KEY` from `.env`.
+- A disposable initialized project passed the plain-shell smoke for `/help`, `/providers`, `/index`, `/retrieve`, `/triage`, `/gen-sva`, `/gen-cocotb`, `/coverage-plan`, `/waveforms`, `/runs`, `/raw`, `/cd`, and `/exit`.
+- `tests/test_shell.py` covers parser/autocomplete behavior, command history navigation, Ctrl-C/Ctrl-D exit handling, and a narrow full-screen terminal harness.
+
 ### P0: Shell/TUI Stabilization
 
 Goal: Make the interactive shell reliable and pleasant enough for daily use.
 
 Tasks:
 
-- Add `tel shell --plain` and `tel shell --fullscreen` or equivalent explicit mode controls.
-- Add command history navigation if not already provided by TextArea defaults.
-- Add autocomplete for slash commands and common options.
-- Add path completion for `--logs`, `--file`, `--rtl`, `--spec`, `--dut`, `--report`, `cd`, and waveform targets.
-- Add narrow-terminal behavior tests or a small terminal harness.
-- Refactor manual shell parsing to reduce drift from Typer commands.
-- Improve header/sidebar for long paths and small screens.
-- Add `/clear`, `/history`, `/transcript`, and `/doctor` if scope allows.
-- Improve error panels and status feedback while commands run.
+- [x] Add `tel shell --plain` and `tel shell --fullscreen` or equivalent explicit mode controls.
+- [x] Add command history navigation if not already provided by TextArea defaults.
+- [x] Add autocomplete for slash commands and common options.
+- [x] Add path completion for `--logs`, `--file`, `--rtl`, `--spec`, `--dut`, `--report`, `cd`, and waveform targets.
+- [x] Add narrow-terminal behavior tests or a small terminal harness.
+- [x] Refactor manual shell parsing to reduce drift from Typer commands.
+- [x] Improve header/sidebar for long paths and small screens.
+- [x] Add `/clear`, `/history`, `/transcript`, and `/doctor` if scope allows.
+- [x] Improve error panels and status feedback while commands run.
 
 Acceptance criteria:
 
-- Existing tests pass.
-- New tests cover plain shell and at least parser/autocomplete behavior.
-- Manual smoke test works for `/help`, `/providers`, `/index`, `/retrieve`, `/triage`, `/gen-sva`, `/gen-cocotb`, `/coverage-plan`, `/waveforms`, `/runs`, `/raw`, `/cd`, Ctrl-C/Ctrl-D, and small terminal widths.
-- Docs mention explicit shell modes and key commands.
+- [x] Existing tests pass.
+- [x] New tests cover plain shell and at least parser/autocomplete behavior.
+- [x] Manual smoke test works for `/help`, `/providers`, `/index`, `/retrieve`, `/triage`, `/gen-sva`, `/gen-cocotb`, `/coverage-plan`, `/waveforms`, `/runs`, `/raw`, `/cd`, Ctrl-C/Ctrl-D, and small terminal widths.
+- [x] Docs mention explicit shell modes and key commands.
 
 ### P0: Provider Integration Hardening
 
@@ -379,22 +388,22 @@ Goal: Make model-provider support real, diagnosable, and safe.
 
 Tasks:
 
-- Add `tel providers check [NAME]` to validate config, credentials, policy, and transport.
-- Add docs for real OpenAI-compatible provider setup.
-- Add docs/examples for Ollama/LM Studio/local OpenAI-compatible servers.
-- Add docs/examples for local command providers.
-- Add provider response parsing tests for malformed/empty/fenced/noisy responses.
-- Add HTTP error and timeout tests.
-- Add redaction tests for persisted provider artifacts.
-- Add optional integration tests gated by environment variables.
+- [x] Add `tel providers check [NAME]` to validate config, credentials, policy, and transport.
+- [x] Add docs for real OpenAI-compatible provider setup.
+- [x] Add docs/examples for Ollama/LM Studio/local OpenAI-compatible servers.
+- [x] Add docs/examples for local command providers.
+- [x] Add provider response parsing tests for malformed/empty/fenced/noisy responses.
+- [x] Add HTTP error and timeout tests.
+- [x] Add redaction tests for persisted provider artifacts.
+- [x] Add optional integration tests gated by environment variables.
 
 Acceptance criteria:
 
-- Users can configure at least one real remote OpenAI-compatible provider from docs.
-- Users can configure at least one local OpenAI-compatible provider from docs.
-- Users can configure a local command provider from docs.
-- Provider check gives actionable output and respects policy.
-- Missing/invalid keys produce clear errors.
+- [x] Users can configure at least one real remote OpenAI-compatible provider from docs.
+- [x] Users can configure at least one local OpenAI-compatible provider from docs.
+- [x] Users can configure a local command provider from docs.
+- [x] Provider check gives actionable output and respects policy.
+- [x] Missing/invalid keys produce clear errors.
 
 ### P0: Real Tool Smoke Tests
 
@@ -402,18 +411,18 @@ Goal: Prove adapters work with actual verification tools, not only mocks.
 
 Tasks:
 
-- Add optional GitHub Actions workflow for open-source EDA smoke tests.
-- Install/run Verilator and Icarus at minimum if practical.
-- Add real fixture projects for compile-only and compile+run flows.
-- Add parser fixtures from actual tool outputs.
-- Add adapter version detection.
-- Add `tel adapters check` or `doctor` command.
+- [x] Add optional GitHub Actions workflow for open-source EDA smoke tests.
+- [x] Install/run Verilator and Icarus at minimum if practical.
+- [x] Add real fixture projects for compile-only and compile+run flows.
+- [x] Add parser fixtures from actual tool outputs.
+- [x] Add adapter version detection.
+- [x] Add `tel adapters check` or `doctor` command.
 
 Acceptance criteria:
 
-- At least Verilator and Icarus smoke tests run on Ubuntu in CI or documented local script.
-- Missing tools produce friendly output.
-- Adapter parsing covers actual observed messages.
+- [x] At least Verilator and Icarus smoke tests run on Ubuntu in CI or documented local script.
+- [x] Missing tools produce friendly output.
+- [x] Adapter parsing covers actual observed messages.
 
 ### P1: Generated Artifact Quality
 
@@ -421,17 +430,17 @@ Goal: Generated SVA/cocotb artifacts should be structurally valid and useful, no
 
 Tasks:
 
-- Add adapter-backed SVA validation when Slang/Verilator is available.
-- Validate generated SVA references against DUT module/ports where possible.
-- Add cocotb executable smoke test behind optional dependencies.
-- Improve cocotb scaffold templates with monitors, reset/clock helpers, Makefile/runner hints, and clearer TODOs.
-- Add user-configurable naming/output conventions.
+- [x] Add adapter-backed SVA validation when Slang/Verilator is available.
+- [x] Validate generated SVA references against DUT module/ports where possible.
+- [x] Add cocotb executable smoke test behind optional dependencies.
+- [x] Improve cocotb scaffold templates with monitors, reset/clock helpers, Makefile/runner hints, and clearer TODOs.
+- [x] Add user-configurable naming/output conventions.
 
 Acceptance criteria:
 
-- Generated artifacts include validation mode and limitations.
-- SVA/cocotb benchmarks include at least one failure case per validator.
-- Generated cocotb can run against at least one tiny fixture DUT when optional deps/tools are installed.
+- [x] Generated artifacts include validation mode and limitations.
+- [x] SVA/cocotb benchmarks include at least one failure case per validator.
+- [x] Generated cocotb can run against at least one tiny fixture DUT when optional deps/tools are installed.
 
 ### P1: Retrieval and Index UX
 
@@ -439,17 +448,17 @@ Goal: Make project indexing transparent and scalable.
 
 Tasks:
 
-- Add `tel index status`.
-- Add include/exclude config patterns.
-- Add stale index warnings.
-- Add larger fixture corpus tests.
-- Add an index summary in shell sidebar that handles missing/stale/large states.
+- [x] Add `tel index status`.
+- [x] Add include/exclude config patterns.
+- [x] Add stale index warnings.
+- [x] Add larger fixture corpus tests.
+- [x] Add an index summary in shell sidebar that handles missing/stale/large states.
 
 Acceptance criteria:
 
-- Users can understand what was indexed and why.
-- Large/noisy directories can be excluded.
-- External roots preserve provenance and do not crowd out project-local sources in triage/repair.
+- [x] Users can understand what was indexed and why.
+- [x] Large/noisy directories can be excluded.
+- [x] External roots preserve provenance and do not crowd out project-local sources in triage/repair.
 
 ### P1: Security/Privacy
 
@@ -457,17 +466,17 @@ Goal: Make sensitive behavior explicit and auditable.
 
 Tasks:
 
-- Add artifact redaction for provider configs, headers, env, and known secret-looking keys.
-- Add tests for path traversal in provider-returned paths.
-- Add docs warning that local command providers execute arbitrary commands.
-- Add a purge command for `.tel` artifacts.
-- Add confirmation or clear docs around `runs replay`.
+- [x] Add artifact redaction for provider configs, headers, env, and known secret-looking keys.
+- [x] Add tests for path traversal in provider-returned paths.
+- [x] Add docs warning that local command providers execute arbitrary commands.
+- [x] Add a purge command for `.tel` artifacts.
+- [x] Add confirmation or clear docs around `runs replay`.
 
 Acceptance criteria:
 
-- Secret fields do not appear in saved task artifacts.
-- Provider paths cannot write outside the project.
-- Users have a way to inspect and clean stored artifacts.
+- [x] Secret fields do not appear in saved task artifacts.
+- [x] Provider paths cannot write outside the project.
+- [x] Users have a way to inspect and clean stored artifacts.
 
 ### P2: Packaging and Release Hardening
 
@@ -475,15 +484,15 @@ Goal: Make release claims match reality.
 
 Tasks:
 
-- Add clean-wheel install smoke test to CI.
-- Run `tel eval run` from installed wheel.
-- Reconsider production/stable classifier.
-- Verify README assets render in source distribution and PyPI.
-- Update changelog and release checklist with integration gates.
+- [x] Add clean-wheel install smoke test to CI.
+- [x] Run `tel eval run` from installed wheel.
+- [x] Reconsider production/stable classifier.
+- [x] Verify README assets render in source distribution and PyPI.
+- [x] Update changelog and release checklist with integration gates.
 
 Acceptance criteria:
 
-- A fresh venv installed from the wheel can run `tel --version`, `tel --help`, `tel project init`, `tel index`, and `tel eval run`.
+- [x] A fresh venv installed from the wheel can run `tel --version`, `tel --help`, `tel project init`, `tel index`, and `tel eval run`.
 
 ## Edge Cases To Consider
 

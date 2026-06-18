@@ -146,6 +146,37 @@ Hosted OpenAI-compatible endpoint:
 }
 ```
 
+OpenRouter is also OpenAI-compatible. Set `OPENROUTER_API_KEY` in your shell or project-local ignored `.env`, choose a model ID from OpenRouter's model list, and point the provider at `/api/v1`:
+
+```json
+{
+  "model_mode": "hybrid",
+  "no_egress": false,
+  "project": {
+    "model_policy": {
+      "default_provider_by_capability": {
+        "repair": "openrouter-dev",
+        "generation": "openrouter-dev"
+      },
+      "providers": {
+        "heuristic": {
+          "kind": "heuristic",
+          "capabilities": ["repair", "generation"]
+        },
+        "openrouter-dev": {
+          "kind": "openai_compatible",
+          "capabilities": ["repair", "generation"],
+          "base_url": "https://openrouter.ai/api/v1",
+          "model": "cohere/north-mini-code:free",
+          "api_key_env": "OPENROUTER_API_KEY",
+          "timeout_seconds": 30
+        }
+      }
+    }
+  }
+}
+```
+
 Local OpenAI-compatible server such as Ollama, LM Studio, llama.cpp server, vLLM, or LiteLLM:
 
 ```json

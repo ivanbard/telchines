@@ -6,6 +6,7 @@ import pytest
 
 from telchines.config import ProjectConfig
 from prompt_toolkit.document import Document
+from prompt_toolkit.data_structures import Size
 from prompt_toolkit.input.defaults import create_pipe_input
 from prompt_toolkit.output import DummyOutput
 
@@ -27,6 +28,11 @@ from telchines.shell import (
     render_run_show,
     render_welcome,
 )
+
+
+class NarrowOutput(DummyOutput):
+    def get_size(self) -> Size:
+        return Size(rows=12, columns=50)
 
 
 def test_shell_welcome_renders_project_context(sample_project: Path) -> None:
@@ -144,6 +150,42 @@ def test_fullscreen_shell_accepts_pipe_input(sample_project: Path) -> None:
 
     assert session.history == ["/pwd", "/exit"]
     assert any(str(sample_project) in item for item in session.transcript)
+    assert session.transcript[-1] == "leaving Telchines shell"
+
+
+def test_fullscreen_shell_supports_history_navigation(sample_project: Path) -> None:
+    session = ShellSession(cwd=sample_project)
+    session.add_transcript("Telchines", render_welcome(session))
+    with create_pipe_input() as pipe_input:
+        app = _build_fullscreen_shell_app(session, input=pipe_input, output=DummyOutput())
+        pipe_input.send_text("/pwd\r\x1b[A\r/exit\r")
+        app.run()
+
+    assert session.history == ["/pwd", "/pwd", "/exit"]
+    assert sum(1 for item in session.transcript if str(sample_project) in item) >= 2
+
+
+@pytest.mark.parametrize("control", ["\x03", "\x04"])
+def test_fullscreen_shell_control_keys_exit(sample_project: Path, control: str) -> None:
+    session = ShellSession(cwd=sample_project)
+    session.add_transcript("Telchines", render_welcome(session))
+    with create_pipe_input() as pipe_input:
+        app = _build_fullscreen_shell_app(session, input=pipe_input, output=DummyOutput())
+        pipe_input.send_text(control)
+        app.run()
+
+    assert session.transcript[-1] == "leaving Telchines shell"
+
+
+def test_fullscreen_shell_runs_in_narrow_terminal(sample_project: Path) -> None:
+    session = ShellSession(cwd=sample_project)
+    session.add_transcript("Telchines", render_welcome(session))
+    with create_pipe_input() as pipe_input:
+        app = _build_fullscreen_shell_app(session, input=pipe_input, output=NarrowOutput())
+        pipe_input.send_text("/pwd\r/exit\r")
+        app.run()
+
+    assert session.history == ["/pwd", "/exit"]
     assert session.transcript[-1] == "leaving Telchines shell"
 
 
