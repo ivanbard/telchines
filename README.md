@@ -1,8 +1,12 @@
 # Telchines
 
-<p align="center">
-  <img src="docs/assets/readme-hero.svg" alt="Telchines hero banner" width="100%">
-</p>
+```text
+  _____ _____ _     ____ _   _ ___ _   _ _____ ____
+ |_   _| ____| |   / ___| | | |_ _| \ | | ____/ ___|
+   | | |  _| | |  | |   | |_| || ||  \| |  _| \___ \
+   | | | |___| |__| |___|  _  || || |\  | |___ ___) |
+   |_| |_____|_____\____|_| |_|___|_| \_|_____|____/
+```
 
 <p align="center">
   <a href="https://github.com/ivanbard/telchines/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/ivanbard/telchines/ci.yml?branch=main&style=flat-square&label=CI" alt="CI status"></a>
@@ -78,9 +82,22 @@ validation: passed
 
 ## How It Works
 
-<p align="center">
-  <img src="docs/assets/readme-workflow.svg" alt="Telchines workflow diagram" width="100%">
-</p>
+```mermaid
+flowchart LR
+    index["Index<br/>RTL, docs, logs, coverage, prior runs"]
+    retrieve["Retrieve<br/>Task-aware context with citations"]
+    workflow["Run Workflow<br/>repair, triage, gen-sva, gen-cocotb, coverage-plan"]
+    validate["Validate<br/>tool adapters, syntax checks, reruns"]
+    replay["Replay<br/>artifacts, runs, benchmarks"]
+    store[("Filesystem-backed run store<br/>.tel/")]
+
+    index --> retrieve --> workflow --> validate --> replay
+    index --> store
+    retrieve --> store
+    workflow --> store
+    validate --> store
+    replay --> store
+```
 
 Telchines keeps the loop explicit:
 
@@ -91,9 +108,21 @@ Telchines keeps the loop explicit:
 
 ## Architecture Snapshot
 
-<p align="center">
-  <img src="docs/assets/readme-architecture.svg" alt="Telchines architecture diagram" width="100%">
-</p>
+```mermaid
+flowchart LR
+    interface["Engineer Interface<br/>CLI, interactive shell, human-readable and JSON modes"]
+    core["Workflow Core<br/>repair, triage, gen-sva, gen-cocotb, coverage-plan, waveforms"]
+    grounding["Grounding Layer<br/>retrieval index, context packs, run memory"]
+    edge["Execution Edge<br/>tool adapters, providers, policy controls"]
+    dataplane[("Filesystem-backed data plane<br/>runs, artifacts, citations, waveform summaries, benchmark reports, replay commands under .tel/")]
+
+    interface --> core
+    core --> grounding
+    grounding --> edge
+    core --> dataplane
+    grounding --> dataplane
+    edge --> dataplane
+```
 
 ## Quick Start
 
