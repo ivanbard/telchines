@@ -6,7 +6,7 @@
 
 <p align="center">
   <a href="https://github.com/ivanbard/telchines/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/ivanbard/telchines/ci.yml?branch=main&style=flat-square&label=CI" alt="CI status"></a>
-  <img src="https://img.shields.io/badge/version-v1.0.0-0f172a?style=flat-square" alt="Version 1.0.0">
+  <img src="https://img.shields.io/badge/version-v1.0.1-0f172a?style=flat-square" alt="Version 1.0.1">
   <img src="https://img.shields.io/badge/python-3.11%2B-0b7285?style=flat-square" alt="Python 3.11+">
   <img src="https://img.shields.io/badge/license-MIT-14532d?style=flat-square" alt="MIT License">
   <img src="https://img.shields.io/badge/benchmarks-18%20cases-7c2d12?style=flat-square" alt="18 benchmark cases">
@@ -97,18 +97,18 @@ Telchines keeps the loop explicit:
 
 ## Quick Start
 
-Install from PyPI:
-
-```bash
-pip install telchines
-```
-
-Or from source:
+Install from source while PyPI trusted publishing is being finalized:
 
 ```bash
 python -m venv .venv
 . .venv/Scripts/activate
 pip install -e .[dev]
+```
+
+After the PyPI publisher is configured, the package install path will be:
+
+```bash
+pip install telchines
 ```
 
 Validate the install:
@@ -123,7 +123,9 @@ Initialize and index a project:
 ```bash
 tel project init .
 tel index
+tel index status
 tel providers list
+tel providers check heuristic
 ```
 
 Run a few common workflows:
@@ -138,12 +140,14 @@ tel coverage-plan --report cov/coverage.json --rtl rtl/uart_rx.sv --spec docs/ua
 
 ## Interactive Shell
 
-Running `tel` with no arguments opens the shell. Slash commands and lightweight plain-text intents are both supported.
+Running `tel` with no arguments opens the shell. Use `tel shell --plain` for the stdin/stdout shell or `tel shell --fullscreen` to request the prompt_toolkit full-screen shell explicitly. Slash commands and lightweight plain-text intents are both supported.
 
 ```text
 tel> /help
 tel> /providers
+tel> /providers check heuristic
 tel> /index
+tel> /index status
 tel> /triage --logs logs/regressions
 tel> /gen-sva --spec docs/uart.md --rtl rtl/uart_rx.sv
 tel> show my providers
@@ -174,7 +178,7 @@ Policy controls:
 - `model_mode=hybrid` allows both
 - `no_egress=true` blocks networked providers
 
-See [docs/adapters.md](docs/adapters.md) and [docs/providers.md](docs/providers.md) for the exact support contract.
+See [docs/adapters.md](docs/adapters.md), [docs/providers.md](docs/providers.md), and [docs/generated-artifacts.md](docs/generated-artifacts.md) for the exact support contract.
 
 ## Benchmarks And Release Validation
 
@@ -220,6 +224,7 @@ Not in `v1`:
 - [Quickstart](docs/quickstart.md)
 - [Worked Examples](docs/examples.md)
 - [Provider Configuration](docs/providers.md)
+- [Local LLMs](docs/local-llms.md)
 - [Adapter Support And Contribution Contract](docs/adapters.md)
 - [External Retrieval Policy](docs/external-retrieval-policy.md)
 - [Evaluation And Benchmarks](docs/evaluation.md)
@@ -244,6 +249,8 @@ See [docs/compatibility.md](docs/compatibility.md) for the exact boundary.
 - `tel shell`
 - `tel project init`
 - `tel index`
+- `tel index status`
+- `tel index clean`
 - `tel retrieve`
 - `tel repair`
 - `tel triage`
@@ -256,9 +263,14 @@ See [docs/compatibility.md](docs/compatibility.md) for the exact boundary.
 - `tel waveforms inspect`
 - `tel runs list`
 - `tel runs show`
-- `tel runs replay`
+- `tel runs doctor`
+- `tel runs replay RUN_ID` preview and `tel runs replay RUN_ID --yes` execution
 - `tel adapters list`
+- `tel adapters check`
 - `tel providers list`
+- `tel providers check`
+- `tel artifacts purge`
+- `tel doctor privacy`
 - `tel eval run`
 - `tel eval report`
 

@@ -25,7 +25,7 @@ def execute_cocotb_generation(
 ) -> tuple[CocotbCandidate | None, VerificationRun | None, VerificationRun | None, object]:
     dut_rel = relative_to(dut_path, config.project_root)
     spec_rel = relative_to(spec_path, config.project_root) if spec_path else None
-    output_dir_rel = relative_to(output_dir, config.project_root) if output_dir else str(Path(config.artifacts_dir) / "generated" / "cocotb")
+    output_dir_rel = relative_to(output_dir, config.project_root) if output_dir else _default_cocotb_output_dir(config)
     query_terms = [dut_path.stem, "cocotb", "smoke", "testbench"]
     if spec_path:
         query_terms.append(spec_path.stem)
@@ -56,6 +56,7 @@ def execute_cocotb_generation(
         output_dir=output_dir_rel,
         intent=intent,
         retrieval_context=context,
+        conventions=config.generation,
     )
     provider_result = provider.generate_cocotb(request)
     request_artifact = store.save_task_artifact(task.task_id, "cocotb_request", provider_result.request_payload)
@@ -164,7 +165,11 @@ def validate_cocotb_candidate(config: ProjectConfig, store: RunStore, candidate:
 
         command = [sys.executable, "-m", "py_compile", str(target)]
         process = subprocess.run(command, cwd=temp_root, capture_output=True, text=True, check=False)
+        structural_errors = _cocotb_structural_errors(candidate.candidate_content)
+        returncode = process.returncode if process.returncode != 0 else (1 if structural_errors else 0)
         combined = process.stdout + process.stderr
+        if structural_errors:
+            combined = (combined + "\n" if combined else "") + "\n".join(structural_errors)
 
         artifacts_dir = config.project_root / config.artifacts_dir
         ensure_directory(artifacts_dir)
@@ -184,14 +189,27 @@ def validate_cocotb_candidate(config: ProjectConfig, store: RunStore, candidate:
                 "generated_file": candidate.file_path,
                 "manifest_path": candidate.manifest_path,
             },
-            status="passed" if process.returncode == 0 else "failed",
+            status="passed" if returncode == 0 else "failed",
             started_at=utc_now(),
             finished_at=utc_now(),
-            exit_code=process.returncode,
+            exit_code=returncode,
             artifacts={"log_path": str(log_path), "generated_file": candidate.file_path, "manifest_path": candidate.manifest_path},
-            tool_result={"status": "passed" if process.returncode == 0 else "failed", "validation_mode": "python_syntax", "validator": "py_compile"},
+            tool_result={
+                "status": "passed" if returncode == 0 else "failed",
+                "validation_mode": "python_syntax_plus_structure",
+                "validators": ["py_compile", "builtin_cocotb_structure"],
+                "checks": {
+                    "python_syntax": "passed" if process.returncode == 0 else "failed",
+                    "cocotb_import": "passed" if "import cocotb" in candidate.candidate_content else "failed",
+                    "cocotb_test": "passed" if "@cocotb.test" in candidate.candidate_content else "failed",
+                },
+                "limitations": [
+                    "built-in validation does not run a simulator",
+                    "executable cocotb smoke requires optional cocotb and simulator tooling",
+                ],
+            },
             observation_ids=[observation.observation_id for observation in observations],
-            summary=_validation_summary(process.returncode, combined),
+            summary=_validation_summary(returncode, combined),
             replay_command=command,
         )
         store.save_run(validation_run)
@@ -221,6 +239,14 @@ def _build_manifest_payload(candidate: CocotbCandidate) -> dict[str, object]:
             "Extend stimulus coverage beyond the smoke path.",
             "Connect simulator and cocotb runner configuration for executable validation.",
         ],
+        "validation": {
+            "mode": "python_syntax_plus_structure",
+            "limitations": [
+                "py_compile confirms Python syntax only.",
+                "Built-in cocotb structure checks confirm import and test-decorator shape.",
+                "Simulator execution requires optional cocotb and EDA tooling.",
+            ],
+        },
         "evidence_paths": candidate.evidence_paths,
     }
 
@@ -238,3 +264,17 @@ def _validation_summary(exit_code: int, combined: str) -> str:
     if first_line:
         return f"py_compile validation failed: {first_line}"
     return f"py_compile validation failed with exit code {exit_code}"
+
+
+def _default_cocotb_output_dir(config: ProjectConfig) -> str:
+    section = config.generation.get("cocotb", {}) if isinstance(config.generation, dict) else {}
+    return str(section.get("output_dir", Path(config.artifacts_dir) / "generated" / "cocotb"))
+
+
+def _cocotb_structural_errors(content: str) -> list[str]:
+    errors: list[str] = []
+    if "import cocotb" not in content:
+        errors.append("ERROR: expected generated scaffold to import cocotb")
+    if "@cocotb.test" not in content:
+        errors.append("ERROR: expected at least one @cocotb.test decorator")
+    return errors

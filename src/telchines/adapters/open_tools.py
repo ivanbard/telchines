@@ -15,7 +15,7 @@ class VerilatorAdapter(ToolAdapter):
     kind = "simulator"
     category = "simulation"
     binary_names = ("verilator",)
-    supported_workflows = ("repair_validation",)
+    supported_workflows = ("repair_validation", "generation_validation")
     artifact_types = ("log", "stdout", "stderr")
 
     def build_command(self, project_root: Path, files: list[str], extra_args: list[str] | None = None) -> list[str]:

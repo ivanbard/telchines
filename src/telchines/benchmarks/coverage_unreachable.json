@@ -1,0 +1,44 @@
+{
+  "benchmark_id": "coverage_unreachable",
+  "task_type": "coverage",
+  "title": "Classify a formally unreachable coverage gap",
+  "fixture_root": "benchmarks/assets/coverage_unreachable",
+  "config": {
+    "report_path": "cov/coverage.json",
+    "rtl_paths": [
+      "rtl/counter.sv"
+    ],
+    "spec_paths": [
+      "docs/counter.md"
+    ],
+    "formal_run": {
+      "run_id": "formal_cov_unreachable",
+      "summary": "Formal marked unreachable_dead_state unreachable under current constraints.",
+      "tool_result": {
+        "status": "passed",
+        "property_ids": [
+          "unreachable_dead_state"
+        ],
+        "report_paths": [
+          "formal/unreachable_dead_state.txt"
+        ]
+      }
+    }
+  },
+  "scoring": {
+    "expected_classifications": [
+      "dead_or_unreachable"
+    ],
+    "expected_item_ids": [
+      "dead_state_bin"
+    ],
+    "expected_supporting_runs": [
+      "formal_cov_unreachable"
+    ],
+    "min_recommendations": 1,
+    "min_classification_matches": 1,
+    "min_item_matches": 1,
+    "min_evidence_citations": 1
+  },
+  "schema_version": "0.1"
+}

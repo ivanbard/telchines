@@ -6,7 +6,7 @@ Telchines `1.x` is a CLI-first product line. The following interfaces are treate
 
 - top-level CLI command names
 - `.tel/config.json` field names and general layout
-- run-store replay artifacts used by `tel runs replay`
+- run-store replay artifacts used by `tel runs replay`; executing a stored replay command requires explicit confirmation with `--yes`
 - JSON output contracts for:
   - `retrieve`
   - `repair`

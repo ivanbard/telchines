@@ -49,3 +49,30 @@ Use external roots for:
 - domain-specific verification notes
 
 Do not use them as a substitute for repo-specific requirements or authoritative design intent.
+
+## Index Controls
+
+Use `tel index status` to inspect whether project and external indexes exist, when they were built, and whether sources are missing, stale, or deleted. Use `tel index clean` to remove the local indexes before rebuilding with `tel index`.
+
+Large or noisy projects can narrow indexed files with retrieval glob patterns in `.tel/config.json`:
+
+```json
+{
+  "retrieval": {
+    "chunk_lines": 20,
+    "max_hits": 5,
+    "external_roots": [],
+    "external_index_dir": ".tel/external-index",
+    "include_patterns": ["rtl/**", "docs/**", "logs/**/*.log"],
+    "exclude_patterns": ["logs/generated/**", "vendor/**"],
+    "aliases": {
+      "framing pulse": ["start bit", "serial_i"],
+      "objection drain": ["timeout", "uvm_objection"]
+    }
+  }
+}
+```
+
+Patterns are project-relative. Telchines still skips generated/cache directories such as `.git`, `.tel`, `.venv`, `.test-work`, and `__pycache__`.
+
+`retrieval.aliases` expands query tokens at search time without rewriting the index. Use it for team vocabulary, protocol nicknames, and signal-name synonyms that pure token overlap would otherwise miss. Aliases are intentionally local and explicit; they are not semantic embeddings.

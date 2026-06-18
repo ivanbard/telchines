@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from telchines.adapters.open_tools import IcarusAdapter, SymbiYosysAdapter
+from telchines.adapters.open_tools import IcarusAdapter, SlangAdapter, SymbiYosysAdapter, VeribleAdapter, VerilatorAdapter
 from telchines.adapters.registry import AdapterRegistry
 
 
@@ -37,6 +37,45 @@ SBY 12:00:00 [proof] report stored in engine_0/summary.txt
     assert "uart_start_seen" in result["property_ids"]
     assert "engine_0/trace.vcd" in result["counterexample_paths"]
     assert "engine_0/summary.txt" in result["report_paths"]
+
+
+def test_adapter_parser_handles_realistic_tool_output_shapes() -> None:
+    samples = {
+        "verilator": (
+            VerilatorAdapter(),
+            "%Error: rtl/uart_rx.sv:42:13: syntax error, unexpected endmodule\n"
+            "%Warning-WIDTH: rtl/uart_rx.sv:55:21: Operator ADD expects 8 bits on the RHS\n",
+        ),
+        "iverilog": (
+            IcarusAdapter(),
+            "rtl/fifo.sv:17: syntax error\n"
+            "rtl/fifo.sv:18: error: malformed statement\n",
+        ),
+        "slang": (
+            SlangAdapter(),
+            "error: rtl/counter.sv:9:5: use of undeclared identifier 'next_count'\n",
+        ),
+        "verible": (
+            VeribleAdapter(),
+            "rtl/top.sv:12:7: syntax error at token \"assign\"\n",
+        ),
+        "symbiyosys": (
+            SymbiYosysAdapter(),
+            "Assert failed in p_ready_when_valid at rtl/uart_tx.sv:88: counterexample generated\n",
+        ),
+    }
+
+    parsed = {name: adapter.parse_output(f"run_{name}", text) for name, (adapter, text) in samples.items()}
+
+    assert [obs.signature for obs in parsed["verilator"]] == ["SV_EXPECTED_ENDMODULE", "SV_WIDTH_WARNING"]
+    assert (parsed["verilator"][0].file or "").replace("\\", "/") == "rtl/uart_rx.sv"
+    assert parsed["verilator"][0].line == 42
+    assert parsed["verilator"][1].severity == "warning"
+    assert [obs.signature for obs in parsed["iverilog"]] == ["SV_GENERIC_SYNTAX_ERROR", "SV_MALFORMED_STATEMENT"]
+    assert parsed["slang"][0].signature == "SV_UNKNOWN_IDENTIFIER"
+    assert parsed["verible"][0].signature == "SV_GENERIC_SYNTAX_ERROR"
+    assert parsed["symbiyosys"][0].signature == "ASSERTION_FAILURE"
+    assert (parsed["symbiyosys"][0].file or "").replace("\\", "/") == "rtl/uart_tx.sv"
 
 
 def test_iverilog_adapter_runs_compile_and_run(monkeypatch, work_root: Path) -> None:

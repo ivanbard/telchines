@@ -1,0 +1,50 @@
+{
+  "benchmark_id": "sva_uart_rx",
+  "task_type": "sva",
+  "title": "Generate grounded UART RX assertions",
+  "fixture_root": "benchmarks/assets/sva_uart_rx",
+  "config": {
+    "provider": "sva-local",
+    "spec_path": "docs/uart.md",
+    "rtl_path": "rtl/uart_rx.sv",
+    "model_policy": {
+      "default_provider_by_capability": {
+        "repair": "heuristic",
+        "generation": "sva-local"
+      },
+      "providers": {
+        "heuristic": {
+          "kind": "heuristic",
+          "capabilities": [
+            "repair",
+            "generation"
+          ]
+        },
+        "sva-local": {
+          "kind": "local_command",
+          "capabilities": [
+            "generation"
+          ],
+          "command": "__python__",
+          "args": [
+            "tools/local_sva_provider.py"
+          ],
+          "timeout_seconds": 5
+        }
+      }
+    }
+  },
+  "scoring": {
+    "expected_validation": "passed",
+    "min_properties": 1,
+    "expected_property_names": [
+      "p_start_seen_after_start_bit"
+    ],
+    "expected_citations": [
+      "docs/uart.md"
+    ],
+    "min_property_name_match_rate": 1.0,
+    "min_citation_match_rate": 1.0
+  },
+  "schema_version": "0.1"
+}

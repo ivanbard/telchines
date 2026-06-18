@@ -59,3 +59,16 @@ jobs:
 
       - name: Check distribution metadata
         run: python -m twine check dist/*
+
+      - name: Smoke test built wheel
+        run: |
+          python -m venv .wheel-smoke
+          . .wheel-smoke/bin/activate
+          pip install dist/*.whl
+          tel --version
+          tel --help
+          mkdir wheel-smoke-project
+          cd wheel-smoke-project
+          tel project init .
+          tel index
+          tel eval run

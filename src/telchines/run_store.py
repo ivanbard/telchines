@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -21,7 +22,7 @@ from telchines.models import (
     WaveformSummary,
     WaveformTransition,
 )
-from telchines.utils import dataclass_to_dict, ensure_directory, read_json, write_json
+from telchines.utils import dataclass_to_dict, ensure_directory, read_json, redact_sensitive, write_json
 
 
 class RunStore:
@@ -49,8 +50,28 @@ class RunStore:
         return VerificationRun(**payload)
 
     def list_runs(self) -> list[VerificationRun]:
-        runs = [self.load_run(path.stem) for path in sorted(self.runs_dir.glob("*.json"))]
+        runs, _ = self._load_runs_with_issues()
         return sorted(runs, key=lambda run: run.started_at, reverse=True)
+
+    def list_run_load_issues(self) -> list[dict[str, str]]:
+        _, issues = self._load_runs_with_issues()
+        return issues
+
+    def _load_runs_with_issues(self) -> tuple[list[VerificationRun], list[dict[str, str]]]:
+        runs: list[VerificationRun] = []
+        issues: list[dict[str, str]] = []
+        for path in sorted(self.runs_dir.glob("*.json")):
+            try:
+                runs.append(self.load_run(path.stem))
+            except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+                issues.append(
+                    {
+                        "run_id": path.stem,
+                        "path": str(path.relative_to(self.root)).replace("\\", "/"),
+                        "error": f"{exc.__class__.__name__}: {exc}",
+                    }
+                )
+        return runs, issues
 
     def list_runs_by_workflow(self, workflow_type: str) -> list[VerificationRun]:
         return [run for run in self.list_runs() if run.workflow_type == workflow_type]
@@ -75,7 +96,7 @@ class RunStore:
 
     def save_task_artifact(self, task_id: str, name: str, payload: dict[str, Any]) -> Path:
         path = self.task_artifacts_dir / f"{task_id}_{name}.json"
-        write_json(path, payload)
+        write_json(path, redact_sensitive(payload))
         return path
 
     def save_patch(self, patch: PatchProposal) -> None:

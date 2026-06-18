@@ -87,3 +87,60 @@ def test_retrieval_merges_external_corpus_with_provenance(sample_project: Path) 
     assert external_only.hits[0].ingested_at
     assert any(hit.source_domain == "external" for hit in mixed.hits)
     assert mixed.hits[0].source_domain == "project"
+
+
+def test_retrieval_status_clean_and_include_exclude_patterns(sample_project: Path) -> None:
+    config_path = sample_project / ".tel" / "config.json"
+    payload = read_json(config_path)
+    payload["retrieval"]["include_patterns"] = ["rtl/**", "docs/**"]
+    payload["retrieval"]["exclude_patterns"] = ["docs/spec.md"]
+    write_json(config_path, payload)
+
+    config = ProjectConfig.load(sample_project)
+    retrieval = RetrievalService(config)
+    missing = retrieval.status()
+    assert missing["status"] == "stale"
+    assert missing["project"]["exists"] is False
+
+    chunk_count = retrieval.build_index()
+    assert chunk_count > 0
+    indexed = read_json(sample_project / ".tel" / "index" / "index.json")
+    indexed_paths = {chunk["path"] for chunk in indexed["chunks"]}
+    assert "docs/spec.md" not in indexed_paths
+    assert all(path.startswith(("rtl/", "docs/")) for path in indexed_paths)
+
+    fresh = retrieval.status()
+    assert fresh["status"] == "fresh"
+    uart_doc = sample_project / "docs" / "uart.md"
+    uart_doc.write_text(uart_doc.read_text(encoding="utf-8") + "\nNew stale marker.\n", encoding="utf-8")
+    stale = retrieval.status()
+    assert stale["status"] == "stale"
+    assert stale["project"]["stale_source_count"] == 1
+
+    cleaned = retrieval.clean()
+    assert cleaned["removed_count"] == 2
+    assert not (sample_project / ".tel" / "index").exists()
+    assert not (sample_project / ".tel" / "external-index").exists()
+
+
+def test_retrieval_expands_configured_domain_aliases(sample_project: Path) -> None:
+    baseline_config = ProjectConfig.load(sample_project)
+    baseline_retrieval = RetrievalService(baseline_config)
+    baseline_retrieval.build_index()
+    baseline = baseline_retrieval.search("framing pulse", mode="generation")
+    assert baseline.hits == []
+
+    config_path = sample_project / ".tel" / "config.json"
+    payload = read_json(config_path)
+    payload["retrieval"]["aliases"] = {"framing pulse": ["start bit", "serial_i"]}
+    write_json(config_path, payload)
+
+    config = ProjectConfig.load(sample_project)
+    retrieval = RetrievalService(config)
+    assert retrieval.status()["alias_count"] == 1
+    aliased = retrieval.search("framing pulse", mode="generation")
+
+    assert aliased.hits
+    assert any(hit.path.endswith(("uart.md", "uart_rx.sv")) for hit in aliased.hits)
+    assert aliased.metadata["query_aliases"] == {"framing pulse": ["start bit", "serial_i"]}
+    assert "serial_i" in aliased.metadata["expanded_query_tokens"]

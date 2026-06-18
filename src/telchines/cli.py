@@ -8,13 +8,18 @@ import typer
 from telchines.errors import AdapterExecutionError, ConfigError, ProviderError
 from telchines import __version__
 from telchines.operations import (
+    check_adapters as check_adapters_op,
+    check_providers as check_providers_op,
+    clean_index as clean_index_op,
     coverage_plan as coverage_plan_op,
+    doctor_runs as doctor_runs_op,
     dump_json,
     format_coverage_human,
     format_triage_ci,
     format_triage_human,
     gen_cocotb as gen_cocotb_op,
     gen_sva as gen_sva_op,
+    index_status as index_status_op,
     index_project as index_project_op,
     inspect_waveform as inspect_waveform_op,
     initialize_project,
@@ -23,9 +28,12 @@ from telchines.operations import (
     list_runs as list_runs_op,
     list_waveforms as list_waveforms_op,
     load_eval_report,
+    privacy_report as privacy_report_op,
+    purge_artifacts as purge_artifacts_op,
     repair as repair_op,
     replay_run as replay_run_op,
     retrieve_query,
+    review_artifact as review_artifact_op,
     run_eval as run_eval_op,
     show_run as show_run_op,
     show_waveform as show_waveform_op,
@@ -36,17 +44,23 @@ from telchines.shell import run_shell
 
 app = typer.Typer(help="Telchines CLI", invoke_without_command=True, add_completion=False)
 project_app = typer.Typer(no_args_is_help=True)
+index_app = typer.Typer(invoke_without_command=True)
 runs_app = typer.Typer(no_args_is_help=True)
 eval_app = typer.Typer(no_args_is_help=True)
 adapters_app = typer.Typer(no_args_is_help=True)
 providers_app = typer.Typer(no_args_is_help=True)
 waveforms_app = typer.Typer(no_args_is_help=True)
+artifacts_app = typer.Typer(no_args_is_help=True)
+doctor_app = typer.Typer(no_args_is_help=True)
 app.add_typer(project_app, name="project")
+app.add_typer(index_app, name="index")
 app.add_typer(runs_app, name="runs")
 app.add_typer(eval_app, name="eval")
 app.add_typer(adapters_app, name="adapters")
 app.add_typer(providers_app, name="providers")
 app.add_typer(waveforms_app, name="waveforms")
+app.add_typer(artifacts_app, name="artifacts")
+app.add_typer(doctor_app, name="doctor")
 
 
 def _fail(message: str, exit_code: int = 2) -> None:
@@ -78,8 +92,14 @@ def main(
 
 
 @app.command("shell")
-def shell_command() -> None:
-    run_shell(Path.cwd())
+def shell_command(
+    plain: bool = typer.Option(False, "--plain", help="Run the plain stdin/stdout shell."),
+    fullscreen: bool = typer.Option(False, "--fullscreen", help="Run the prompt_toolkit full-screen shell."),
+) -> None:
+    if plain and fullscreen:
+        _fail("--plain and --fullscreen cannot be used together")
+    mode = "plain" if plain else "fullscreen" if fullscreen else "auto"
+    run_shell(Path.cwd(), mode=mode)
 
 
 @project_app.command("init")
@@ -91,13 +111,34 @@ def project_init(path: Path = typer.Argument(Path(".")), name: Optional[str] = t
     typer.echo(f"initialized project {config.project.project_id} at {config.project.root_path}")
 
 
-@app.command("index")
-def index_project() -> None:
+@index_app.callback()
+def index_project(ctx: typer.Context) -> None:
+    if ctx.invoked_subcommand is not None:
+        return
     try:
         chunk_count = index_project_op()
     except ConfigError as exc:
         _fail(f"config error: {exc}")
     typer.echo(f"indexed {chunk_count} chunks")
+    raise typer.Exit()
+
+
+@index_app.command("status")
+def index_status() -> None:
+    try:
+        payload = index_status_op()
+    except ConfigError as exc:
+        _fail(f"config error: {exc}")
+    typer.echo(dump_json(payload))
+
+
+@index_app.command("clean")
+def index_clean() -> None:
+    try:
+        payload = clean_index_op()
+    except ConfigError as exc:
+        _fail(f"config error: {exc}")
+    typer.echo(dump_json(payload))
 
 
 @app.command("retrieve")
@@ -118,6 +159,17 @@ def list_runs() -> None:
     typer.echo(dump_json(payload))
 
 
+@runs_app.command("doctor")
+def doctor_runs() -> None:
+    try:
+        payload = doctor_runs_op()
+    except ConfigError as exc:
+        _fail(f"config error: {exc}")
+    typer.echo(dump_json(payload))
+    if payload.get("status") == "warning":
+        raise typer.Exit(code=1)
+
+
 @runs_app.command("show")
 def show_run(run_id: str) -> None:
     try:
@@ -128,14 +180,19 @@ def show_run(run_id: str) -> None:
 
 
 @runs_app.command("replay")
-def replay_run(run_id: str) -> None:
+def replay_run(
+    run_id: str,
+    yes: bool = typer.Option(False, "--yes", help="Execute the stored replay command. Without this, only show what would run."),
+) -> None:
     try:
-        payload = replay_run_op(None, run_id)
+        payload = replay_run_op(None, run_id, confirm=yes)
     except ConfigError as exc:
         _fail(f"config error: {exc}")
     except ValueError as exc:
         _fail(str(exc))
     typer.echo(dump_json(payload))
+    if payload.get("status") == "confirmation_required":
+        raise typer.Exit(code=1)
 
 
 @app.command("repair")
@@ -242,6 +299,51 @@ def providers_list() -> None:
     typer.echo(dump_json(payload))
 
 
+@providers_app.command("check")
+def providers_check(name: Optional[str] = typer.Argument(None), offline: bool = typer.Option(False, "--offline")) -> None:
+    try:
+        payload = check_providers_op(None, provider_name=name, live=not offline)
+    except ConfigError as exc:
+        _fail(f"config error: {exc}")
+    typer.echo(dump_json(payload))
+    if payload["status"] != "passed":
+        raise typer.Exit(code=1)
+
+
+@artifacts_app.command("purge")
+def artifacts_purge(
+    yes: bool = typer.Option(False, "--yes", help="Actually delete artifact files. Without this, only report what would be removed."),
+) -> None:
+    try:
+        payload = purge_artifacts_op(None, dry_run=not yes)
+    except ConfigError as exc:
+        _fail(f"config error: {exc}")
+    typer.echo(dump_json(payload))
+
+
+@artifacts_app.command("review")
+def artifacts_review(
+    reference: str = typer.Argument(..., help="Generation candidate id, validation run id, or generated artifact path."),
+    max_diff_lines: int = typer.Option(200, "--max-diff-lines", help="Maximum unified diff lines to include in JSON output."),
+) -> None:
+    try:
+        payload = review_artifact_op(None, reference=reference, max_diff_lines=max_diff_lines)
+    except ConfigError as exc:
+        _fail(f"config error: {exc}")
+    except ValueError as exc:
+        _fail(str(exc))
+    typer.echo(dump_json(payload))
+
+
+@doctor_app.command("privacy")
+def doctor_privacy() -> None:
+    try:
+        payload = privacy_report_op()
+    except ConfigError as exc:
+        _fail(f"config error: {exc}")
+    typer.echo(dump_json(payload))
+
+
 @adapters_app.command("list")
 def adapters_list(category: str | None = typer.Option(None, "--category")) -> None:
     try:
@@ -249,6 +351,19 @@ def adapters_list(category: str | None = typer.Option(None, "--category")) -> No
     except ConfigError as exc:
         _fail(f"config error: {exc}")
     typer.echo(dump_json(payload))
+
+
+@adapters_app.command("check")
+def adapters_check(name: Optional[str] = typer.Argument(None), category: str | None = typer.Option(None, "--category")) -> None:
+    try:
+        payload = check_adapters_op(None, adapter_name=name, category=category)
+    except ConfigError as exc:
+        _fail(f"config error: {exc}")
+    except KeyError as exc:
+        _fail(f"unknown adapter: {exc.args[0]}")
+    typer.echo(dump_json(payload))
+    if any(item["status"] != "passed" for item in payload["adapters"]):
+        raise typer.Exit(code=1)
 
 
 @waveforms_app.command("list")

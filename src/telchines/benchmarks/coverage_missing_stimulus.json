@@ -1,0 +1,28 @@
+{
+  "benchmark_id": "coverage_missing_stimulus",
+  "task_type": "coverage",
+  "title": "Classify a stimulus-oriented coverage gap",
+  "fixture_root": "benchmarks/assets/coverage_missing_stimulus",
+  "config": {
+    "report_path": "cov/coverage.json",
+    "rtl_paths": [
+      "rtl/uart_rx.sv"
+    ],
+    "spec_paths": [
+      "docs/uart.md"
+    ]
+  },
+  "scoring": {
+    "expected_classifications": [
+      "missing_stimulus"
+    ],
+    "expected_item_ids": [
+      "rx_start_bit_bin"
+    ],
+    "min_recommendations": 1,
+    "min_classification_matches": 1,
+    "min_item_matches": 1,
+    "min_evidence_citations": 1
+  },
+  "schema_version": "0.1"
+}

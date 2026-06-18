@@ -2,16 +2,18 @@
 
 ## Install
 
-```bash
-pip install telchines
-```
-
-Or from source:
+Use the source install while PyPI trusted publishing is being finalized:
 
 ```bash
 python -m venv .venv
 . .venv/Scripts/activate
 pip install -e .[dev]
+```
+
+After the PyPI publisher is configured, the package install path will be:
+
+```bash
+pip install telchines
 ```
 
 Verify the install:
@@ -35,14 +37,20 @@ This creates `.tel/config.json` and the local storage directories used for index
 
 ```bash
 tel index
+tel index status
 ```
 
 Indexing scans the current project for RTL, docs, and logs and writes the retrieval index under `.tel/index/`.
+
+Use `tel index status` to inspect freshness, chunk counts, and missing/stale/deleted source counts. Use `tel index clean` to remove the local project and external retrieval indexes before rebuilding.
+
+For project-specific vocabulary, add `retrieval.aliases` in `.tel/config.json` so searches for team nicknames can expand to signal names or protocol terms. See `docs/external-retrieval-policy.md`.
 
 ## Inspect Providers
 
 ```bash
 tel providers list
+tel providers check heuristic
 ```
 
 The default project uses the built-in `heuristic` provider for both `repair` and `generation`.
@@ -67,11 +75,15 @@ Generate assertions:
 tel gen-sva --spec docs/uart.md --rtl rtl/uart_rx.sv
 ```
 
+The JSON result includes `validation_mode`, `validation_status`, and `validation_limitations`. Built-in SVA validation checks structure and obvious bind references; when Slang or Verilator is enabled and available, Telchines also runs adapter-backed parser/lint validation.
+
 Generate a cocotb scaffold:
 
 ```bash
 tel gen-cocotb --dut rtl/uart_rx.sv --spec docs/uart.md --intent "smoke the start-bit path"
 ```
+
+The default cocotb validation mode is `python_syntax_plus_structure`, which runs `py_compile` and confirms basic cocotb test shape. Naming and output directories can be configured in `.tel/config.json` under `generation.sva` and `generation.cocotb`; see `docs/generated-artifacts.md`.
 
 Plan coverage closure:
 
@@ -83,6 +95,7 @@ tel coverage-plan --report cov/coverage.json --rtl rtl/uart_rx.sv --spec docs/ua
 
 ```bash
 tel
+tel shell --plain
 ```
 
 Useful starting commands:
@@ -90,8 +103,23 @@ Useful starting commands:
 ```text
 /help
 /providers
+/providers check heuristic
 /index
+/index status
 /triage --logs logs/regressions
 /gen-sva --spec docs/uart.md --rtl rtl/uart_rx.sv
 /exit
 ```
+
+## Privacy And Artifacts
+
+```bash
+tel doctor privacy
+tel artifacts purge
+tel artifacts purge --yes
+tel artifacts review CANDIDATE_OR_VALIDATION_RUN_ID
+tel runs replay RUN_ID
+tel runs replay RUN_ID --yes
+```
+
+The purge and replay commands run as safe previews unless `--yes` is supplied. `artifacts review` compares the saved generated draft to the current workspace file so human edits stay visible.

@@ -1,0 +1,17 @@
+{
+  "benchmark_id": "repair_no_fix",
+  "task_type": "repair",
+  "title": "No safe patch is available for unsupported syntax",
+  "fixture_root": "benchmarks/assets/repair_no_fix",
+  "config": {
+    "validator_command": [
+      "tools/fixture_lint.py",
+      "rtl/broken_logic.sv"
+    ],
+    "target_file": "rtl/broken_logic.sv"
+  },
+  "scoring": {
+    "expected": "no_patch"
+  },
+  "schema_version": "0.1"
+}

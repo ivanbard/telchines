@@ -11,8 +11,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from typer.testing import CliRunner
 
-from telchines.adapters.base import ToolAdapter
+from telchines.adapters.base import AdapterExecution, ToolAdapter
 from telchines.cli import app
+from telchines.config import ProjectConfig
+from telchines.models import ToolReference, VerificationRun
+from telchines.run_store import RunStore
 from telchines.utils import read_json, write_json
 
 try:
@@ -33,6 +36,44 @@ class FixtureRegistry:
     def get(self, name: str) -> FixtureAdapter:
         assert name == "fixture"
         return FixtureAdapter()
+
+
+class FixtureSvaValidationAdapter(ToolAdapter):
+    name = "fixture-sva"
+    kind = "simulator"
+    category = "simulation"
+    supported_workflows = ("generation_validation",)
+
+    def is_available(self) -> bool:
+        return True
+
+    def build_command(self, project_root: Path, files: list[str], extra_args: list[str] | None = None) -> list[str]:
+        return [sys.executable, "-c", "print('fixture sva validation passed')", *files]
+
+    def run(self, run_id: str, project_root: Path, files: list[str], artifacts_dir: Path, extra_args: list[str] | None = None) -> AdapterExecution:
+        log_path = artifacts_dir / f"{run_id}.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_path.write_text("fixture sva validation passed\n", encoding="utf-8")
+        return AdapterExecution(
+            command=self.build_command(project_root, files, extra_args),
+            cwd=str(project_root),
+            exit_code=0,
+            stdout="fixture sva validation passed\n",
+            stderr="",
+            log_path=str(log_path),
+            started_at="2026-04-13T00:00:00+00:00",
+            finished_at="2026-04-13T00:00:00+00:00",
+            observations=[],
+            summary="fixture sva validation passed",
+            artifacts={"log_path": str(log_path)},
+            result={"status": "passed", "validation_mode": "fixture"},
+        )
+
+
+class FixtureSvaRegistry:
+    def get(self, name: str) -> FixtureSvaValidationAdapter:
+        assert name == "fixture-sva"
+        return FixtureSvaValidationAdapter()
 
 
 def _set_model_policy(project_root: Path, model_policy: dict[str, object]) -> None:
@@ -68,7 +109,24 @@ sys.stdout.write(json.dumps(response))
     )
 
 
-def _write_local_sva_provider(project_root: Path, *, invalid: bool = False) -> None:
+def _write_local_check_provider(project_root: Path, *, exit_code: int = 0) -> None:
+    provider_script = project_root / "tools" / "local_check_provider.py"
+    provider_script.write_text(
+        f"""from __future__ import annotations
+import json
+import sys
+
+payload = json.loads(sys.stdin.read())
+if {exit_code} != 0:
+    sys.stderr.write("local check failed")
+    raise SystemExit({exit_code})
+sys.stdout.write("provider log line\\n" + json.dumps({{"status": "ok", "workflow_type": payload.get("workflow_type")}}))
+""",
+        encoding="utf-8",
+    )
+
+
+def _write_local_sva_provider(project_root: Path, *, invalid: bool = False, bind_signal: str = "start_seen") -> None:
     provider_script = project_root / "tools" / "local_sva_provider.py"
     candidate_content = """module uart_rx_assertions(
   input logic clk,
@@ -89,9 +147,9 @@ bind uart_rx uart_rx_assertions uart_rx_assertions_i(
   .clk(clk),
   .rst_n(rst_n),
   .serial_i(serial_i),
-  .start_seen(start_seen)
+  .start_seen(%s)
 );
-"""
+""" % bind_signal
     if invalid:
         candidate_content = """module uart_rx_assertions(
   input logic clk,
@@ -236,6 +294,29 @@ def test_cli_index_retrieve_and_repair(sample_project: Path, monkeypatch) -> Non
     assert task_payload["metadata"]["replay_artifact"]
 
 
+def test_cli_index_status_and_clean(sample_project: Path, monkeypatch) -> None:
+    monkeypatch.chdir(sample_project)
+    status_before = runner.invoke(app, ["index", "status"])
+    assert status_before.exit_code == 0
+    before_payload = json.loads(status_before.stdout)
+    assert before_payload["status"] == "stale"
+
+    result = runner.invoke(app, ["index"])
+    assert result.exit_code == 0
+    assert "indexed" in result.stdout
+
+    status_after = runner.invoke(app, ["index", "status"])
+    assert status_after.exit_code == 0
+    after_payload = json.loads(status_after.stdout)
+    assert after_payload["status"] == "fresh"
+
+    clean = runner.invoke(app, ["index", "clean"])
+    assert clean.exit_code == 0
+    clean_payload = json.loads(clean.stdout)
+    assert clean_payload["removed_count"] == 2
+    assert not (sample_project / ".tel" / "index").exists()
+
+
 def test_cli_repair_unknown_identifier(sample_project: Path, monkeypatch) -> None:
     broken = sample_project / "rtl" / "broken_counter.sv"
     broken.write_text(
@@ -337,6 +418,70 @@ def test_cli_waveform_commands(sample_project: Path, monkeypatch) -> None:
     inspect_payload = json.loads(inspect_result.stdout)
     assert inspect_payload["signal_name"] == "start_seen"
     assert inspect_payload["transitions"]
+
+
+def test_cli_runs_replay_requires_confirmation(sample_project: Path, monkeypatch) -> None:
+    config = ProjectConfig.load(sample_project)
+    store = RunStore(config)
+    marker = sample_project / "replayed.txt"
+    run = VerificationRun(
+        run_id="run_replay_confirm",
+        project_id=config.project.project_id,
+        commit_sha="workspace",
+        workflow_type="compile_repair",
+        tool=ToolReference(kind="validator", name="fixture"),
+        inputs={"files": []},
+        status="failed",
+        started_at="2026-04-13T00:00:00+00:00",
+        replay_command=[sys.executable, "-c", "from pathlib import Path; Path('replayed.txt').write_text('ok', encoding='utf-8')"],
+    )
+    store.save_run(run)
+    monkeypatch.chdir(sample_project)
+
+    dry_run = runner.invoke(app, ["runs", "replay", "run_replay_confirm"])
+    assert dry_run.exit_code == 1
+    dry_payload = json.loads(dry_run.stdout)
+    assert dry_payload["status"] == "confirmation_required"
+    assert not marker.exists()
+
+    executed = runner.invoke(app, ["runs", "replay", "run_replay_confirm", "--yes"])
+    assert executed.exit_code == 0
+    executed_payload = json.loads(executed.stdout)
+    assert executed_payload["status"] == "executed"
+    assert executed_payload["exit_code"] == 0
+    assert marker.read_text(encoding="utf-8") == "ok"
+
+
+def test_cli_runs_doctor_reports_corrupt_run_records(sample_project: Path, monkeypatch) -> None:
+    config = ProjectConfig.load(sample_project)
+    store = RunStore(config)
+    store.save_run(
+        VerificationRun(
+            run_id="run_good",
+            project_id=config.project.project_id,
+            commit_sha="workspace",
+            workflow_type="compile_repair",
+            tool=ToolReference(kind="simulator", name="verilator"),
+            inputs={"files": ["rtl/broken_counter.sv"]},
+            status="passed",
+            started_at="2026-04-07T00:00:00+00:00",
+        )
+    )
+    (store.runs_dir / "run_corrupt.json").write_text("{not json", encoding="utf-8")
+    monkeypatch.chdir(sample_project)
+
+    doctor = runner.invoke(app, ["runs", "doctor"])
+    assert doctor.exit_code == 1
+    payload = json.loads(doctor.stdout)
+    assert payload["status"] == "warning"
+    assert payload["run_count"] == 1
+    assert payload["issue_count"] == 1
+    assert payload["issues"][0]["path"] == "runs/run_corrupt.json"
+
+    listed = runner.invoke(app, ["runs", "list"])
+    assert listed.exit_code == 0
+    runs = json.loads(listed.stdout)
+    assert [run["run_id"] for run in runs] == ["run_good"]
 
 
 def test_cli_reports_project_config_error(work_root: Path, monkeypatch) -> None:
@@ -542,6 +687,140 @@ def test_cli_lists_providers(sample_project: Path, monkeypatch) -> None:
     assert local["allowed"] is True
 
 
+def test_cli_checks_heuristic_provider(sample_project: Path, monkeypatch) -> None:
+    monkeypatch.chdir(sample_project)
+    result = runner.invoke(app, ["providers", "check", "heuristic"])
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "passed"
+    assert payload["providers"][0]["checks"]["transport"]["mode"] == "builtin"
+
+
+def test_cli_checks_local_command_provider(sample_project: Path, monkeypatch) -> None:
+    _write_local_check_provider(sample_project)
+    _set_model_policy(sample_project, _local_model_policy(sys.executable, "tools/local_check_provider.py"))
+    monkeypatch.chdir(sample_project)
+    result = runner.invoke(app, ["providers", "check", "local-test"])
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["providers"][0]["checks"]["transport"]["parsed_keys"] == ["status", "workflow_type"]
+
+
+def test_cli_checks_local_command_provider_failure(sample_project: Path, monkeypatch) -> None:
+    _write_local_check_provider(sample_project, exit_code=3)
+    _set_model_policy(sample_project, _local_model_policy(sys.executable, "tools/local_check_provider.py"))
+    monkeypatch.chdir(sample_project)
+    result = runner.invoke(app, ["providers", "check", "local-test"])
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "failed"
+    assert "exit code 3" in payload["providers"][0]["summary"]
+
+
+def test_cli_checks_openai_compatible_provider(sample_project: Path, monkeypatch) -> None:
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):  # noqa: N802
+            length = int(self.headers["Content-Length"])
+            _ = self.rfile.read(length)
+            response = {"choices": [{"message": {"content": "```json\n{\"status\":\"ok\"}\n```"}}]}
+            encoded = json.dumps(response).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(encoded)))
+            self.end_headers()
+            self.wfile.write(encoded)
+
+        def log_message(self, format, *args):  # noqa: A003
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        _set_model_policy(sample_project, _remote_model_policy(f"http://127.0.0.1:{server.server_address[1]}", "TELCHINES_TEST_API_KEY"))
+        monkeypatch.setenv("TELCHINES_TEST_API_KEY", "test-token")
+        monkeypatch.chdir(sample_project)
+        result = runner.invoke(app, ["providers", "check", "mock-remote"])
+        assert result.exit_code == 0
+        payload = json.loads(result.stdout)
+        assert payload["providers"][0]["checks"]["transport"]["mode"] == "openai_compatible"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_cli_checks_provider_policy_block(sample_project: Path, monkeypatch) -> None:
+    config_path = sample_project / ".tel" / "config.json"
+    payload = read_json(config_path)
+    payload["model_mode"] = "local"
+    payload["project"]["model_policy"] = _remote_model_policy("http://127.0.0.1:9", "TELCHINES_TEST_API_KEY")
+    write_json(config_path, payload)
+    monkeypatch.chdir(sample_project)
+    result = runner.invoke(app, ["providers", "check", "mock-remote"])
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)
+    assert payload["providers"][0]["status"] == "blocked"
+
+
+def _set_generation_config(project_root: Path, generation: dict[str, object]) -> None:
+    config_path = project_root / ".tel" / "config.json"
+    payload = read_json(config_path)
+    payload["generation"] = generation
+    write_json(config_path, payload)
+
+
+def test_cli_checks_adapters_reports_missing_binary(sample_project: Path, monkeypatch) -> None:
+    monkeypatch.chdir(sample_project)
+    monkeypatch.setattr("telchines.adapters.base.shutil.which", lambda _: None)
+    monkeypatch.setattr("telchines.operations.shutil.which", lambda _: None)
+    result = runner.invoke(app, ["adapters", "check", "iverilog"])
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)
+    assert payload["adapters"][0]["status"] == "missing"
+    assert payload["adapters"][0]["missing_binaries"] == ["iverilog", "vvp"]
+
+
+def test_cli_doctor_privacy_reports_local_command_risks(sample_project: Path, monkeypatch) -> None:
+    config_path = sample_project / ".tel" / "config.json"
+    payload = read_json(config_path)
+    payload["project"]["model_policy"] = _local_model_policy(sys.executable, "tools/local_provider.py")
+    payload["project"]["model_policy"]["providers"]["local-test"]["env"] = {"TELCHINES_API_KEY": "literal-secret"}
+    write_json(config_path, payload)
+    monkeypatch.chdir(sample_project)
+    result = runner.invoke(app, ["doctor", "privacy"])
+    assert result.exit_code == 0
+    report = json.loads(result.stdout)
+    assert report["status"] == "warning"
+    assert any("local_command" in item["summary"] for item in report["risks"])
+    assert any("TELCHINES_API_KEY" in item["summary"] for item in report["risks"])
+
+
+def test_cli_artifacts_purge_dry_run_and_apply(sample_project: Path, monkeypatch) -> None:
+    artifact = sample_project / ".tel" / "artifacts" / "generated.txt"
+    task_artifact = sample_project / ".tel" / "task-artifacts" / "request.json"
+    artifact.parent.mkdir(parents=True, exist_ok=True)
+    task_artifact.parent.mkdir(parents=True, exist_ok=True)
+    artifact.write_text("generated", encoding="utf-8")
+    task_artifact.write_text("{}", encoding="utf-8")
+    monkeypatch.chdir(sample_project)
+
+    dry_run = runner.invoke(app, ["artifacts", "purge"])
+    assert dry_run.exit_code == 0
+    dry_payload = json.loads(dry_run.stdout)
+    assert dry_payload["dry_run"] is True
+    assert dry_payload["file_count"] == 2
+    assert artifact.exists()
+
+    purged = runner.invoke(app, ["artifacts", "purge", "--yes"])
+    assert purged.exit_code == 0
+    purge_payload = json.loads(purged.stdout)
+    assert purge_payload["status"] == "purged"
+    assert not artifact.exists()
+    assert not task_artifact.exists()
+    assert (sample_project / ".tel" / "artifacts").is_dir()
+    assert (sample_project / ".tel" / "task-artifacts").is_dir()
+
+
 def test_cli_lists_adapters(sample_project: Path, monkeypatch) -> None:
     monkeypatch.chdir(sample_project)
     result = runner.invoke(app, ["adapters", "list", "--category", "formal"])
@@ -559,6 +838,7 @@ def test_cli_lists_adapters(sample_project: Path, monkeypatch) -> None:
 def test_cli_gen_sva_with_local_command_provider(sample_project: Path, monkeypatch) -> None:
     _write_local_sva_provider(sample_project)
     _set_model_policy(sample_project, _generation_model_policy(sys.executable, "tools/local_sva_provider.py"))
+    _set_generation_config(sample_project, {"sva": {"validation_adapters": []}})
     monkeypatch.chdir(sample_project)
     runner.invoke(app, ["index"])
     result = runner.invoke(app, ["gen-sva", "--spec", "docs/uart.md", "--rtl", "rtl/uart_rx.sv"])
@@ -567,6 +847,8 @@ def test_cli_gen_sva_with_local_command_provider(sample_project: Path, monkeypat
     assert payload["provider"] == "sva-local"
     assert payload["status"] == "validated"
     assert payload["validation_status"] == "passed"
+    assert payload["validation_mode"] == "builtin_structural"
+    assert payload["validation_limitations"]
     assert payload["artifact_path"].endswith("uart_rx_assertions.sv")
     assert payload["property_summaries"][0]["name"] == "p_start_seen_after_start_bit"
     artifact_path = sample_project / payload["artifact_path"]
@@ -577,6 +859,7 @@ def test_cli_gen_sva_with_local_command_provider(sample_project: Path, monkeypat
 def test_cli_gen_sva_reports_validation_failure(sample_project: Path, monkeypatch) -> None:
     _write_local_sva_provider(sample_project, invalid=True)
     _set_model_policy(sample_project, _generation_model_policy(sys.executable, "tools/local_sva_provider.py"))
+    _set_generation_config(sample_project, {"sva": {"validation_adapters": []}})
     monkeypatch.chdir(sample_project)
     runner.invoke(app, ["index"])
     result = runner.invoke(app, ["gen-sva", "--spec", "docs/uart.md", "--rtl", "rtl/uart_rx.sv"])
@@ -585,6 +868,42 @@ def test_cli_gen_sva_reports_validation_failure(sample_project: Path, monkeypatc
     assert payload["status"] == "rejected"
     assert payload["validation_status"] == "failed"
     assert "validation failed" in payload["validation_summary"].lower()
+
+
+def test_cli_gen_sva_rejects_unknown_bind_signal(sample_project: Path, monkeypatch) -> None:
+    _write_local_sva_provider(sample_project, bind_signal="missing_signal")
+    _set_model_policy(sample_project, _generation_model_policy(sys.executable, "tools/local_sva_provider.py"))
+    _set_generation_config(sample_project, {"sva": {"validation_adapters": []}})
+    monkeypatch.chdir(sample_project)
+    runner.invoke(app, ["index"])
+    result = runner.invoke(app, ["gen-sva", "--spec", "docs/uart.md", "--rtl", "rtl/uart_rx.sv"])
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "rejected"
+    assert payload["validation_status"] == "failed"
+    assert "unknown DUT signal `missing_signal`" in payload["validation_summary"]
+
+
+def test_cli_gen_sva_uses_available_adapter_validation(sample_project: Path, monkeypatch) -> None:
+    _write_local_sva_provider(sample_project)
+    _set_model_policy(sample_project, _generation_model_policy(sys.executable, "tools/local_sva_provider.py"))
+    _set_generation_config(sample_project, {"sva": {"validation_adapters": ["fixture-sva"]}})
+    config_path = sample_project / ".tel" / "config.json"
+    payload = read_json(config_path)
+    payload["adapters"].append("fixture-sva")
+    write_json(config_path, payload)
+    monkeypatch.setattr("telchines.config.SUPPORTED_ADAPTERS", {"verilator", "iverilog", "slang", "verible", "symbiyosys", "fixture", "fixture-sva"})
+    monkeypatch.setattr("telchines.workflows.gen_sva.AdapterRegistry", FixtureSvaRegistry)
+    monkeypatch.chdir(sample_project)
+    runner.invoke(app, ["index"])
+    result = runner.invoke(app, ["gen-sva", "--spec", "docs/uart.md", "--rtl", "rtl/uart_rx.sv"])
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "validated"
+    assert payload["validation_status"] == "passed"
+    assert payload["validation_mode"] == "adapter_backed"
+    run_payload = read_json(sample_project / ".tel" / "runs" / f"{payload['validation_run_id']}.json")
+    assert run_payload["tool_result"]["validator"] == "fixture-sva"
 
 
 def test_cli_gen_cocotb_with_heuristic_provider(sample_project: Path, monkeypatch) -> None:
@@ -607,6 +926,8 @@ def test_cli_gen_cocotb_with_heuristic_provider(sample_project: Path, monkeypatc
     assert payload["provider"] == "heuristic"
     assert payload["status"] == "validated"
     assert payload["validation_status"] == "passed"
+    assert payload["validation_mode"] == "python_syntax_plus_structure"
+    assert payload["validation_limitations"]
     assert payload["top_module"] == "uart_rx"
     assert payload["artifact_path"].endswith("test_uart_rx.py")
     assert payload["manifest_path"].endswith("uart_rx_cocotb_manifest.json")
@@ -618,6 +939,41 @@ def test_cli_gen_cocotb_with_heuristic_provider(sample_project: Path, monkeypatc
     assert artifact_path.exists()
     assert manifest_path.exists()
     assert "@cocotb.test()" in artifact_path.read_text(encoding="utf-8")
+    manifest = read_json(manifest_path)
+    assert manifest["validation"]["mode"] == "python_syntax_plus_structure"
+
+    unchanged = runner.invoke(app, ["artifacts", "review", payload["candidate_id"]])
+    assert unchanged.exit_code == 0
+    review_payload = json.loads(unchanged.stdout)
+    assert review_payload["status"] == "unchanged"
+    assert review_payload["generated_file"] == payload["artifact_path"]
+
+    artifact_path.write_text(artifact_path.read_text(encoding="utf-8") + "\n# human review note\n", encoding="utf-8")
+    modified = runner.invoke(app, ["artifacts", "review", payload["validation_run_id"], "--max-diff-lines", "20"])
+    assert modified.exit_code == 0
+    modified_payload = json.loads(modified.stdout)
+    assert modified_payload["status"] == "modified"
+    assert "+# human review note" in modified_payload["diff"]
+
+
+def test_cli_gen_cocotb_uses_generation_conventions(sample_project: Path, monkeypatch) -> None:
+    config_path = sample_project / ".tel" / "config.json"
+    payload = read_json(config_path)
+    payload["generation"] = {
+        "cocotb": {
+            "output_dir": ".tel/artifacts/custom-cocotb",
+            "test_file_template": "tb_{module}.py",
+            "manifest_file_template": "{module}_manifest.json",
+        }
+    }
+    write_json(config_path, payload)
+    monkeypatch.chdir(sample_project)
+    runner.invoke(app, ["index"])
+    result = runner.invoke(app, ["gen-cocotb", "--dut", "rtl/uart_rx.sv"])
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["artifact_path"].endswith(".tel/artifacts/custom-cocotb/tb_uart_rx.py")
+    assert payload["manifest_path"].endswith(".tel/artifacts/custom-cocotb/uart_rx_manifest.json")
 
 
 def test_cli_coverage_plan(sample_project: Path, monkeypatch) -> None:
@@ -664,6 +1020,55 @@ def test_cli_shell_supports_explicit_shell_subcommand(sample_project: Path, monk
     monkeypatch.chdir(sample_project)
     result = runner.invoke(app, ["shell"], input="/pwd\n/exit\n")
     assert result.exit_code == 0
+    assert str(sample_project) in result.stdout
+
+
+def test_cli_shell_supports_plain_mode_flag(sample_project: Path, monkeypatch) -> None:
+    monkeypatch.chdir(sample_project)
+    result = runner.invoke(app, ["shell", "--plain"], input="/pwd\n/exit\n")
+    assert result.exit_code == 0
+    assert "mode: plain" in result.stdout
+    assert str(sample_project) in result.stdout
+
+
+def test_cli_plain_shell_subprocess_smoke(sample_project: Path) -> None:
+    env = os.environ.copy()
+    src_root = Path(__file__).resolve().parents[1] / "src"
+    env["PYTHONPATH"] = str(src_root) + os.pathsep + env.get("PYTHONPATH", "")
+    result = subprocess.run(
+        [sys.executable, "-m", "telchines", "shell", "--plain"],
+        cwd=sample_project,
+        input="/pwd\n/providers\n/repair --tool fixture --file\n/exit\n",
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=30,
+        env=env,
+    )
+    assert result.returncode == 0
+    assert "mode: plain" in result.stdout
+    assert str(sample_project) in result.stdout
+    assert "Default Providers" in result.stdout
+    assert "error: --file requires a value" in result.stdout
+    assert "leaving Telchines shell" in result.stdout
+
+
+def test_cli_plain_shell_subprocess_exits_on_eof(sample_project: Path) -> None:
+    env = os.environ.copy()
+    src_root = Path(__file__).resolve().parents[1] / "src"
+    env["PYTHONPATH"] = str(src_root) + os.pathsep + env.get("PYTHONPATH", "")
+    result = subprocess.run(
+        [sys.executable, "-m", "telchines", "shell", "--plain"],
+        cwd=sample_project,
+        input="/pwd\n",
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=30,
+        env=env,
+    )
+    assert result.returncode == 0
+    assert "mode: plain" in result.stdout
     assert str(sample_project) in result.stdout
 
 

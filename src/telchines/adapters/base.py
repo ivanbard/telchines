@@ -45,6 +45,17 @@ class ToolAdapter:
         return all(shutil.which(binary) for binary in required)
 
     def version(self) -> str:
+        binary = next(iter(self.required_binaries or self.binary_names), "")
+        if not binary or shutil.which(binary) is None:
+            return "unavailable"
+        for flag in ("--version", "-V", "-version"):
+            try:
+                result = subprocess.run([binary, flag], capture_output=True, text=True, check=False, timeout=5)
+            except (OSError, subprocess.TimeoutExpired):
+                continue
+            output = (result.stdout or result.stderr).strip()
+            if result.returncode == 0 and output:
+                return output.splitlines()[0].strip()
         return "unknown"
 
     def build_command(self, project_root: Path, files: list[str], extra_args: list[str] | None = None) -> list[str]:

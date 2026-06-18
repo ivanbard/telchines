@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import shutil
+import tempfile
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
@@ -28,6 +30,31 @@ def load_benchmark_cases(root: Path) -> list[BenchmarkCase]:
 
 
 def run_default_suite(config: ProjectConfig, store: RunStore) -> dict[str, object]:
+    local_benchmarks_root = config.project_root / "benchmarks"
+    if _has_benchmark_cases(local_benchmarks_root):
+        return _run_default_suite(config, store)
+
+    bundled_benchmarks_root = _bundled_benchmarks_root()
+    temp_project_root = Path(tempfile.mkdtemp(prefix="telchines-eval-"))
+    try:
+        shutil.copytree(bundled_benchmarks_root, temp_project_root / "benchmarks")
+        temp_config = ProjectConfig.init_project(temp_project_root, name=f"{config.project.name}-eval")
+        temp_config.project.project_id = config.project.project_id
+        temp_config.project.model_policy = deepcopy(config.project.model_policy)
+        temp_config.model_mode = config.model_mode
+        temp_config.no_egress = config.no_egress
+        temp_config.retrieval = deepcopy(config.retrieval)
+        temp_config.generation = deepcopy(config.generation)
+        temp_config.adapters = list(config.adapters)
+        temp_config.save()
+        report = _run_default_suite(temp_config, RunStore(temp_config))
+        store.save_report("latest_eval", report)
+        return report
+    finally:
+        remove_tree(temp_project_root)
+
+
+def _run_default_suite(config: ProjectConfig, store: RunStore) -> dict[str, object]:
     benchmarks_root = config.project_root / "benchmarks"
     cases = load_benchmark_cases(benchmarks_root)
     retrieval = RetrievalService(config)
@@ -58,6 +85,17 @@ def run_default_suite(config: ProjectConfig, store: RunStore) -> dict[str, objec
     }
     store.save_report("latest_eval", report)
     return report
+
+
+def _has_benchmark_cases(root: Path) -> bool:
+    return root.exists() and any(root.glob("*.json"))
+
+
+def _bundled_benchmarks_root() -> Path:
+    root = Path(__file__).resolve().parent / "benchmarks"
+    if not _has_benchmark_cases(root):
+        raise FileNotFoundError("bundled benchmark suite is missing from the installed package")
+    return root
 
 
 def _run_repair_case(config: ProjectConfig, store: RunStore, retrieval: RetrievalService, provider, case: BenchmarkCase) -> dict[str, object]:

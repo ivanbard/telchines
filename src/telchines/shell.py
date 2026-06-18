@@ -4,11 +4,16 @@ import os
 import shlex
 import sys
 from dataclasses import dataclass, field
+from collections.abc import Iterable
 from pathlib import Path
+from typing import Any
 
 import typer
 from prompt_toolkit import Application
+from prompt_toolkit.completion import Completer, Completion
+from prompt_toolkit.document import Document
 from prompt_toolkit.filters import Condition
+from prompt_toolkit.history import InMemoryHistory
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.layout import Dimension, FormattedTextControl, HSplit, Layout, VSplit, Window
 from prompt_toolkit.styles import Style
@@ -22,6 +27,9 @@ from telchines.config import ProjectConfig
 from telchines.errors import AdapterExecutionError, ConfigError, ProviderError, TelchinesError
 from telchines.operations import (
     coverage_plan,
+    check_providers,
+    clean_index,
+    doctor_runs,
     dump_json,
     format_coverage_human,
     format_triage_human,
@@ -29,20 +37,64 @@ from telchines.operations import (
     gen_sva,
     inspect_waveform,
     index_project,
+    index_status,
     initialize_project,
+    list_adapters,
     list_providers,
     list_runs,
     list_waveforms,
     load_eval_report,
+    privacy_report,
+    purge_artifacts,
     repair,
     replay_run,
     retrieve_query,
+    review_artifact,
     run_eval,
     show_run,
     show_waveform,
     triage,
     waveform_signals,
 )
+
+SHELL_COMMAND_HELP = [
+    ("/help", "Show command reference"),
+    ("/project init [path] [--name NAME]", "Initialize a Telchines project"),
+    ("/index [status|clean]", "Build, inspect, or clean retrieval indexes"),
+    ("/retrieve QUERY", "Search project context"),
+    ("/providers [check [NAME] [--offline]]", "Show or check configured providers"),
+    ("/repair --tool TOOL --file PATH", "Run repair workflow"),
+    ("/triage --logs PATH [--logs PATH] [--waveform PATH]", "Run regression triage"),
+    ("/coverage-plan --report PATH [--exclusions PATH] [--formal-run RUN_ID]", "Generate coverage closure recommendations"),
+    ("/gen-sva --spec PATH --rtl PATH [--output PATH]", "Generate assertion draft from spec and RTL"),
+    ("/gen-cocotb --dut PATH [--spec PATH] [--output-dir PATH]", "Generate a cocotb scaffold from DUT context"),
+    ("/waveforms [list|show TARGET|signals TARGET|inspect TARGET --signal NAME]", "Inspect waveform summaries and signals"),
+    ("/runs [list|doctor|show RUN_ID|replay RUN_ID [--yes]]", "Inspect stored runs"),
+    ("/eval [run|report]", "Run or show benchmarks"),
+    ("/doctor", "Show project/provider/adapter diagnostics"),
+    ("/doctor privacy", "Show privacy and artifact-storage diagnostics"),
+    ("/artifacts [purge [--yes]|review REF]", "Report, purge, or review generated artifacts"),
+    ("/history", "Show shell command history"),
+    ("/transcript", "Show the current shell transcript"),
+    ("/clear", "Clear the shell transcript"),
+    ("/cd PATH", "Change working directory"),
+    ("/pwd", "Show current working directory"),
+    ("/raw <slash command>", "Display raw JSON output"),
+    ("/exit", "Leave the shell"),
+]
+SLASH_COMMANDS = [item[0].split()[0] for item in SHELL_COMMAND_HELP]
+PATH_OPTIONS = {
+    "--logs",
+    "--waveform",
+    "--file",
+    "--rtl",
+    "--spec",
+    "--dut",
+    "--report",
+    "--exclusions",
+    "--output",
+    "--output-dir",
+}
 
 
 @dataclass(slots=True)
@@ -97,6 +149,19 @@ class ShellSession:
             return False
         return (config.project_root / config.index_dir / "index.json").exists()
 
+    def index_hint(self) -> str:
+        config = self.project_config()
+        if not config:
+            return "no-project"
+        try:
+            payload = index_status(self.cwd)
+        except (ConfigError, OSError):
+            return "unknown"
+        project = payload.get("project", {})
+        if not project.get("exists"):
+            return "missing"
+        return str(payload.get("status", "unknown"))
+
     def logs_hint(self) -> str:
         candidate = _default_logs_path(self.cwd)
         return str(candidate.relative_to(self.cwd)) if candidate and candidate.exists() else "none"
@@ -108,19 +173,42 @@ class ShellViewState:
     help_text: str = ""
     saved_input_text: str = ""
     saved_cursor_position: int = 0
+    history_index: int | None = None
 
 
-def run_shell(initial_cwd: Path | None = None) -> None:
+class ShellCompleter(Completer):
+    def __init__(self, session: ShellSession) -> None:
+        self.session = session
+
+    def get_completions(self, document: Document, complete_event) -> Iterable[Completion]:  # noqa: ANN001
+        text = document.text_before_cursor
+        if not text.startswith("/"):
+            return
+        if _completing_command_name(text):
+            for command in SLASH_COMMANDS:
+                if command.startswith(text):
+                    yield Completion(command, start_position=-len(text))
+            return
+        seed = _path_completion_seed(text)
+        if seed is None:
+            return
+        for value in _path_completions(self.session.cwd, seed):
+            yield Completion(value, start_position=-len(seed))
+
+
+def run_shell(initial_cwd: Path | None = None, mode: str = "auto") -> None:
     session = ShellSession(cwd=(initial_cwd or Path.cwd()).resolve())
     session.add_transcript("Telchines", render_welcome(session))
-    if _supports_fullscreen_shell():
+    if _supports_fullscreen_shell(mode):
         _run_fullscreen_shell(session)
         return
+    if mode == "fullscreen":
+        typer.echo("Full-screen shell requested, but stdin/stdout are not TTYs; falling back to plain shell.")
     _run_basic_shell(session)
 
 
-def _supports_fullscreen_shell() -> bool:
-    if os.environ.get("TELCHINES_PLAIN_SHELL") == "1":
+def _supports_fullscreen_shell(mode: str = "auto") -> bool:
+    if mode == "plain" or os.environ.get("TELCHINES_PLAIN_SHELL") == "1":
         return False
     stdin = getattr(sys.stdin, "isatty", lambda: False)()
     stdout = getattr(sys.stdout, "isatty", lambda: False)()
@@ -129,6 +217,7 @@ def _supports_fullscreen_shell() -> bool:
 
 def _run_basic_shell(session: ShellSession) -> None:
     typer.echo("Telchines interactive shell.")
+    typer.echo("mode: plain")
     typer.echo(render_welcome(session))
     typer.echo("Type /help for commands, /exit to leave.")
     while True:
@@ -156,6 +245,11 @@ def _run_basic_shell(session: ShellSession) -> None:
 
 
 def _run_fullscreen_shell(session: ShellSession) -> None:
+    app = _build_fullscreen_shell_app(session)
+    app.run()
+
+
+def _build_fullscreen_shell_app(session: ShellSession, **app_kwargs: Any) -> Application:
     view_state = ShellViewState()
     transcript_area = TextArea(
         text="\n\n".join(session.transcript),
@@ -164,11 +258,15 @@ def _run_fullscreen_shell(session: ShellSession) -> None:
         focusable=False,
         wrap_lines=True,
     )
+    input_history = InMemoryHistory()
     input_area = TextArea(
         height=1,
         prompt=session.prompt(),
         multiline=False,
         wrap_lines=False,
+        completer=ShellCompleter(session),
+        complete_while_typing=True,
+        history=input_history,
     )
     help_area = TextArea(
         text="",
@@ -201,7 +299,7 @@ def _run_fullscreen_shell(session: ShellSession) -> None:
     main_content = VSplit(
         [
             left_pane,
-            Frame(sidebar_window, title="Status", width=Dimension(preferred=28, max=32)),
+            Frame(sidebar_window, title="Status", width=Dimension(preferred=24, min=18, max=32)),
         ]
     )
     layout = Layout(
@@ -266,6 +364,8 @@ def _run_fullscreen_shell(session: ShellSession) -> None:
         if not user_input:
             return
         session.history.append(user_input)
+        input_history.append_string(user_input)
+        view_state.history_index = None
         if _is_help_command(user_input):
             show_help_overlay()
             input_area.text = ""
@@ -291,6 +391,29 @@ def _run_fullscreen_shell(session: ShellSession) -> None:
     def _(event) -> None:  # noqa: ANN001
         submit()
 
+    @kb.add("up", filter=Condition(lambda: not view_state.help_visible))
+    def _(event) -> None:  # noqa: ANN001
+        if not session.history:
+            return
+        if view_state.history_index is None:
+            view_state.history_index = len(session.history) - 1
+        else:
+            view_state.history_index = max(0, view_state.history_index - 1)
+        input_area.text = session.history[view_state.history_index]
+        input_area.buffer.cursor_position = len(input_area.text)
+
+    @kb.add("down", filter=Condition(lambda: not view_state.help_visible))
+    def _(event) -> None:  # noqa: ANN001
+        if view_state.history_index is None:
+            return
+        if view_state.history_index >= len(session.history) - 1:
+            view_state.history_index = None
+            input_area.text = ""
+        else:
+            view_state.history_index += 1
+            input_area.text = session.history[view_state.history_index]
+        input_area.buffer.cursor_position = len(input_area.text)
+
     @kb.add("escape", filter=Condition(lambda: view_state.help_visible))
     @kb.add("q", filter=Condition(lambda: view_state.help_visible))
     def _(event) -> None:  # noqa: ANN001
@@ -306,9 +429,9 @@ def _run_fullscreen_shell(session: ShellSession) -> None:
         transcript_area.text = "\n\n".join(session.transcript)
         event.app.exit()
 
-    app = Application(layout=layout, key_bindings=kb, full_screen=True, mouse_support=False, style=style)
+    app = Application(layout=layout, key_bindings=kb, full_screen=True, mouse_support=False, style=style, **app_kwargs)
     app.layout.focus(input_area)
-    app.run()
+    return app
 
 
 def dispatch_input(session: ShellSession, user_input: str) -> tuple[bool, str]:
@@ -318,7 +441,10 @@ def dispatch_input(session: ShellSession, user_input: str) -> tuple[bool, str]:
 
 
 def _dispatch_slash_command(session: ShellSession, command_line: str) -> tuple[bool, str]:
-    parts = shlex.split(command_line)
+    try:
+        parts = shlex.split(command_line)
+    except ValueError as exc:
+        raise ValueError(f"could not parse slash command: {exc}") from exc
     if not parts:
         return False, ""
     command = parts[0].lower()
@@ -329,6 +455,18 @@ def _dispatch_slash_command(session: ShellSession, command_line: str) -> tuple[b
         return False, render_help()
     if command == "pwd":
         return False, str(session.cwd)
+    if command == "clear":
+        session.transcript.clear()
+        return False, "transcript cleared"
+    if command == "history":
+        return False, "\n".join(f"{index}. {item}" for index, item in enumerate(session.history, start=1)) or "history is empty"
+    if command == "transcript":
+        return False, "\n\n".join(session.transcript) or "transcript is empty"
+    if command == "doctor":
+        if len(parts) > 1 and parts[1] == "privacy":
+            payload = privacy_report(session.cwd)
+            return False, dump_json(payload)
+        return False, render_doctor_payload(session)
     if command == "cd":
         target = Path(parts[1]) if len(parts) > 1 else Path.home()
         resolved = (session.cwd / target).resolve() if not target.is_absolute() else target.resolve()
@@ -391,9 +529,26 @@ def _execute_command(session: ShellSession, parts: list[str], raw: bool) -> str 
         return dump_json(payload) if raw else render_action_panel("Project Initialized", f"root: {config.project.root_path}\nproject: {config.project.project_id}")
 
     if command == "index":
+        if len(parts) > 1 and parts[1] == "status":
+            payload = index_status(session.cwd)
+            return dump_json(payload) if raw else render_index_status_payload(payload)
+        if len(parts) > 1 and parts[1] == "clean":
+            payload = clean_index(session.cwd)
+            return dump_json(payload) if raw else render_action_panel("Index Cleaned", f"removed {payload['removed_count']} index directorie(s)")
+        if len(parts) > 1:
+            raise ValueError("supported /index commands are status and clean")
         chunk_count = index_project(session.cwd)
         payload = {"indexed_chunks": chunk_count}
         return dump_json(payload) if raw else render_action_panel("Index Complete", f"indexed {chunk_count} chunks")
+
+    if command == "artifacts":
+        if len(parts) > 1 and parts[1] == "purge":
+            payload = purge_artifacts(session.cwd, dry_run="--yes" not in parts[2:])
+            return dump_json(payload) if raw else render_artifact_purge_payload(payload)
+        if len(parts) > 2 and parts[1] == "review":
+            payload = review_artifact(session.cwd, reference=parts[2])
+            return dump_json(payload) if raw else render_artifact_review_payload(payload)
+        raise ValueError("supported /artifacts commands are purge [--yes] and review <ref>")
 
     if command == "retrieve":
         query = " ".join(parts[1:]).strip()
@@ -404,6 +559,18 @@ def _execute_command(session: ShellSession, parts: list[str], raw: bool) -> str 
         return dump_json(payload) if raw else render_retrieval_payload(payload)
 
     if command == "providers":
+        if len(parts) > 1 and parts[1] == "check":
+            provider_name = None
+            live = True
+            for part in parts[2:]:
+                if part == "--offline":
+                    live = False
+                    continue
+                if provider_name is not None:
+                    raise ValueError("/providers check accepts at most one provider name")
+                provider_name = part
+            payload = check_providers(session.cwd, provider_name=provider_name, live=live)
+            return dump_json(payload) if raw else render_provider_check_payload(payload)
         payload = list_providers(session.cwd)
         return dump_json(payload) if raw else render_provider_payload(payload)
 
@@ -462,13 +629,16 @@ def _execute_command(session: ShellSession, parts: list[str], raw: bool) -> str 
         if len(parts) == 1 or parts[1] == "list":
             payload = list_runs(session.cwd)
             return dump_json(payload) if raw else render_runs_payload(payload)
+        if parts[1] == "doctor":
+            payload = doctor_runs(session.cwd)
+            return dump_json(payload) if raw else render_runs_doctor_payload(payload)
         if parts[1] == "show" and len(parts) > 2:
             payload = show_run(session.cwd, parts[2])
             return dump_json(payload) if raw else render_run_show(payload)
         if parts[1] == "replay" and len(parts) > 2:
-            payload = replay_run(session.cwd, parts[2])
+            payload = replay_run(session.cwd, parts[2], confirm="--yes" in parts[3:])
             return dump_json(payload) if raw else render_replay_payload(payload)
-        raise ValueError("supported /runs commands are list, show <run_id>, and replay <run_id>")
+        raise ValueError("supported /runs commands are list, doctor, show <run_id>, and replay <run_id> [--yes]")
 
     if command == "eval":
         if len(parts) == 1 or parts[1] == "run":
@@ -525,26 +695,7 @@ def render_help() -> str:
     table = Table(title="Telchines Shell Commands", show_header=True, header_style="bold cyan")
     table.add_column("Command", style="white")
     table.add_column("Purpose", style="white")
-    commands = [
-        ("/help", "Show command reference"),
-        ("/project init [path] [--name NAME]", "Initialize a Telchines project"),
-        ("/index", "Build retrieval index"),
-        ("/retrieve QUERY", "Search project context"),
-        ("/providers", "Show configured providers and policy status"),
-        ("/repair --tool TOOL --file PATH", "Run repair workflow"),
-        ("/triage --logs PATH [--logs PATH] [--waveform PATH]", "Run regression triage"),
-        ("/coverage-plan --report PATH [--exclusions PATH] [--formal-run RUN_ID]", "Generate coverage closure recommendations"),
-        ("/gen-sva --spec PATH --rtl PATH [--output PATH]", "Generate assertion draft from spec and RTL"),
-        ("/gen-cocotb --dut PATH [--spec PATH] [--output-dir PATH]", "Generate a cocotb scaffold from DUT context"),
-        ("/waveforms [list|show TARGET|signals TARGET|inspect TARGET --signal NAME]", "Inspect waveform summaries and signals"),
-        ("/runs [list|show RUN_ID|replay RUN_ID]", "Inspect stored runs"),
-        ("/eval [run|report]", "Run or show benchmarks"),
-        ("/cd PATH", "Change working directory"),
-        ("/pwd", "Show current working directory"),
-        ("/raw <slash command>", "Display raw JSON output"),
-        ("/exit", "Leave the shell"),
-    ]
-    for command, purpose in commands:
+    for command, purpose in SHELL_COMMAND_HELP:
         table.add_row(command, purpose)
     return _render_rich(table)
 
@@ -581,6 +732,83 @@ def render_provider_payload(payload: dict[str, object]) -> str:
         table,
     )
     return _render_rich(group)
+
+
+def render_provider_check_payload(payload: dict[str, object]) -> str:
+    table = Table(title="Provider Checks", show_header=True, header_style="bold cyan")
+    table.add_column("Provider")
+    table.add_column("Kind")
+    table.add_column("Status")
+    table.add_column("Summary")
+    for provider in payload["providers"]:
+        table.add_row(provider["name"], provider["kind"], provider["status"], provider["summary"])
+    return _render_rich(table)
+
+
+def render_index_status_payload(payload: dict[str, object]) -> str:
+    table = Table(title="Index Status", show_header=True, header_style="bold cyan")
+    table.add_column("Index")
+    table.add_column("State")
+    table.add_column("Chunks")
+    table.add_column("Sources")
+    table.add_column("Missing/Stale/Deleted")
+    for label in ("project", "external"):
+        item = payload[label]
+        table.add_row(
+            label,
+            "stale" if item["stale"] else "fresh",
+            str(item["chunk_count"]),
+            str(item["source_count"]),
+            f"{item['missing_source_count']}/{item['stale_source_count']}/{item['deleted_source_count']}",
+        )
+    return _render_rich(table)
+
+
+def render_artifact_purge_payload(payload: dict[str, object]) -> str:
+    title = "Artifact Purge Plan" if payload["dry_run"] else "Artifacts Purged"
+    body = [
+        f"status: {payload['status']}",
+        f"files: {payload['file_count']}",
+        f"bytes: {payload['byte_count']}",
+    ]
+    for target in payload["targets"][:6]:
+        body.append(f"- {target['path']} ({target['file_count']} files)")
+    return render_action_panel(title, "\n".join(body))
+
+
+def render_artifact_review_payload(payload: dict[str, object]) -> str:
+    diff = str(payload.get("diff", ""))
+    diff_preview = "\n".join(diff.splitlines()[:16])
+    body = [
+        f"status: {payload['status']}",
+        f"file: {payload['generated_file']}",
+        f"candidate: {payload['candidate_id']}",
+        f"lines: stored={payload['baseline_line_count']} workspace={payload['current_line_count']}",
+        f"diff lines: {payload['diff_line_count']}" + (" (truncated)" if payload.get("diff_truncated") else ""),
+    ]
+    if diff_preview:
+        body.extend(["", diff_preview])
+    return render_action_panel("Artifact Review", "\n".join(body))
+
+
+def render_doctor_payload(session: ShellSession) -> str:
+    config = session.project_config()
+    if config is None:
+        return render_action_panel("Doctor", "No Telchines project detected. Run `/project init .` from a repository root.")
+    providers = check_providers(session.cwd, live=False)
+    adapters = list_adapters(session.cwd)
+    provider_status = providers["status"]
+    available_adapters = sum(1 for item in adapters["adapters"] if item["available"])
+    adapter_total = len(adapters["adapters"])
+    lines = [
+        f"project: {config.project.name}",
+        f"root: {config.project_root}",
+        f"index: {'present' if session.indexed() else 'missing'}",
+        f"providers: {provider_status}",
+        f"adapters available: {available_adapters}/{adapter_total}",
+        f"privacy: task artifacts are stored under {config.store_dir}/task-artifacts",
+    ]
+    return render_action_panel("Doctor", "\n".join(lines))
 
 
 def render_retrieval_payload(payload: dict[str, object]) -> str:
@@ -715,6 +943,21 @@ def render_runs_payload(payload: list[dict[str, object]]) -> str:
     return _render_rich(table)
 
 
+def render_runs_doctor_payload(payload: dict[str, object]) -> str:
+    issues = payload.get("issues") or []
+    lines = [
+        f"status: {payload['status']}",
+        f"runs: {payload['run_count']}",
+        f"load issues: {payload['issue_count']}",
+    ]
+    if isinstance(issues, list) and issues:
+        lines.append("")
+        for issue in issues[:5]:
+            if isinstance(issue, dict):
+                lines.append(f"- {issue.get('path')}: {issue.get('error')}")
+    return render_action_panel("Runs Doctor", "\n".join(lines))
+
+
 def render_run_show(payload: dict[str, object]) -> str:
     lines = [
         f"run: {payload['run_id']}",
@@ -766,6 +1009,13 @@ def render_run_show(payload: dict[str, object]) -> str:
 
 
 def render_replay_payload(payload: dict[str, object]) -> str:
+    if payload.get("status") == "confirmation_required":
+        command = payload.get("replay_command") or []
+        command_text = " ".join(str(part) for part in command) if isinstance(command, list) else str(command)
+        return render_action_panel(
+            "Replay Confirmation",
+            f"run_id={payload.get('run_id')}\ncommand={command_text}\nnot executed; add --yes to run the stored command",
+        )
     return render_action_panel(
         "Replay Output",
         f"exit_code={payload['exit_code']}\nstdout:\n{payload['stdout']}\nstderr:\n{payload['stderr']}",
@@ -786,8 +1036,9 @@ def _render_intent(title: str, body: str) -> str:
 
 def _header_fragments(session: ShellSession) -> list[tuple[str, str]]:
     project = session.project_config().project.name if session.project_config() else "no-project"
+    cwd = _compact_path(session.cwd, max_chars=48)
     text = (
-        f" Telchines | {project} | cwd: {session.cwd} | "
+        f" Telchines | {project} | cwd: {cwd} | "
         f"repair: {session.active_provider()} | gen: {session.active_generation_provider()} "
     )
     return [("class:header", text)]
@@ -798,7 +1049,7 @@ def _sidebar_text(session: ShellSession) -> str:
     lines = [
         f"project: {config.project.name if config else 'none'}",
         f"cwd: {session.cwd.name}",
-        f"indexed: {'yes' if session.indexed() else 'no'}",
+        f"index: {session.index_hint()}",
         f"repair: {session.active_provider()}",
         f"gen: {session.active_generation_provider()}",
         f"last ctx: {session.last_context_id or 'none'}",
@@ -825,9 +1076,7 @@ def _parse_project_init(parts: list[str]) -> tuple[Path, str | None]:
     while index < len(parts):
         part = parts[index]
         if part == "--name":
-            if index + 1 >= len(parts):
-                raise ValueError("--name requires a value")
-            name = parts[index + 1]
+            name = _require_option_value(parts, index, "--name")
             index += 2
             continue
         path = Path(part)
@@ -844,15 +1093,15 @@ def _parse_repair_args(parts: list[str]) -> tuple[str, list[str], list[str], boo
     while index < len(parts):
         part = parts[index]
         if part == "--tool":
-            tool = parts[index + 1]
+            tool = _require_option_value(parts, index, "--tool")
             index += 2
             continue
         if part == "--file":
-            files.append(parts[index + 1])
+            files.append(_require_option_value(parts, index, "--file"))
             index += 2
             continue
         if part == "--extra-arg":
-            extra_args.append(parts[index + 1])
+            extra_args.append(_require_option_value(parts, index, "--extra-arg"))
             index += 2
             continue
         if part == "--apply":
@@ -876,19 +1125,19 @@ def _parse_gen_sva_args(parts: list[str]) -> tuple[str, str, str | None, str | N
     while index < len(parts):
         part = parts[index]
         if part == "--spec":
-            spec = parts[index + 1]
+            spec = _require_option_value(parts, index, "--spec")
             index += 2
             continue
         if part == "--rtl":
-            rtl = parts[index + 1]
+            rtl = _require_option_value(parts, index, "--rtl")
             index += 2
             continue
         if part == "--output":
-            output = parts[index + 1]
+            output = _require_option_value(parts, index, "--output")
             index += 2
             continue
         if part == "--provider":
-            provider = parts[index + 1]
+            provider = _require_option_value(parts, index, "--provider")
             index += 2
             continue
         raise ValueError(f"unrecognized gen-sva argument: {part}")
@@ -909,23 +1158,23 @@ def _parse_gen_cocotb_args(parts: list[str]) -> tuple[str, str | None, str | Non
     while index < len(parts):
         part = parts[index]
         if part == "--dut":
-            dut = parts[index + 1]
+            dut = _require_option_value(parts, index, "--dut")
             index += 2
             continue
         if part == "--spec":
-            spec = parts[index + 1]
+            spec = _require_option_value(parts, index, "--spec")
             index += 2
             continue
         if part == "--output-dir":
-            output_dir = parts[index + 1]
+            output_dir = _require_option_value(parts, index, "--output-dir")
             index += 2
             continue
         if part == "--intent":
-            intent = parts[index + 1]
+            intent = _require_option_value(parts, index, "--intent")
             index += 2
             continue
         if part == "--provider":
-            provider = parts[index + 1]
+            provider = _require_option_value(parts, index, "--provider")
             index += 2
             continue
         raise ValueError(f"unrecognized gen-cocotb argument: {part}")
@@ -944,23 +1193,23 @@ def _parse_coverage_plan_args(parts: list[str]) -> tuple[str, str | None, str | 
     while index < len(parts):
         part = parts[index]
         if part == "--report":
-            report = parts[index + 1]
+            report = _require_option_value(parts, index, "--report")
             index += 2
             continue
         if part == "--exclusions":
-            exclusions = parts[index + 1]
+            exclusions = _require_option_value(parts, index, "--exclusions")
             index += 2
             continue
         if part == "--formal-run":
-            formal_run = parts[index + 1]
+            formal_run = _require_option_value(parts, index, "--formal-run")
             index += 2
             continue
         if part == "--rtl":
-            rtl_paths.append(parts[index + 1])
+            rtl_paths.append(_require_option_value(parts, index, "--rtl"))
             index += 2
             continue
         if part == "--spec":
-            spec_paths.append(parts[index + 1])
+            spec_paths.append(_require_option_value(parts, index, "--spec"))
             index += 2
             continue
         raise ValueError(f"unrecognized coverage-plan argument: {part}")
@@ -974,9 +1223,7 @@ def _parse_repeated_option(parts: list[str], option_name: str, strict: bool = Tr
     index = 0
     while index < len(parts):
         if parts[index] == option_name:
-            if index + 1 >= len(parts):
-                raise ValueError(f"{option_name} requires a value")
-            values.append(parts[index + 1])
+            values.append(_require_option_value(parts, index, option_name))
             index += 2
             continue
         if strict:
@@ -996,11 +1243,15 @@ def _parse_optional_argument(parts: list[str], option_name: str) -> str | None:
     index = 0
     while index < len(parts):
         if parts[index] == option_name:
-            if index + 1 >= len(parts):
-                raise ValueError(f"{option_name} requires a value")
-            return parts[index + 1]
+            return _require_option_value(parts, index, option_name)
         index += 1
     return None
+
+
+def _require_option_value(parts: list[str], index: int, option_name: str) -> str:
+    if index + 1 >= len(parts) or parts[index + 1].startswith("--"):
+        raise ValueError(f"{option_name} requires a value")
+    return parts[index + 1]
 
 
 def _resolve_path(cwd: Path, value: str) -> Path:
@@ -1020,3 +1271,51 @@ def _render_rich(renderable, width: int = 100) -> str:
     console = Console(record=True, width=width, soft_wrap=True)
     console.print(renderable)
     return console.export_text(styles=False).rstrip()
+
+
+def _completing_command_name(text: str) -> bool:
+    stripped = text.strip()
+    return stripped.startswith("/") and " " not in stripped
+
+
+def _path_completion_seed(text: str) -> str | None:
+    if not text or text.endswith(" "):
+        parts = shlex.split(text)
+        previous = parts[-1] if parts else ""
+        if previous in PATH_OPTIONS or previous == "/cd":
+            return ""
+        return None
+    try:
+        parts = shlex.split(text)
+    except ValueError:
+        return None
+    if len(parts) >= 2 and (parts[-2] in PATH_OPTIONS or parts[0] == "/cd"):
+        return parts[-1]
+    return None
+
+
+def _path_completions(cwd: Path, seed: str) -> list[str]:
+    seed_path = Path(seed)
+    base = seed_path.parent if str(seed_path.parent) != "." else Path(".")
+    directory = (cwd / base).resolve() if not base.is_absolute() else base.resolve()
+    prefix = seed_path.name
+    if not directory.exists() or not directory.is_dir():
+        return []
+    completions: list[str] = []
+    for path in sorted(directory.iterdir(), key=lambda item: item.name.lower()):
+        if not path.name.startswith(prefix):
+            continue
+        rel = path.relative_to(cwd) if path.is_relative_to(cwd) else path
+        suffix = "/" if path.is_dir() else ""
+        completions.append(rel.as_posix() + suffix)
+    return completions[:25]
+
+
+def _compact_path(path: Path, max_chars: int = 48) -> str:
+    text = str(path)
+    if len(text) <= max_chars:
+        return text
+    tail = path.name
+    parent = path.parent.name
+    compact = f"...{os.sep}{parent}{os.sep}{tail}" if parent else f"...{os.sep}{tail}"
+    return compact if len(compact) <= max_chars else "..." + text[-max_chars + 3 :]
