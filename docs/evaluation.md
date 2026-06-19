@@ -36,4 +36,4 @@ Before cutting a public release:
 
 ## Current Default Suite Shape
 
-The default suite currently includes 18 cases spanning all shipped `v1` workflows. The automated test suite verifies that the default benchmark run completes successfully and writes a report to the run store.
+The default suite currently includes 19 cases spanning all shipped `v1` workflows, including one optional agent-runtime repair retry case. The automated test suite verifies that the default benchmark run completes successfully and writes a report to the run store.

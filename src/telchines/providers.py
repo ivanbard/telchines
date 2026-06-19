@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 from urllib import error, request
 
+from telchines.agent_runtime import LangGraphRepairRuntime
 from telchines.config import ProjectConfig
 from telchines.errors import ConfigError, ProviderError
 from telchines.models import CocotbCandidate, CocotbPort, Observation, PatchProposal, RetrievalContext, SvaCandidate, SvaProperty, VerificationRun
@@ -27,6 +28,7 @@ class RepairRequest:
     base_run: VerificationRun
     observations: list[Observation]
     retrieval_context: RetrievalContext
+    feedback: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -466,6 +468,19 @@ class LocalCommandGenerationProvider(GenerationProvider):
         )
 
 
+class AgentRuntimeRepairProvider(RepairProvider):
+    def __init__(self, provider_name: str, config: dict[str, Any], project_config: ProjectConfig, base_provider: RepairProvider) -> None:
+        self.provider_name = provider_name
+        self.config = config
+        self.project_config = project_config
+        self.base_provider = base_provider
+        self.name = provider_name
+
+    def propose_patch(self, request_value: RepairRequest) -> RepairProviderResult:
+        runtime = LangGraphRepairRuntime(self.project_config, self.provider_name, self.config, self.base_provider)
+        return runtime.run_repair(request_value)
+
+
 class ProviderRegistry:
     def __init__(self, config: ProjectConfig) -> None:
         self.config = config
@@ -481,6 +496,10 @@ class ProviderRegistry:
             return OpenAICompatibleRepairProvider(name, provider_config)
         if kind == "local_command":
             return LocalCommandRepairProvider(name, provider_config)
+        if kind == "agent_runtime":
+            base_name = str(provider_config.get("base_provider"))
+            base_provider = self.get_repair(base_name)
+            return AgentRuntimeRepairProvider(name, provider_config, self.config, base_provider)
         raise ConfigError(f"unsupported repair provider kind: {kind}")
 
     def get_generation(self, provider_name: str | None = None) -> GenerationProvider:
@@ -603,6 +622,15 @@ class ProviderRegistry:
             if self.config.model_mode == "remote":
                 return "model_mode=remote blocks local command providers"
             return None
+        if kind == "agent_runtime":
+            base_provider_name = provider_config.get("base_provider")
+            base_provider_config = self.providers.get(str(base_provider_name))
+            if not isinstance(base_provider_config, dict):
+                return f"agent_runtime base provider is not configured: {base_provider_name}"
+            base_blocked_reason = self._blocked_reason(base_provider_config)
+            if base_blocked_reason:
+                return f"base provider {base_provider_name} is blocked by policy: {base_blocked_reason}"
+            return None
         return "unsupported provider kind"
 
 
@@ -625,7 +653,7 @@ def check_provider_statuses(config: ProjectConfig, provider_name: str | None = N
 
 
 def _build_repair_request_payload(request_value: RepairRequest, provider_name: str) -> dict[str, Any]:
-    return {
+    payload: dict[str, Any] = {
         "provider": provider_name,
         "task_id": request_value.task_id,
         "workflow_type": request_value.base_run.workflow_type,
@@ -658,6 +686,10 @@ def _build_repair_request_payload(request_value: RepairRequest, provider_name: s
             "Use status='no_patch' if no safe minimal patch is available."
         ),
     }
+    if request_value.feedback:
+        payload["previous_attempts"] = request_value.feedback
+        payload["instructions"] += " Use previous_attempts validation feedback to revise the next candidate."
+    return payload
 
 
 def _build_generation_request_payload(request_value: GenerationRequest, provider_name: str) -> dict[str, Any]:
@@ -882,6 +914,14 @@ def _check_provider_transport(provider_name: str, config: dict[str, Any], projec
             "model": config["model"],
             "api_key_env": api_key_env,
             "parsed_keys": sorted(parsed.keys()),
+        }
+    if kind == "agent_runtime":
+        return {
+            "status": "passed",
+            "mode": "agent_runtime",
+            "runtime": config.get("runtime", "langgraph"),
+            "base_provider": config.get("base_provider"),
+            "max_iterations": int(config.get("max_iterations", 3)),
         }
     raise ProviderError(f"provider {provider_name} has unsupported kind: {kind}")
 

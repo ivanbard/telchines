@@ -1,0 +1,52 @@
+{
+  "benchmark_id": "repair_agent_retry_loop",
+  "task_type": "repair",
+  "title": "Repair missing semicolon through agent validation feedback",
+  "fixture_root": "benchmarks/assets/repair_missing_semicolon",
+  "config": {
+    "validator_command": [
+      "tools/fixture_lint.py",
+      "rtl/broken_counter.sv"
+    ],
+    "target_file": "rtl/broken_counter.sv",
+    "model_policy": {
+      "default_provider_by_capability": {
+        "repair": "agent-repair",
+        "generation": "heuristic"
+      },
+      "providers": {
+        "heuristic": {
+          "kind": "heuristic",
+          "capabilities": [
+            "generation"
+          ]
+        },
+        "local-base": {
+          "kind": "local_command",
+          "capabilities": [
+            "repair"
+          ],
+          "command": "__python__",
+          "args": [
+            "tools/agent_retry_provider.py"
+          ],
+          "timeout_seconds": 5
+        },
+        "agent-repair": {
+          "kind": "agent_runtime",
+          "runtime": "langgraph",
+          "base_provider": "local-base",
+          "capabilities": [
+            "repair"
+          ],
+          "max_iterations": 2,
+          "timeout_seconds": 10
+        }
+      }
+    }
+  },
+  "scoring": {
+    "must_pass": true
+  },
+  "schema_version": "0.1"
+}

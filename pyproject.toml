@@ -48,6 +48,10 @@ dev = [
 cocotb-smoke = [
   "cocotb>=1.9",
 ]
+agentic = [
+  "langchain>=1.0,<2.0",
+  "langgraph>=1.0,<2.0",
+]
 
 [project.scripts]
 tel = "telchines.cli:app"

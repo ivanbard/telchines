@@ -73,4 +73,6 @@ Diagnostics send `workflow_type=provider_check`; wrappers should return any JSON
 - `workflow_type=dut_to_cocotb` with `dut`, optional `spec`, `output_dir`, `intent`, and `retrieval_context`
 - generation requests also include `conventions`, mirroring `.tel/config.json` `generation` settings for output naming and clock/reset inference
 
+When a `local_command` repair provider is used behind the optional `agent_runtime` pilot, retry requests may also include `previous_attempts` with validation summaries and normalized observations from earlier failed candidates. Wrappers can use that field to revise the next patch proposal.
+
 Keep wrappers deterministic enough that generated artifacts can be reviewed and replayed. Do not store secrets directly in `.tel/config.json`; prefer env var names and a local secret manager or shell environment.

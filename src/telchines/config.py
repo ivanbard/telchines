@@ -11,7 +11,7 @@ from telchines.utils import dataclass_to_dict, ensure_directory, read_json, stab
 
 SUPPORTED_MODEL_MODES = {"local", "hybrid", "remote"}
 SUPPORTED_ADAPTERS = {"verilator", "iverilog", "slang", "verible", "symbiyosys", "fixture"}
-SUPPORTED_PROVIDER_KINDS = {"heuristic", "openai_compatible", "local_command"}
+SUPPORTED_PROVIDER_KINDS = {"heuristic", "openai_compatible", "local_command", "agent_runtime"}
 
 
 def default_generation_config() -> dict[str, Any]:
@@ -272,6 +272,29 @@ class ProjectConfig:
             timeout = provider_config.get("timeout_seconds", 30)
             if not isinstance(timeout, int) or timeout <= 0:
                 raise ConfigError(f"provider {provider_name} timeout_seconds must be a positive integer")
+
+            if kind == "agent_runtime":
+                runtime = provider_config.get("runtime")
+                if runtime != "langgraph":
+                    raise ConfigError(f"provider {provider_name} runtime must be langgraph")
+                if capabilities != ["repair"]:
+                    raise ConfigError(f"provider {provider_name} agent_runtime currently supports only the repair capability")
+                base_provider = provider_config.get("base_provider")
+                if not isinstance(base_provider, str) or not base_provider.strip():
+                    raise ConfigError(f"provider {provider_name} must define base_provider")
+                if base_provider == provider_name:
+                    raise ConfigError(f"provider {provider_name} base_provider cannot reference itself")
+                base_config = providers.get(base_provider)
+                if not isinstance(base_config, dict):
+                    raise ConfigError(f"provider {provider_name} base_provider must reference a configured provider")
+                if base_config.get("kind") not in {"openai_compatible", "local_command"}:
+                    raise ConfigError(f"provider {provider_name} base_provider must be openai_compatible or local_command")
+                base_capabilities = self.provider_capabilities(base_provider, base_config)
+                if "repair" not in base_capabilities:
+                    raise ConfigError(f"provider {provider_name} base_provider must support repair")
+                max_iterations = provider_config.get("max_iterations", 3)
+                if not isinstance(max_iterations, int) or max_iterations <= 0:
+                    raise ConfigError(f"provider {provider_name} max_iterations must be a positive integer")
 
             if kind == "openai_compatible":
                 if not isinstance(provider_config.get("base_url"), str) or not provider_config["base_url"].strip():

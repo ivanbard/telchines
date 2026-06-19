@@ -142,6 +142,92 @@ def test_config_rejects_invalid_local_command_output_limit(sample_project: Path)
         ProjectConfig.load(sample_project)
 
 
+def test_config_accepts_agent_runtime_repair_provider(sample_project: Path) -> None:
+    config_path = sample_project / ".tel" / "config.json"
+    payload = read_json(config_path)
+    payload["project"]["model_policy"] = {
+        "default_provider_by_capability": {"repair": "agent-repair", "generation": "heuristic"},
+        "providers": {
+            "heuristic": {"kind": "heuristic", "capabilities": ["generation"]},
+            "local-repair": {
+                "kind": "local_command",
+                "capabilities": ["repair"],
+                "command": "python",
+                "args": ["tools/local_provider.py"],
+                "timeout_seconds": 5,
+            },
+            "agent-repair": {
+                "kind": "agent_runtime",
+                "runtime": "langgraph",
+                "base_provider": "local-repair",
+                "capabilities": ["repair"],
+                "max_iterations": 2,
+                "timeout_seconds": 10,
+            },
+        },
+    }
+    write_json(config_path, payload)
+
+    config = ProjectConfig.load(sample_project)
+
+    assert config.default_provider_by_capability()["repair"] == "agent-repair"
+
+
+def test_config_rejects_invalid_agent_runtime_provider(sample_project: Path) -> None:
+    config_path = sample_project / ".tel" / "config.json"
+    payload = read_json(config_path)
+    payload["project"]["model_policy"]["providers"]["agent-repair"] = {
+        "kind": "agent_runtime",
+        "runtime": "other",
+        "base_provider": "heuristic",
+        "capabilities": ["repair"],
+    }
+    payload["project"]["model_policy"]["default_provider_by_capability"]["repair"] = "agent-repair"
+    write_json(config_path, payload)
+
+    with pytest.raises(ConfigError, match="runtime"):
+        ProjectConfig.load(sample_project)
+
+
+def test_config_rejects_agent_runtime_missing_base_provider(sample_project: Path) -> None:
+    config_path = sample_project / ".tel" / "config.json"
+    payload = read_json(config_path)
+    payload["project"]["model_policy"]["providers"]["agent-repair"] = {
+        "kind": "agent_runtime",
+        "runtime": "langgraph",
+        "base_provider": "missing",
+        "capabilities": ["repair"],
+    }
+    payload["project"]["model_policy"]["default_provider_by_capability"]["repair"] = "agent-repair"
+    write_json(config_path, payload)
+
+    with pytest.raises(ConfigError, match="base_provider"):
+        ProjectConfig.load(sample_project)
+
+
+def test_config_rejects_agent_runtime_invalid_iterations(sample_project: Path) -> None:
+    config_path = sample_project / ".tel" / "config.json"
+    payload = read_json(config_path)
+    payload["project"]["model_policy"]["providers"]["local-repair"] = {
+        "kind": "local_command",
+        "capabilities": ["repair"],
+        "command": "python",
+        "args": ["tools/local_provider.py"],
+    }
+    payload["project"]["model_policy"]["providers"]["agent-repair"] = {
+        "kind": "agent_runtime",
+        "runtime": "langgraph",
+        "base_provider": "local-repair",
+        "capabilities": ["repair"],
+        "max_iterations": 0,
+    }
+    payload["project"]["model_policy"]["default_provider_by_capability"]["repair"] = "agent-repair"
+    write_json(config_path, payload)
+
+    with pytest.raises(ConfigError, match="max_iterations"):
+        ProjectConfig.load(sample_project)
+
+
 def test_config_rejects_absolute_external_roots(sample_project: Path) -> None:
     config_path = sample_project / ".tel" / "config.json"
     payload = read_json(config_path)

@@ -59,11 +59,10 @@ def _run_default_suite(config: ProjectConfig, store: RunStore) -> dict[str, obje
     cases = load_benchmark_cases(benchmarks_root)
     retrieval = RetrievalService(config)
     retrieval.build_index()
-    provider = build_repair_provider(config)
     results: list[dict[str, object]] = []
     for case in cases:
         if case.task_type == "repair":
-            results.append(_run_repair_case(config, store, retrieval, provider, case))
+            results.append(_run_repair_case(config, store, retrieval, case))
         elif case.task_type == "triage":
             results.append(_run_triage_case(config, store, retrieval, case))
         elif case.task_type == "retrieval":
@@ -98,18 +97,31 @@ def _bundled_benchmarks_root() -> Path:
     return root
 
 
-def _run_repair_case(config: ProjectConfig, store: RunStore, retrieval: RetrievalService, provider, case: BenchmarkCase) -> dict[str, object]:
+def _run_repair_case(config: ProjectConfig, store: RunStore, retrieval: RetrievalService, case: BenchmarkCase) -> dict[str, object]:
     fixture_root = config.project_root / case.fixture_root
     temp_root = copy_tree_to_temp(fixture_root)
     try:
+        temp_config = ProjectConfig.init_project(temp_root)
+        temp_config.project.project_id = config.project.project_id
+        temp_config.model_mode = config.model_mode
+        temp_config.no_egress = config.no_egress
+        temp_config.retrieval = deepcopy(config.retrieval)
+        temp_config.adapters = list(config.adapters)
+        model_policy = _resolve_runtime_placeholders(deepcopy(case.config.get("model_policy", {})))
+        if model_policy:
+            temp_config.project.model_policy = model_policy
+        temp_config.save()
+        temp_store = RunStore(temp_config)
+        temp_retrieval = RetrievalService(temp_config)
+        temp_retrieval.build_index()
         command = [sys.executable, *case.config["validator_command"]]
         process = subprocess.run(command, cwd=temp_root, capture_output=True, text=True, check=False)
         run_id = stable_id("run", case.benchmark_id, "initial")
         observations = parse_common_output(run_id, process.stdout + process.stderr)
-        store.save_observations(observations)
+        temp_store.save_observations(observations)
         base_run = VerificationRun(
             run_id=run_id,
-            project_id=config.project.project_id,
+            project_id=temp_config.project.project_id,
             commit_sha="benchmark",
             workflow_type="compile_repair",
             tool=ToolReference(kind="fixture", name="fixture_lint", version="0.1"),
@@ -123,13 +135,9 @@ def _run_repair_case(config: ProjectConfig, store: RunStore, retrieval: Retrieva
             summary=case.title,
             replay_command=command,
         )
-        store.save_run(base_run)
-        original_root = config.project.root_path
-        config.project.root_path = str(temp_root)
-        try:
-            proposal, validation_run, _ = execute_repair(config, store, retrieval, provider, base_run, apply_patch=False)
-        finally:
-            config.project.root_path = original_root
+        temp_store.save_run(base_run)
+        provider = build_repair_provider(temp_config)
+        proposal, validation_run, _ = execute_repair(temp_config, temp_store, temp_retrieval, provider, base_run, apply_patch=False)
         expected = str(case.scoring.get("expected", "pass"))
         if expected == "no_patch":
             passed = proposal is None and validation_run is None

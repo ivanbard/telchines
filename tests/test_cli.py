@@ -109,6 +109,42 @@ sys.stdout.write(json.dumps(response))
     )
 
 
+def _write_agent_retry_provider(project_root: Path, *, mode: str = "retry") -> None:
+    provider_script = project_root / "tools" / "agent_retry_provider.py"
+    provider_script.write_text(
+        f"""from __future__ import annotations
+import json
+import sys
+from pathlib import Path
+
+payload = json.loads(sys.stdin.read())
+target_file = payload["files"][0]
+target_path = Path(target_file)
+original = target_path.read_text(encoding="utf-8")
+previous_attempts = payload.get("previous_attempts", [])
+mode = {mode!r}
+if mode == "malformed":
+    sys.stdout.write("not json")
+    raise SystemExit(0)
+if mode == "always_bad":
+    candidate = original
+elif mode == "first_good" or previous_attempts:
+    candidate = original.replace("count <= 4'd0", "count <= 4'd0;")
+else:
+    candidate = original
+response = {{
+    "status": "proposed",
+    "file_path": target_file,
+    "candidate_content": candidate,
+    "explanation": "Agent retry provider used validation feedback.",
+    "evidence_paths": ["docs/spec.md"],
+}}
+sys.stdout.write(json.dumps(response))
+""",
+        encoding="utf-8",
+    )
+
+
 def _write_local_check_provider(project_root: Path, *, exit_code: int = 0) -> None:
     provider_script = project_root / "tools" / "local_check_provider.py"
     provider_script.write_text(
@@ -218,6 +254,30 @@ def _local_model_policy(command: str, *args: str) -> dict[str, object]:
                 "command": command,
                 "args": list(args),
                 "timeout_seconds": 5,
+            },
+        },
+    }
+
+
+def _agent_runtime_model_policy(command: str, *args: str, max_iterations: int = 2) -> dict[str, object]:
+    return {
+        "default_provider_by_capability": {"repair": "agent-repair", "generation": "heuristic"},
+        "providers": {
+            "heuristic": {"kind": "heuristic", "capabilities": ["generation"]},
+            "local-base": {
+                "kind": "local_command",
+                "capabilities": ["repair"],
+                "command": command,
+                "args": list(args),
+                "timeout_seconds": 5,
+            },
+            "agent-repair": {
+                "kind": "agent_runtime",
+                "runtime": "langgraph",
+                "base_provider": "local-base",
+                "capabilities": ["repair"],
+                "max_iterations": max_iterations,
+                "timeout_seconds": 10,
             },
         },
     }
@@ -605,6 +665,86 @@ def test_cli_repair_with_local_command_provider(sample_project: Path, monkeypatc
     assert payload["proposal_explanation"] == "Local command fix added the missing semicolon."
 
 
+def test_cli_repair_with_agent_runtime_provider_first_try(sample_project: Path, monkeypatch) -> None:
+    _write_agent_retry_provider(sample_project, mode="first_good")
+    _set_model_policy(sample_project, _agent_runtime_model_policy(sys.executable, "tools/agent_retry_provider.py"))
+    monkeypatch.chdir(sample_project)
+    monkeypatch.setattr("telchines.operations.AdapterRegistry", FixtureRegistry)
+    runner.invoke(app, ["index"])
+
+    result = runner.invoke(app, ["repair", "--tool", "fixture", "--file", "rtl/broken_counter.sv"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["provider"] == "agent-repair"
+    assert payload["validation_status"] == "passed"
+    response_payload = read_json(Path(payload["replay_artifacts"]["response_artifact"]))
+    agent_runtime = response_payload["agent_runtime"]
+    assert agent_runtime["base_provider"] == "local-base"
+    assert agent_runtime["final_status"] == "validated"
+    assert [step["step"] for step in agent_runtime["steps"]].count("validate_patch") == 1
+
+
+def test_cli_repair_with_agent_runtime_retries_after_validation_feedback(sample_project: Path, monkeypatch) -> None:
+    _write_agent_retry_provider(sample_project, mode="retry")
+    _set_model_policy(sample_project, _agent_runtime_model_policy(sys.executable, "tools/agent_retry_provider.py", max_iterations=2))
+    monkeypatch.chdir(sample_project)
+    monkeypatch.setattr("telchines.operations.AdapterRegistry", FixtureRegistry)
+    runner.invoke(app, ["index"])
+
+    result = runner.invoke(app, ["repair", "--tool", "fixture", "--file", "rtl/broken_counter.sv"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["provider"] == "agent-repair"
+    assert payload["validation_status"] == "passed"
+    response_payload = read_json(Path(payload["replay_artifacts"]["response_artifact"]))
+    steps = response_payload["agent_runtime"]["steps"]
+    assert [step["status"] for step in steps if step["step"] == "validate_patch"] == ["failed", "passed"]
+    second_request = next(step["request"] for step in steps if step["step"] == "propose_patch" and step["attempt"] == 2)
+    assert second_request["previous_attempts"][0]["validation_status"] == "failed"
+
+
+def test_cli_repair_with_agent_runtime_returns_no_patch_when_budget_exhausted(sample_project: Path, monkeypatch) -> None:
+    _write_agent_retry_provider(sample_project, mode="always_bad")
+    _set_model_policy(sample_project, _agent_runtime_model_policy(sys.executable, "tools/agent_retry_provider.py", max_iterations=2))
+    monkeypatch.chdir(sample_project)
+    monkeypatch.setattr("telchines.operations.AdapterRegistry", FixtureRegistry)
+    runner.invoke(app, ["index"])
+
+    result = runner.invoke(app, ["repair", "--tool", "fixture", "--file", "rtl/broken_counter.sv"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["provider"] == "agent-repair"
+    assert payload["patch_id"] is None
+    assert payload["validation_run_id"] is None
+    task_payload = read_json(sorted((sample_project / ".tel" / "tasks").glob("*.json"))[-1])
+    response_payload = read_json(Path(task_payload["metadata"]["response_artifact"]))
+    agent_runtime = response_payload["agent_runtime"]
+    assert agent_runtime["final_status"] == "no_patch"
+    assert [step["status"] for step in agent_runtime["steps"] if step["step"] == "validate_patch"] == ["failed", "failed"]
+
+
+def test_cli_repair_with_agent_runtime_captures_malformed_provider_json(sample_project: Path, monkeypatch) -> None:
+    _write_agent_retry_provider(sample_project, mode="malformed")
+    _set_model_policy(sample_project, _agent_runtime_model_policy(sys.executable, "tools/agent_retry_provider.py"))
+    monkeypatch.chdir(sample_project)
+    monkeypatch.setattr("telchines.operations.AdapterRegistry", FixtureRegistry)
+    runner.invoke(app, ["index"])
+
+    result = runner.invoke(app, ["repair", "--tool", "fixture", "--file", "rtl/broken_counter.sv"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["patch_id"] is None
+    task_payload = read_json(sorted((sample_project / ".tel" / "tasks").glob("*.json"))[-1])
+    response_payload = read_json(Path(task_payload["metadata"]["response_artifact"]))
+    agent_runtime = response_payload["agent_runtime"]
+    assert agent_runtime["final_status"] == "no_patch"
+    assert "JSON" in agent_runtime["final_error"]
+
+
 def test_cli_reports_policy_block_for_remote_provider(sample_project: Path, monkeypatch) -> None:
     config_path = sample_project / ".tel" / "config.json"
     payload = read_json(config_path)
@@ -646,6 +786,23 @@ def test_cli_reports_policy_block_for_local_provider(sample_project: Path, monke
     repair_result = runner.invoke(app, ["repair", "--tool", "fixture", "--file", "rtl/broken_counter.sv"])
     assert repair_result.exit_code == 2
     assert "blocked by policy" in repair_result.stderr
+
+
+def test_cli_reports_policy_block_for_agent_runtime_base_provider(sample_project: Path, monkeypatch) -> None:
+    _write_agent_retry_provider(sample_project)
+    config_path = sample_project / ".tel" / "config.json"
+    payload = read_json(config_path)
+    payload["model_mode"] = "remote"
+    payload["project"]["model_policy"] = _agent_runtime_model_policy(sys.executable, "tools/agent_retry_provider.py")
+    write_json(config_path, payload)
+    monkeypatch.chdir(sample_project)
+    monkeypatch.setattr("telchines.operations.AdapterRegistry", FixtureRegistry)
+    runner.invoke(app, ["index"])
+
+    repair_result = runner.invoke(app, ["repair", "--tool", "fixture", "--file", "rtl/broken_counter.sv"])
+
+    assert repair_result.exit_code == 2
+    assert "base provider local-base is blocked by policy" in repair_result.stderr
 
 
 def test_cli_lists_providers(sample_project: Path, monkeypatch) -> None:
@@ -704,6 +861,21 @@ def test_cli_checks_local_command_provider(sample_project: Path, monkeypatch) ->
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert payload["providers"][0]["checks"]["transport"]["parsed_keys"] == ["status", "workflow_type"]
+
+
+def test_cli_checks_agent_runtime_provider(sample_project: Path, monkeypatch) -> None:
+    _write_agent_retry_provider(sample_project)
+    _set_model_policy(sample_project, _agent_runtime_model_policy(sys.executable, "tools/agent_retry_provider.py"))
+    monkeypatch.chdir(sample_project)
+
+    result = runner.invoke(app, ["providers", "check", "agent-repair"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    transport = payload["providers"][0]["checks"]["transport"]
+    assert transport["mode"] == "agent_runtime"
+    assert transport["runtime"] == "langgraph"
+    assert transport["base_provider"] == "local-base"
 
 
 def test_cli_checks_local_command_provider_failure(sample_project: Path, monkeypatch) -> None:

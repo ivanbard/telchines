@@ -134,7 +134,22 @@ def privacy_report(root: Path | None = None) -> dict[str, object]:
         if not isinstance(provider_config, dict):
             continue
         kind = provider_config.get("kind")
-        if kind == "local_command":
+        effective_config = provider_config
+        effective_kind = kind
+        if kind == "agent_runtime":
+            base_provider = provider_config.get("base_provider")
+            base_config = providers.get(str(base_provider))
+            if isinstance(base_config, dict):
+                risks.append(
+                    {
+                        "provider": name,
+                        "severity": "info",
+                        "summary": f"agent_runtime provider delegates repair proposals to base provider {base_provider}",
+                    }
+                )
+                effective_config = base_config
+                effective_kind = base_config.get("kind")
+        if effective_kind == "local_command":
             risks.append(
                 {
                     "provider": name,
@@ -142,7 +157,7 @@ def privacy_report(root: Path | None = None) -> dict[str, object]:
                     "summary": "local_command providers execute configured local processes from the project root",
                 }
             )
-            env = provider_config.get("env", {})
+            env = effective_config.get("env", {})
             if isinstance(env, dict):
                 secret_env_keys = [key for key, value in env.items() if SECRET_KEY_RE.search(str(key)) and str(value).strip()]
                 if secret_env_keys:
@@ -153,7 +168,7 @@ def privacy_report(root: Path | None = None) -> dict[str, object]:
                             "summary": f"provider env stores secret-looking keys in config: {', '.join(secret_env_keys)}",
                         }
                     )
-        if kind == "openai_compatible" and not config.no_egress and config.model_mode != "local":
+        if effective_kind == "openai_compatible" and not config.no_egress and config.model_mode != "local":
             risks.append(
                 {
                     "provider": name,

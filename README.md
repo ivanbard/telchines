@@ -199,6 +199,7 @@ Provider kinds in `v1`:
 - `heuristic`
 - `openai_compatible`
 - `local_command`
+- `agent_runtime` (optional repair-loop pilot; install `telchines[agentic]` for LangGraph dependencies)
 
 Policy controls:
 
@@ -227,7 +228,7 @@ tel eval run
 tel eval report
 ```
 
-The current default suite contains **18 cases** and is part of the `v1` credibility story, not optional polish.
+The current default suite contains **19 cases** and is part of the `v1` credibility story, not optional polish.
 
 ## v1 Scope
 

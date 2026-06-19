@@ -18,7 +18,7 @@ def test_eval_default_suite(work_root: Path) -> None:
     store = RunStore(config)
     report = run_default_suite(config, store)
     assert report["passed"] == report["total"]
-    assert report["total"] == 18
+    assert report["total"] == 19
     assert report["metrics"]["retrieval"]["cases"] == 3
     assert report["metrics"]["retrieval"]["avg_recall_at_k"] == 1.0
     assert report["metrics"]["retrieval"]["avg_external_recall_at_k"] == 1.0
@@ -49,5 +49,5 @@ def test_eval_default_suite_uses_bundled_benchmarks(work_root: Path) -> None:
     report = run_default_suite(config, store)
 
     assert report["passed"] == report["total"]
-    assert report["total"] == 18
-    assert store.load_report("latest_eval")["total"] == 18
+    assert report["total"] == 19
+    assert store.load_report("latest_eval")["total"] == 19

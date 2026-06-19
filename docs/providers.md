@@ -42,6 +42,29 @@ Optional fields:
 - `env`
 - `output_limit_chars` for persisted stdout/stderr diagnostics; it must be an integer of at least 1024 and defaults to 65536
 
+### `agent_runtime`
+
+Optional compile-repair pilot that runs a bounded agent loop over an existing repair provider. The runtime proposes a patch through `base_provider`, validates it with the normal Telchines repair validation path, and retries with validation feedback until a patch passes or `max_iterations` is exhausted.
+
+Required fields:
+
+- `runtime`, currently `langgraph`
+- `base_provider`, referencing an `openai_compatible` or `local_command` repair provider
+- `capabilities`, currently `["repair"]`
+- `timeout_seconds`
+
+Optional fields:
+
+- `max_iterations`, a positive integer that defaults to 3
+
+Install the optional LangChain/LangGraph dependencies with:
+
+```bash
+pip install "telchines[agentic]"
+```
+
+The runtime is intentionally opt-in and does not replace Telchines retrieval, run storage, policy checks, or validation gates. It inherits policy blocking from its base provider, so `no_egress=true`, `model_mode=local`, and `model_mode=remote` still apply through the delegated provider.
+
 ## Example Config
 
 ```json
@@ -73,6 +96,19 @@ Optional fields:
 }
 ```
 
+Agent-runtime repair pilot:
+
+```json
+{
+  "kind": "agent_runtime",
+  "runtime": "langgraph",
+  "base_provider": "local-repair-model",
+  "capabilities": ["repair"],
+  "max_iterations": 3,
+  "timeout_seconds": 60
+}
+```
+
 ## Policy Rules
 
 - `model_mode=local` blocks remote providers
@@ -82,7 +118,7 @@ Optional fields:
 
 Use `tel providers list` to inspect which providers are allowed and why any provider is blocked.
 
-Use `tel providers check [NAME]` to validate one provider, or omit `NAME` to check all providers. By default this performs a live transport check for `openai_compatible` and `local_command` providers. Add `--offline` to validate only configuration and policy:
+Use `tel providers check [NAME]` to validate one provider, or omit `NAME` to check all providers. By default this performs a live transport check for `openai_compatible` and `local_command` providers and reports `agent_runtime` routing metadata. Add `--offline` to validate only configuration and policy:
 
 ```bash
 tel providers check heuristic
