@@ -26,6 +26,7 @@ from rich.table import Table
 from telchines.config import ProjectConfig
 from telchines.errors import AdapterExecutionError, ConfigError, ProviderError, TelchinesError
 from telchines.operations import (
+    agent,
     coverage_plan,
     check_providers,
     clean_index,
@@ -63,6 +64,7 @@ SHELL_COMMAND_HELP = [
     ("/index [status|clean]", "Build, inspect, or clean retrieval indexes"),
     ("/retrieve QUERY", "Search project context"),
     ("/providers [check [NAME] [--offline]]", "Show or check configured providers"),
+    ("/agent TASK [--tool TOOL --file PATH]", "Plan and run a review-gated hardware agent task"),
     ("/repair --tool TOOL --file PATH", "Run repair workflow"),
     ("/triage --logs PATH [--logs PATH] [--waveform PATH]", "Run regression triage"),
     ("/coverage-plan --report PATH [--exclusions PATH] [--formal-run RUN_ID]", "Generate coverage closure recommendations"),
@@ -574,6 +576,31 @@ def _execute_command(session: ShellSession, parts: list[str], raw: bool) -> str 
         payload = list_providers(session.cwd)
         return dump_json(payload) if raw else render_provider_payload(payload)
 
+    if command == "agent":
+        agent_args = _parse_agent_args(parts[1:])
+        payload = agent(
+            session.cwd,
+            agent_args["task"],
+            tool=agent_args["tool"],
+            files=agent_args["files"],
+            extra_arg=agent_args["extra_args"],
+            apply_patch=agent_args["apply_patch"],
+            logs=[_resolve_path(session.cwd, value) for value in agent_args["logs"]],
+            waveforms=[_resolve_path(session.cwd, value) for value in agent_args["waveforms"]],
+            report=None if agent_args["report"] is None else _resolve_path(session.cwd, agent_args["report"]),
+            exclusions=None if agent_args["exclusions"] is None else _resolve_path(session.cwd, agent_args["exclusions"]),
+            formal_run_id=agent_args["formal_run"],
+            rtl=[_resolve_path(session.cwd, value) for value in agent_args["rtl"]],
+            spec=[_resolve_path(session.cwd, value) for value in agent_args["spec"]],
+            dut=None if agent_args["dut"] is None else _resolve_path(session.cwd, agent_args["dut"]),
+            output=None if agent_args["output"] is None else _resolve_path(session.cwd, agent_args["output"]),
+            output_dir=None if agent_args["output_dir"] is None else _resolve_path(session.cwd, agent_args["output_dir"]),
+            provider_name=agent_args["provider"],
+            intent=agent_args["intent"],
+        )
+        session.note_context(payload)
+        return dump_json(payload) if raw else render_agent_payload(payload)
+
     if command == "repair":
         tool, files, extra_args, apply_patch = _parse_repair_args(parts[1:])
         payload = repair(session.cwd, tool=tool, files=files, extra_arg=extra_args, apply_patch=apply_patch)
@@ -839,6 +866,28 @@ def render_repair_payload(payload: dict[str, object]) -> str:
     return render_action_panel("Repair Result", "\n".join(body))
 
 
+def render_agent_payload(payload: dict[str, object]) -> str:
+    evidence = payload.get("evidence") if isinstance(payload.get("evidence"), dict) else {}
+    result = payload.get("result") if isinstance(payload.get("result"), dict) else {}
+    body = [
+        f"task: {payload['task_id']}",
+        f"workflow: {payload['workflow_type']}",
+        f"status: {payload['status']}",
+        f"context: {payload['context_id']}",
+    ]
+    if isinstance(result, dict):
+        for key in ("patch_id", "candidate_id", "validation_run_id", "validation_status", "artifact_path"):
+            value = result.get(key)
+            if value:
+                body.append(f"{key.replace('_', ' ')}: {value}")
+    if isinstance(evidence, dict) and evidence.get("replay_artifacts"):
+        body.append("evidence: replay artifacts saved")
+    review_gate = payload.get("review_gate")
+    if isinstance(review_gate, dict):
+        body.append(f"review: {review_gate.get('summary')}")
+    return render_action_panel("Agent Result", "\n".join(body))
+
+
 def render_triage_payload(payload: dict[str, object]) -> str:
     return render_action_panel("Triage Summary", format_triage_human(payload))
 
@@ -1082,6 +1131,74 @@ def _parse_project_init(parts: list[str]) -> tuple[Path, str | None]:
         path = Path(part)
         index += 1
     return path, name
+
+
+def _parse_agent_args(parts: list[str]) -> dict[str, Any]:
+    values: dict[str, Any] = {
+        "task": "",
+        "tool": None,
+        "files": [],
+        "extra_args": [],
+        "apply_patch": False,
+        "logs": [],
+        "waveforms": [],
+        "report": None,
+        "exclusions": None,
+        "formal_run": None,
+        "rtl": [],
+        "spec": [],
+        "dut": None,
+        "output": None,
+        "output_dir": None,
+        "provider": None,
+        "intent": "",
+    }
+    repeated = {
+        "--file": "files",
+        "--extra-arg": "extra_args",
+        "--logs": "logs",
+        "--waveform": "waveforms",
+        "--rtl": "rtl",
+        "--spec": "spec",
+    }
+    single = {
+        "--tool": "tool",
+        "--report": "report",
+        "--exclusions": "exclusions",
+        "--formal-run": "formal_run",
+        "--dut": "dut",
+        "--output": "output",
+        "--output-dir": "output_dir",
+        "--provider": "provider",
+        "--intent": "intent",
+    }
+    task_parts: list[str] = []
+    index = 0
+    while index < len(parts):
+        part = parts[index]
+        if part == "--apply":
+            values["apply_patch"] = True
+            index += 1
+            continue
+        if part in repeated:
+            casted = values[repeated[part]]
+            if isinstance(casted, list):
+                casted.append(_require_option_value(parts, index, part))
+            index += 2
+            continue
+        if part in single:
+            values[single[part]] = _require_option_value(parts, index, part)
+            index += 2
+            continue
+        if part.startswith("--"):
+            raise ValueError(f"unrecognized agent argument: {part}")
+        task_parts.append(part)
+        index += 1
+    task = " ".join(task_parts).strip()
+    if not task:
+        raise ValueError("/agent requires a natural-language task")
+    values["task"] = task
+    return values
 
 
 def _parse_repair_args(parts: list[str]) -> tuple[str, list[str], list[str], bool]:

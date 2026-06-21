@@ -15,6 +15,7 @@ from telchines.providers import build_generation_provider, build_repair_provider
 from telchines.retrieval import RetrievalService
 from telchines.run_store import RunStore
 from telchines.utils import copy_tree_to_temp, read_json, remove_tree, stable_id, utc_now
+from telchines.workflows.agent import execute_agent
 from telchines.workflows.coverage import execute_coverage_plan
 from telchines.workflows.gen_cocotb import execute_cocotb_generation
 from telchines.workflows.gen_sva import execute_generation
@@ -61,7 +62,9 @@ def _run_default_suite(config: ProjectConfig, store: RunStore) -> dict[str, obje
     retrieval.build_index()
     results: list[dict[str, object]] = []
     for case in cases:
-        if case.task_type == "repair":
+        if case.task_type == "agent":
+            results.append(_run_agent_case(config, store, retrieval, case))
+        elif case.task_type == "repair":
             results.append(_run_repair_case(config, store, retrieval, case))
         elif case.task_type == "triage":
             results.append(_run_triage_case(config, store, retrieval, case))
@@ -148,6 +151,71 @@ def _run_repair_case(config: ProjectConfig, store: RunStore, retrieval: Retrieva
             "task_type": case.task_type,
             "passed": passed,
             "patch_id": proposal.patch_id if proposal else None,
+        }
+    finally:
+        remove_tree(temp_root)
+
+
+def _run_agent_case(config: ProjectConfig, store: RunStore, retrieval: RetrievalService, case: BenchmarkCase) -> dict[str, object]:
+    fixture_root = config.project_root / case.fixture_root
+    temp_root = copy_tree_to_temp(fixture_root)
+    try:
+        temp_config = ProjectConfig.init_project(temp_root)
+        temp_config.project.project_id = config.project.project_id
+        temp_config.model_mode = config.model_mode
+        temp_config.no_egress = config.no_egress
+        temp_config.retrieval = deepcopy(config.retrieval)
+        temp_config.adapters = list(config.adapters)
+        model_policy = _resolve_runtime_placeholders(deepcopy(case.config.get("model_policy", {})))
+        if model_policy:
+            temp_config.project.model_policy = model_policy
+        temp_config.save()
+        temp_store = RunStore(temp_config)
+        temp_retrieval = RetrievalService(temp_config)
+        temp_retrieval.build_index()
+        payload = execute_agent(
+            temp_config,
+            temp_store,
+            temp_retrieval,
+            str(case.config["task"]),
+            tool=str(case.config.get("tool")) if case.config.get("tool") else None,
+            files=[str(path) for path in case.config.get("files", [])],
+            extra_args=[str(arg) for arg in case.config.get("extra_args", [])],
+            apply_patch=bool(case.config.get("apply_patch", False)),
+            logs=[temp_root / str(path) for path in case.config.get("logs", [])],
+            waveforms=[temp_root / str(path) for path in case.config.get("waveforms", [])],
+            report=(temp_root / str(case.config["report"])) if case.config.get("report") else None,
+            rtl=[temp_root / str(path) for path in case.config.get("rtl", [])],
+            spec=[temp_root / str(path) for path in case.config.get("spec", [])],
+            dut=(temp_root / str(case.config["dut"])) if case.config.get("dut") else None,
+        )
+        step_names = [str(step.get("step")) for step in payload.get("steps", []) if isinstance(step, dict)]
+        evidence = payload.get("evidence", {})
+        if not isinstance(evidence, dict):
+            evidence = {}
+        replay_artifacts = payload.get("replay_artifacts", {})
+        if not isinstance(replay_artifacts, dict):
+            replay_artifacts = {}
+        required_steps = [str(step) for step in case.scoring.get("required_steps", [])]
+        required_evidence = [str(item) for item in case.scoring.get("required_evidence", [])]
+        passed = (
+            payload.get("workflow_type") == case.scoring.get("expected_workflow_type")
+            and payload.get("status") == case.scoring.get("expected_status", payload.get("status"))
+            and all(step in step_names for step in required_steps)
+            and all(evidence.get(item) for item in required_evidence)
+            and bool(replay_artifacts.get("replay_artifact"))
+        )
+        return {
+            "benchmark_id": case.benchmark_id,
+            "task_type": case.task_type,
+            "passed": passed,
+            "workflow_type": payload.get("workflow_type"),
+            "status": payload.get("status"),
+            "context_id": payload.get("context_id"),
+            "step_names": step_names,
+            "patch_id": evidence.get("patch_id"),
+            "validation_run_id": evidence.get("validation_run_id"),
+            "replay_artifact": replay_artifacts.get("replay_artifact"),
         }
     finally:
         remove_tree(temp_root)
@@ -423,12 +491,19 @@ def _run_coverage_case(config: ProjectConfig, case: BenchmarkCase) -> dict[str, 
 
 
 def _aggregate_metrics(results: list[dict[str, object]]) -> dict[str, object]:
+    agent_results = [result for result in results if result["task_type"] == "agent"]
     retrieval_results = [result for result in results if result["task_type"] == "retrieval"]
     sva_results = [result for result in results if result["task_type"] == "sva"]
     cocotb_results = [result for result in results if result["task_type"] == "cocotb"]
     coverage_results = [result for result in results if result["task_type"] == "coverage"]
     triage_results = [result for result in results if result["task_type"] == "triage"]
     metrics: dict[str, object] = {}
+    if agent_results:
+        metrics["agent"] = {
+            "cases": len(agent_results),
+            "pass_rate": round(sum(1 for result in agent_results if bool(result["passed"])) / len(agent_results), 3),
+            "review_required_count": sum(1 for result in agent_results if result.get("status") == "review_required"),
+        }
     if retrieval_results:
         metrics["retrieval"] = {
             "cases": len(retrieval_results),

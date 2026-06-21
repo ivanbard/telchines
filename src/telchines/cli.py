@@ -8,6 +8,7 @@ import typer
 from telchines.errors import AdapterExecutionError, ConfigError, ProviderError
 from telchines import __version__
 from telchines.operations import (
+    agent as agent_op,
     check_adapters as check_adapters_op,
     check_providers as check_providers_op,
     clean_index as clean_index_op,
@@ -212,6 +213,60 @@ def repair(
         _fail(f"adapter error: {exc}")
     except ProviderError as exc:
         _fail(f"provider error: {exc}")
+    typer.echo(dump_json(payload))
+
+
+@app.command("agent")
+def agent_command(
+    task: str = typer.Argument(..., help="Natural-language hardware engineering task."),
+    tool: str | None = typer.Option(None, "--tool", help="Adapter to run for repair tasks."),
+    files: list[str] = typer.Option([], "--file", help="RTL/source file for adapter-backed repair."),
+    extra_arg: list[str] = typer.Option([], "--extra-arg", help="Extra argument forwarded to the adapter."),
+    apply_patch: bool = typer.Option(False, "--apply", help="Apply a validated repair patch instead of leaving it review-gated."),
+    logs: list[Path] = typer.Option([], "--logs", help="Log path for triage tasks."),
+    waveforms: list[Path] = typer.Option([], "--waveform", help="Waveform path for triage/evidence tasks."),
+    report: Path | None = typer.Option(None, "--report", help="Coverage report path."),
+    exclusions: Path | None = typer.Option(None, "--exclusions", help="Coverage exclusions path."),
+    formal_run: str | None = typer.Option(None, "--formal-run", help="Formal run id to use as supporting evidence."),
+    rtl: list[Path] = typer.Option([], "--rtl", help="RTL file for generation or coverage tasks."),
+    spec: list[Path] = typer.Option([], "--spec", help="Spec/context file for generation or coverage tasks."),
+    dut: Path | None = typer.Option(None, "--dut", help="DUT path for cocotb generation tasks."),
+    output: Path | None = typer.Option(None, "--output", help="Generated SVA output path."),
+    output_dir: Path | None = typer.Option(None, "--output-dir", help="Generated cocotb output directory."),
+    provider: str | None = typer.Option(None, "--provider", help="Generation provider override."),
+    intent: str = typer.Option("", "--intent", help="Additional generation intent."),
+) -> None:
+    try:
+        payload = agent_op(
+            None,
+            task,
+            tool=tool,
+            files=files,
+            extra_arg=extra_arg,
+            apply_patch=apply_patch,
+            logs=logs,
+            waveforms=waveforms,
+            report=report,
+            exclusions=exclusions,
+            formal_run_id=formal_run,
+            rtl=rtl,
+            spec=spec,
+            dut=dut,
+            output=output,
+            output_dir=output_dir,
+            provider_name=provider,
+            intent=intent,
+        )
+    except KeyError as exc:
+        _fail(f"unknown adapter: {exc.args[0]}")
+    except ConfigError as exc:
+        _fail(f"config error: {exc}")
+    except AdapterExecutionError as exc:
+        _fail(f"adapter error: {exc}")
+    except ProviderError as exc:
+        _fail(f"provider error: {exc}")
+    except ValueError as exc:
+        _fail(str(exc))
     typer.echo(dump_json(payload))
 
 

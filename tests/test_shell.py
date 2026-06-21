@@ -16,6 +16,7 @@ from telchines.shell import (
     _build_fullscreen_shell_app,
     _dispatch_slash_command,
     _is_help_command,
+    _parse_agent_args,
     _parse_coverage_plan_args,
     _parse_gen_cocotb_args,
     _parse_gen_sva_args,
@@ -49,6 +50,7 @@ def test_shell_help_renders_core_commands() -> None:
     rendered = render_help()
     assert "/providers" in rendered
     assert "/providers [check [NAME] [--offline]]" in rendered
+    assert "/agent TASK" in rendered
     assert "/triage --logs PATH" in rendered
     assert "/coverage-plan --report PATH" in rendered
     assert "/gen-sva --spec PATH --rtl PATH" in rendered
@@ -113,6 +115,26 @@ def test_shell_parser_accepts_repeated_workflow_options() -> None:
         "logs/a.log",
         "logs/b.log",
     ]
+
+    agent_args = _parse_agent_args(
+        [
+            "fix",
+            "broken",
+            "counter",
+            "--tool",
+            "fixture",
+            "--file",
+            "rtl/a.sv",
+            "--file",
+            "rtl/b.sv",
+            "--extra-arg",
+            "-Wall",
+        ]
+    )
+    assert agent_args["task"] == "fix broken counter"
+    assert agent_args["tool"] == "fixture"
+    assert agent_args["files"] == ["rtl/a.sv", "rtl/b.sv"]
+    assert agent_args["extra_args"] == ["-Wall"]
 
 
 @pytest.mark.parametrize(
