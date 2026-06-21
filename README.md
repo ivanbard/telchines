@@ -1,12 +1,12 @@
 # Telchines
 
-```text
-  _____ _____ _     ____ _   _ ___ _   _ _____ ____
- |_   _| ____| |   / ___| | | |_ _| \ | | ____/ ___|
-   | | |  _| | |  | |   | |_| || ||  \| |  _| \___ \
-   | | | |___| |__| |___|  _  || || |\  | |___ ___) |
-   |_| |_____|_____\____|_| |_|___|_| \_|_____|____/
-```
+<p align="center">
+  <img src="docs/assets/telchines-logo.png" alt="Telchines logo" width="280">
+</p>
+
+<p align="center">
+  <em>CLI-first verification workflows for hardware teams that want grounded, replayable AI instead of generic repo chat.</em>
+</p>
 
 <p align="center">
   <a href="https://github.com/ivanbard/telchines/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/ivanbard/telchines/ci.yml?branch=main&style=flat-square&label=CI" alt="CI status"></a>
@@ -14,10 +14,6 @@
   <img src="https://img.shields.io/badge/python-3.11%2B-0b7285?style=flat-square" alt="Python 3.11+">
   <img src="https://img.shields.io/badge/license-MIT-14532d?style=flat-square" alt="MIT License">
   <img src="https://img.shields.io/badge/benchmarks-18%20cases-7c2d12?style=flat-square" alt="18 benchmark cases">
-</p>
-
-<p align="center">
-  CLI-first verification workflows for hardware teams that want grounded, replayable AI instead of generic repo chat.
 </p>
 
 <p align="center">

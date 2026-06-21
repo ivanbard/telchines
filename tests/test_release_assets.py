@@ -42,6 +42,7 @@ def test_release_files_exist() -> None:
         repo_root / "docs" / "evaluation.md",
         repo_root / "docs" / "compatibility.md",
         repo_root / "docs" / "release-checklist.md",
+        repo_root / "docs" / "assets" / "telchines-logo.png",
         repo_root / "examples" / "providers" / "local_command_provider.py",
         repo_root / "scripts" / "tool_smoke.py",
     ]
