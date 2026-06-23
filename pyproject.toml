@@ -4,9 +4,9 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "telchines"
-version = "1.0.1"
+version = "1.0.2"
 description = "CLI-first verification workflow platform for grounded AI-assisted hardware validation"
-readme = "README.md"
+readme = {file = "README.md", content-type = "text/markdown"}
 requires-python = ">=3.11"
 license = "MIT"
 authors = [

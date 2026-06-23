@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.2 - Unreleased
+
+PyPI and public repository presentation polish.
+
+- added a cleaned transparent Telchines logo asset for the README
+- made the README logo and documentation links render correctly from PyPI
+- removed local agent skill files and internal planning/backlog artifacts from the public tree
+- updated release metadata and badges for the refreshed package page
+
 ## 1.0.1 - Unreleased
 
 Release hardening patch.

@@ -1,7 +1,7 @@
 # Telchines
 
 <p align="center">
-  <img src="docs/assets/telchines-logo.png" alt="Telchines logo" width="280">
+  <img src="https://raw.githubusercontent.com/ivanbard/telchines/main/docs/assets/telchines-logo.png" alt="Telchines logo" width="280">
 </p>
 
 <p align="center">
@@ -10,10 +10,10 @@
 
 <p align="center">
   <a href="https://github.com/ivanbard/telchines/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/ivanbard/telchines/ci.yml?branch=main&style=flat-square&label=CI" alt="CI status"></a>
-  <img src="https://img.shields.io/badge/version-v1.0.1-0f172a?style=flat-square" alt="Version 1.0.1">
+  <img src="https://img.shields.io/badge/version-v1.0.2-0f172a?style=flat-square" alt="Version 1.0.2">
   <img src="https://img.shields.io/badge/python-3.11%2B-0b7285?style=flat-square" alt="Python 3.11+">
   <img src="https://img.shields.io/badge/license-MIT-14532d?style=flat-square" alt="MIT License">
-  <img src="https://img.shields.io/badge/benchmarks-18%20cases-7c2d12?style=flat-square" alt="18 benchmark cases">
+  <img src="https://img.shields.io/badge/benchmarks-19%20cases-7c2d12?style=flat-square" alt="19 benchmark cases">
 </p>
 
 <p align="center">
@@ -204,7 +204,7 @@ Policy controls:
 - `model_mode=hybrid` allows both
 - `no_egress=true` blocks networked providers
 
-See [docs/adapters.md](docs/adapters.md), [docs/providers.md](docs/providers.md), and [docs/generated-artifacts.md](docs/generated-artifacts.md) for the exact support contract.
+See [docs/adapters.md](https://github.com/ivanbard/telchines/blob/main/docs/adapters.md), [docs/providers.md](https://github.com/ivanbard/telchines/blob/main/docs/providers.md), and [docs/generated-artifacts.md](https://github.com/ivanbard/telchines/blob/main/docs/generated-artifacts.md) for the exact support contract.
 
 ## Benchmarks And Release Validation
 
@@ -247,15 +247,15 @@ Not in `v1`:
 
 ## Documentation
 
-- [Quickstart](docs/quickstart.md)
-- [Worked Examples](docs/examples.md)
-- [Provider Configuration](docs/providers.md)
-- [Local LLMs](docs/local-llms.md)
-- [Adapter Support And Contribution Contract](docs/adapters.md)
-- [External Retrieval Policy](docs/external-retrieval-policy.md)
-- [Evaluation And Benchmarks](docs/evaluation.md)
-- [Compatibility Promise](docs/compatibility.md)
-- [Release Checklist](docs/release-checklist.md)
+- [Quickstart](https://github.com/ivanbard/telchines/blob/main/docs/quickstart.md)
+- [Worked Examples](https://github.com/ivanbard/telchines/blob/main/docs/examples.md)
+- [Provider Configuration](https://github.com/ivanbard/telchines/blob/main/docs/providers.md)
+- [Local LLMs](https://github.com/ivanbard/telchines/blob/main/docs/local-llms.md)
+- [Adapter Support And Contribution Contract](https://github.com/ivanbard/telchines/blob/main/docs/adapters.md)
+- [External Retrieval Policy](https://github.com/ivanbard/telchines/blob/main/docs/external-retrieval-policy.md)
+- [Evaluation And Benchmarks](https://github.com/ivanbard/telchines/blob/main/docs/evaluation.md)
+- [Compatibility Promise](https://github.com/ivanbard/telchines/blob/main/docs/compatibility.md)
+- [Release Checklist](https://github.com/ivanbard/telchines/blob/main/docs/release-checklist.md)
 
 ## Stability Promise For v1
 
@@ -266,7 +266,7 @@ The `1.x` line treats these interfaces as stable unless explicitly deprecated:
 - run-store replay artifacts
 - JSON output shape for the main workflow commands
 
-See [docs/compatibility.md](docs/compatibility.md) for the exact boundary.
+See [docs/compatibility.md](https://github.com/ivanbard/telchines/blob/main/docs/compatibility.md) for the exact boundary.
 
 <details>
 <summary><strong>Full CLI Surface</strong></summary>
@@ -311,6 +311,6 @@ pytest
 
 Project contribution and disclosure guidance:
 
-- [CONTRIBUTING.md](CONTRIBUTING.md)
-- [SECURITY.md](SECURITY.md)
-- [CHANGELOG.md](CHANGELOG.md)
+- [CONTRIBUTING.md](https://github.com/ivanbard/telchines/blob/main/CONTRIBUTING.md)
+- [SECURITY.md](https://github.com/ivanbard/telchines/blob/main/SECURITY.md)
+- [CHANGELOG.md](https://github.com/ivanbard/telchines/blob/main/CHANGELOG.md)
