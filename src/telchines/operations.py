@@ -15,6 +15,7 @@ from telchines.providers import build_generation_provider, build_repair_provider
 from telchines.retrieval import RetrievalService
 from telchines.run_store import RunStore
 from telchines.utils import SECRET_KEY_RE, dataclass_to_dict, ensure_directory, read_json, remove_tree, stable_id, utc_now
+from telchines.workflows.agent import execute_agent
 from telchines.workflows.coverage import execute_coverage_plan, format_coverage_human
 from telchines.workflows.gen_cocotb import execute_cocotb_generation
 from telchines.workflows.gen_sva import execute_generation
@@ -377,6 +378,52 @@ def repair(root: Path | None, tool: str, files: list[str], extra_arg: list[str] 
         "validation_status": validation_run.status if validation_run else None,
         "validation_summary": validation_run.summary if validation_run else None,
     }
+
+
+def agent(
+    root: Path | None,
+    task: str,
+    *,
+    tool: str | None = None,
+    files: list[str] | None = None,
+    extra_arg: list[str] | None = None,
+    apply_patch: bool = False,
+    logs: list[Path] | None = None,
+    waveforms: list[Path] | None = None,
+    report: Path | None = None,
+    exclusions: Path | None = None,
+    formal_run_id: str | None = None,
+    rtl: list[Path] | None = None,
+    spec: list[Path] | None = None,
+    dut: Path | None = None,
+    output: Path | None = None,
+    output_dir: Path | None = None,
+    provider_name: str | None = None,
+    intent: str = "",
+) -> dict[str, object]:
+    config, store, retrieval = load_services(root)
+    return execute_agent(
+        config,
+        store,
+        retrieval,
+        task,
+        tool=tool,
+        files=files,
+        extra_args=extra_arg,
+        apply_patch=apply_patch,
+        logs=logs,
+        waveforms=waveforms,
+        report=report,
+        exclusions=exclusions,
+        formal_run_id=formal_run_id,
+        rtl=rtl,
+        spec=spec,
+        dut=dut,
+        output=output,
+        output_dir=output_dir,
+        provider_name=provider_name,
+        intent=intent,
+    )
 
 
 def gen_sva(

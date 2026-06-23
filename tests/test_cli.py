@@ -705,6 +705,46 @@ def test_cli_repair_with_agent_runtime_retries_after_validation_feedback(sample_
     assert second_request["previous_attempts"][0]["validation_status"] == "failed"
 
 
+def test_cli_agent_repair_is_review_gated_and_records_evidence(sample_project: Path, monkeypatch) -> None:
+    _write_agent_retry_provider(sample_project, mode="retry")
+    _set_model_policy(sample_project, _agent_runtime_model_policy(sys.executable, "tools/agent_retry_provider.py", max_iterations=2))
+    monkeypatch.chdir(sample_project)
+    runner.invoke(app, ["index"])
+
+    result = runner.invoke(
+        app,
+        [
+            "agent",
+            "fix the broken counter compile failure",
+            "--tool",
+            "fixture",
+            "--file",
+            "rtl/broken_counter.sv",
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["workflow_type"] == "compile_repair"
+    assert payload["status"] == "review_required"
+    assert payload["review_gate"]["required"] is True
+    assert payload["result"]["validation_status"] == "passed"
+    assert payload["evidence"]["patch_id"]
+    assert payload["evidence"]["validation_run_id"]
+    assert payload["replay_artifacts"]["replay_artifact"]
+    assert [step["step"] for step in payload["steps"]] == [
+        "retrieve_context",
+        "run_adapter_check",
+        "generate_or_repair_candidate",
+        "validate_candidate",
+    ]
+    assert "count <= 4'd0;" not in (sample_project / "rtl" / "broken_counter.sv").read_text(encoding="utf-8")
+    replay_payload = read_json(Path(payload["replay_artifacts"]["replay_artifact"]))
+    assert replay_payload["workflow_type"] == "compile_repair"
+    response_payload = read_json(Path(replay_payload["response_artifact"]))
+    assert response_payload["task_id"] == payload["task_id"]
+
+
 def test_cli_repair_with_agent_runtime_returns_no_patch_when_budget_exhausted(sample_project: Path, monkeypatch) -> None:
     _write_agent_retry_provider(sample_project, mode="always_bad")
     _set_model_policy(sample_project, _agent_runtime_model_policy(sys.executable, "tools/agent_retry_provider.py", max_iterations=2))
@@ -1193,6 +1233,24 @@ def test_cli_shell_supports_explicit_shell_subcommand(sample_project: Path, monk
     result = runner.invoke(app, ["shell"], input="/pwd\n/exit\n")
     assert result.exit_code == 0
     assert str(sample_project) in result.stdout
+
+
+def test_cli_shell_supports_agent_command(sample_project: Path, monkeypatch) -> None:
+    _write_agent_retry_provider(sample_project, mode="first_good")
+    _set_model_policy(sample_project, _agent_runtime_model_policy(sys.executable, "tools/agent_retry_provider.py"))
+    monkeypatch.chdir(sample_project)
+    runner.invoke(app, ["index"])
+
+    result = runner.invoke(
+        app,
+        [],
+        input='/agent "fix the broken counter compile failure" --tool fixture --file rtl/broken_counter.sv\n/exit\n',
+    )
+
+    assert result.exit_code == 0
+    assert "Agent Result" in result.stdout
+    assert "status: review_required" in result.stdout
+    assert "validation status: passed" in result.stdout
 
 
 def test_cli_shell_supports_plain_mode_flag(sample_project: Path, monkeypatch) -> None:

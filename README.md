@@ -42,6 +42,7 @@ Telchines is built around that loop:
 | Workflow | What it does | Primary command |
 | --- | --- | --- |
 | Retrieval | Builds task-aware evidence packs from repo and run history | `tel retrieve "query"` |
+| Agent | Plans and runs review-gated hardware tasks with evidence replay | `tel agent "fix..." --tool ... --file ...` |
 | Repair | Proposes and validates minimal fixes from tool output | `tel repair --tool ... --file ...` |
 | Triage | Clusters repeated regressions with evidence and history | `tel triage --logs logs/regressions` |
 | Spec-to-SVA | Generates first-pass assertions from spec plus RTL | `tel gen-sva --spec docs/uart.md --rtl rtl/uart_rx.sv` |
@@ -82,7 +83,7 @@ validation: passed
 flowchart LR
     index["Index<br/>RTL, docs, logs, coverage, prior runs"]
     retrieve["Retrieve<br/>Task-aware context with citations"]
-    workflow["Run Workflow<br/>repair, triage, gen-sva, gen-cocotb, coverage-plan"]
+    workflow["Run Workflow<br/>agent, repair, triage, gen-sva, gen-cocotb, coverage-plan"]
     validate["Validate<br/>tool adapters, syntax checks, reruns"]
     replay["Replay<br/>artifacts, runs, benchmarks"]
     store[("Filesystem-backed run store<br/>.tel/")]
@@ -98,7 +99,7 @@ flowchart LR
 Telchines keeps the loop explicit:
 
 1. Index the project and build retrieval context.
-2. Run a verification workflow such as repair, triage, generation, or coverage planning.
+2. Run a verification workflow such as the review-gated agent path, repair, triage, generation, or coverage planning.
 3. Store evidence, artifacts, validation output, and replay metadata under `.tel/`.
 4. Reuse prior runs and benchmark the behavior over time.
 
@@ -107,7 +108,7 @@ Telchines keeps the loop explicit:
 ```mermaid
 flowchart LR
     interface["Engineer Interface<br/>CLI, interactive shell, human-readable and JSON modes"]
-    core["Workflow Core<br/>repair, triage, gen-sva, gen-cocotb, coverage-plan, waveforms"]
+    core["Workflow Core<br/>agent, repair, triage, gen-sva, gen-cocotb, coverage-plan, waveforms"]
     grounding["Grounding Layer<br/>retrieval index, context packs, run memory"]
     edge["Execution Edge<br/>tool adapters, providers, policy controls"]
     dataplane[("Filesystem-backed data plane<br/>runs, artifacts, citations, waveform summaries, benchmark reports, replay commands under .tel/")]
@@ -157,6 +158,7 @@ Run a few common workflows:
 
 ```bash
 tel retrieve "uart timeout handling"
+tel agent "fix the broken counter compile failure" --tool verilator --file rtl/broken_counter.sv
 tel triage --logs logs/regressions --format human
 tel gen-sva --spec docs/uart.md --rtl rtl/uart_rx.sv
 tel gen-cocotb --dut rtl/uart_rx.sv --spec docs/uart.md --intent "smoke the start-bit path"
@@ -173,6 +175,7 @@ tel> /providers
 tel> /providers check heuristic
 tel> /index
 tel> /index status
+tel> /agent "fix the broken counter compile failure" --tool verilator --file rtl/broken_counter.sv
 tel> /triage --logs logs/regressions
 tel> /gen-sva --spec docs/uart.md --rtl rtl/uart_rx.sv
 tel> show my providers
@@ -211,6 +214,7 @@ See [docs/adapters.md](https://github.com/ivanbard/telchines/blob/main/docs/adap
 Telchines ships with an offline benchmark suite covering:
 
 - repair
+- review-gated agent loop
 - triage
 - retrieval
 - spec-to-SVA
@@ -224,7 +228,7 @@ tel eval run
 tel eval report
 ```
 
-The current default suite contains **19 cases** and is part of the `v1` credibility story, not optional polish.
+The current default suite contains **20 cases** and is part of the `v1` credibility story, not optional polish.
 
 ## v1 Scope
 
@@ -233,7 +237,7 @@ Included:
 - interactive shell and one-shot CLI
 - project indexing and retrieval
 - run storage and replay
-- repair, triage, waveform inspection, `gen-sva`, `gen-cocotb`, and `coverage-plan`
+- review-gated `agent`, repair, triage, waveform inspection, `gen-sva`, `gen-cocotb`, and `coverage-plan`
 - provider policy controls for `local`, `hybrid`, `remote`, and `no_egress`
 - built-in benchmark suite
 
@@ -278,6 +282,7 @@ See [docs/compatibility.md](https://github.com/ivanbard/telchines/blob/main/docs
 - `tel index status`
 - `tel index clean`
 - `tel retrieve`
+- `tel agent`
 - `tel repair`
 - `tel triage`
 - `tel coverage-plan`

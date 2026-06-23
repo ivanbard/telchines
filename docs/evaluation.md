@@ -5,6 +5,7 @@ Telchines ships with an offline benchmark suite. In a source checkout the suite 
 Covered task types:
 
 - repair
+- agent
 - triage
 - retrieval
 - SVA generation
@@ -36,4 +37,4 @@ Before cutting a public release:
 
 ## Current Default Suite Shape
 
-The default suite currently includes 19 cases spanning all shipped `v1` workflows, including one optional agent-runtime repair retry case. The automated test suite verifies that the default benchmark run completes successfully and writes a report to the run store.
+The default suite currently includes 20 cases spanning all shipped `v1` workflows, including one agent-runtime repair retry case and one multi-step review-gated agent case. The automated test suite verifies that the default benchmark run completes successfully and writes a report to the run store.
