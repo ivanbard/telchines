@@ -1,0 +1,63 @@
+{
+  "benchmark_id": "agent_repair_review_gate",
+  "task_type": "agent",
+  "title": "Review-gated agent repairs RTL through retrieval, tool feedback, and validation",
+  "fixture_root": "benchmarks/assets/repair_missing_semicolon",
+  "config": {
+    "task": "Fix the broken counter compile failure and leave the validated RTL patch ready for review",
+    "tool": "fixture",
+    "files": [
+      "rtl/broken_counter.sv"
+    ],
+    "model_policy": {
+      "default_provider_by_capability": {
+        "repair": "agent-repair",
+        "generation": "heuristic"
+      },
+      "providers": {
+        "heuristic": {
+          "kind": "heuristic",
+          "capabilities": [
+            "generation"
+          ]
+        },
+        "local-base": {
+          "kind": "local_command",
+          "capabilities": [
+            "repair"
+          ],
+          "command": "__python__",
+          "args": [
+            "tools/agent_retry_provider.py"
+          ],
+          "timeout_seconds": 5
+        },
+        "agent-repair": {
+          "kind": "agent_runtime",
+          "runtime": "langgraph",
+          "base_provider": "local-base",
+          "capabilities": [
+            "repair"
+          ],
+          "max_iterations": 2,
+          "timeout_seconds": 10
+        }
+      }
+    }
+  },
+  "scoring": {
+    "expected_workflow_type": "compile_repair",
+    "expected_status": "review_required",
+    "required_steps": [
+      "retrieve_context",
+      "run_adapter_check",
+      "generate_or_repair_candidate",
+      "validate_candidate"
+    ],
+    "required_evidence": [
+      "patch_id",
+      "validation_run_id"
+    ]
+  },
+  "schema_version": "0.1"
+}

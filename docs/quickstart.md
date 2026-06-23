@@ -91,6 +91,14 @@ Plan coverage closure:
 tel coverage-plan --report cov/coverage.json --rtl rtl/uart_rx.sv --spec docs/uart.md --format human
 ```
 
+Run the review-gated agent path:
+
+```bash
+tel agent "fix the broken counter compile failure" --tool verilator --file rtl/broken_counter.sv
+```
+
+The agent command retrieves context, plans bounded tool actions, runs the selected workflow, validates candidates, and saves request, plan, response, and replay artifacts. Repair patches are not applied unless `--apply` is supplied.
+
 ## Use The Shell
 
 ```bash
@@ -106,6 +114,7 @@ Useful starting commands:
 /providers check heuristic
 /index
 /index status
+/agent "fix the broken counter compile failure" --tool verilator --file rtl/broken_counter.sv
 /triage --logs logs/regressions
 /gen-sva --spec docs/uart.md --rtl rtl/uart_rx.sv
 /exit

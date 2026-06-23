@@ -10,3 +10,7 @@ __pycache__/
 pytest-cache-files-*/
 build/
 dist/
+.agents/
+skills-lock.json
+agent-docs/
+ops/github-backlog.json
