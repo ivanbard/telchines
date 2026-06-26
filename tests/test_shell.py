@@ -57,7 +57,7 @@ def test_shell_help_renders_core_commands() -> None:
     assert "/gen-cocotb --dut PATH" in rendered
     assert "/waveforms" in rendered
     assert "/runs [list|doctor|show RUN_ID|replay RUN_ID" in rendered
-    assert "[--yes]]" in rendered
+    assert "import MANIFEST" in rendered
     assert "/artifacts [purge [--yes]|review REF]" in rendered
     assert "/raw <slash command>" in rendered
 
@@ -160,6 +160,23 @@ def test_shell_completes_commands_and_paths(sample_project: Path) -> None:
 
     paths = list(completer.get_completions(Document("/triage --logs logs/reg"), None))
     assert any(item.text == "logs/regressions/" for item in paths)
+
+
+def test_shell_completes_options_and_file_mentions(sample_project: Path) -> None:
+    session = ShellSession(cwd=sample_project)
+    completer = ShellCompleter(session)
+
+    triage_options = list(completer.get_completions(Document("/triage --"), None))
+    assert {item.text for item in triage_options} >= {"--logs", "--waveform"}
+
+    sva_options = list(completer.get_completions(Document("/gen-sva --"), None))
+    assert {item.text for item in sva_options} >= {"--spec", "--rtl", "--output"}
+
+    import_options = list(completer.get_completions(Document("/runs import --"), None))
+    assert any(item.text == "--dry-run" for item in import_options)
+
+    mentions = list(completer.get_completions(Document("/agent inspect @docs/u"), None))
+    assert any(item.text == "@docs/uart.md" for item in mentions)
 
 
 def test_fullscreen_shell_accepts_pipe_input(sample_project: Path) -> None:

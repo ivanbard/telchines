@@ -10,6 +10,7 @@ from pathlib import Path
 from telchines.adapters.registry import AdapterRegistry
 from telchines.config import ProjectConfig
 from telchines.eval import run_default_suite
+from telchines.import_manifest import import_regression_manifest
 from telchines.models import VerificationRun
 from telchines.providers import build_generation_provider, build_repair_provider, check_provider_statuses, list_provider_statuses
 from telchines.retrieval import RetrievalService
@@ -336,6 +337,11 @@ def replay_run(root: Path | None, run_id: str, *, confirm: bool = False) -> dict
         "stdout": result.stdout,
         "stderr": result.stderr,
     }
+
+
+def import_runs(root: Path | None, manifest: Path, *, dry_run: bool = False) -> dict[str, object]:
+    config, store, _ = load_services(root)
+    return import_regression_manifest(config, store, manifest, dry_run=dry_run)
 
 
 def repair(root: Path | None, tool: str, files: list[str], extra_arg: list[str] | None = None, apply_patch: bool = False) -> dict[str, object]:

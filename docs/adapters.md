@@ -48,12 +48,27 @@ A contributed adapter should:
 - include tests for command construction and output parsing
 - avoid hard-coding organization-specific assumptions into the shared adapter layer
 
+## Adapter Request Checklist
+
+Open one issue per proposed tool adapter. Include:
+
+- target tool name, version range, and category
+- workflow it should support, such as repair validation, generation validation, or formal validation
+- command construction contract, including required binaries and key arguments
+- expected artifacts, such as logs, reports, executables, traces, or counterexamples
+- representative parser samples from real output
+- mocked tests for command construction and parsing
+- optional real-tool smoke path when the dependency is practical in CI or a manual workflow
+
 ## Interoperability Roadmap
 
-Post-`v1` areas under consideration:
+Telchines v1 keeps the integration surface deliberately small: log-directory triage, explicit tool adapters, replayable run-store artifacts, and generated artifact review. Larger integrations should build on those surfaces rather than bypass them.
 
-- broader simulator coverage
-- richer regression-manager and test-runner integration points
+Post-`v1` work should be tracked as focused follow-ups:
+
+- adapter expansion for specific tools, with parser fixtures and command-contract tests
+- a normalized regression manager or test-runner import manifest for larger verification environments
+- shell UX polish, in order: richer option completion, project-aware `@file` insertion, then command-palette style interactions
 - stronger community adapter packaging conventions
 
 These are roadmap items, not `v1` release blockers.

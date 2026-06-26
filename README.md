@@ -123,18 +123,18 @@ flowchart LR
 
 ## Quick Start
 
-Install from source while PyPI trusted publishing is being finalized:
+Install the current release from PyPI:
+
+```bash
+pip install telchines
+```
+
+For local development from a checkout:
 
 ```bash
 python -m venv .venv
 . .venv/Scripts/activate
 pip install -e .[dev]
-```
-
-After the PyPI publisher is configured, the package install path will be:
-
-```bash
-pip install telchines
 ```
 
 Validate the install:
@@ -295,6 +295,7 @@ See [docs/compatibility.md](https://github.com/ivanbard/telchines/blob/main/docs
 - `tel runs list`
 - `tel runs show`
 - `tel runs doctor`
+- `tel runs import MANIFEST`
 - `tel runs replay RUN_ID` preview and `tel runs replay RUN_ID --yes` execution
 - `tel adapters list`
 - `tel adapters check`

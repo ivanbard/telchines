@@ -20,6 +20,7 @@ from telchines.operations import (
     format_triage_human,
     gen_cocotb as gen_cocotb_op,
     gen_sva as gen_sva_op,
+    import_runs as import_runs_op,
     index_status as index_status_op,
     index_project as index_project_op,
     inspect_waveform as inspect_waveform_op,
@@ -194,6 +195,20 @@ def replay_run(
     typer.echo(dump_json(payload))
     if payload.get("status") == "confirmation_required":
         raise typer.Exit(code=1)
+
+
+@runs_app.command("import")
+def import_runs(
+    manifest: Path = typer.Argument(..., help="Regression manager or test-runner import manifest."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Validate and preview imported runs without storing them."),
+) -> None:
+    try:
+        payload = import_runs_op(None, manifest, dry_run=dry_run)
+    except ConfigError as exc:
+        _fail(f"config error: {exc}")
+    except ValueError as exc:
+        _fail(str(exc))
+    typer.echo(dump_json(payload))
 
 
 @app.command("repair")

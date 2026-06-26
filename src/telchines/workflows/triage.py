@@ -83,7 +83,11 @@ def build_clusters(
     waveform_summaries: list[WaveformSummary] | None = None,
 ) -> list[FailureCluster]:
     grouped = _group_observations(observations)
-    previous_runs = store.list_runs_by_workflow("regression_triage")
+    previous_runs = [
+        run
+        for run in store.list_runs()
+        if run.workflow_type in {"regression_triage", "regression_import"}
+    ]
     formal_runs = [run for run in store.list_runs() if _is_formal_run(run)]
     waveform_summaries = waveform_summaries or []
     clusters: list[FailureCluster] = []

@@ -2,18 +2,18 @@
 
 ## Install
 
-Use the source install while PyPI trusted publishing is being finalized:
+Install the current release from PyPI:
+
+```bash
+pip install telchines
+```
+
+For local development from a checkout:
 
 ```bash
 python -m venv .venv
 . .venv/Scripts/activate
 pip install -e .[dev]
-```
-
-After the PyPI publisher is configured, the package install path will be:
-
-```bash
-pip install telchines
 ```
 
 Verify the install:
@@ -98,6 +98,29 @@ tel agent "fix the broken counter compile failure" --tool verilator --file rtl/b
 ```
 
 The agent command retrieves context, plans bounded tool actions, runs the selected workflow, validates candidates, and saves request, plan, response, and replay artifacts. Repair patches are not applied unless `--apply` is supplied.
+
+## Import Regression Runs
+
+Use `tel runs import MANIFEST` to bring external regression-manager or test-runner results into the local run store. The manifest is JSON with `schema_version: "0.1"`, a `tool` identity, and a `runs` list. Each run can include status, seed, logs, artifacts, waveforms, metadata, and an optional replay command.
+
+```json
+{
+  "schema_version": "0.1",
+  "tool": {"kind": "regression_manager", "name": "nightly", "version": "2026.06"},
+  "runs": [
+    {
+      "name": "uart_rx_seed_1",
+      "status": "failed",
+      "seed": 1,
+      "logs": ["logs/regressions/run_a.log"],
+      "waveforms": ["logs/regressions/uart_rx_trace.vcd"],
+      "metadata": {"suite": "smoke"}
+    }
+  ]
+}
+```
+
+Imported runs use workflow type `regression_import`, appear in `tel runs list` and `tel runs show`, and their parsed log observations can be matched as similar prior runs during later triage.
 
 ## Use The Shell
 

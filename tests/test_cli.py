@@ -544,6 +544,46 @@ def test_cli_runs_doctor_reports_corrupt_run_records(sample_project: Path, monke
     assert [run["run_id"] for run in runs] == ["run_good"]
 
 
+def test_cli_runs_import_manifest(sample_project: Path, monkeypatch) -> None:
+    imported_logs = sample_project / "logs" / "imported"
+    imported_logs.mkdir(parents=True, exist_ok=True)
+    (imported_logs / "run_a.log").write_text("rtl/uart_rx.sv:42: error: timeout waiting for start bit\n", encoding="utf-8")
+    manifest = sample_project / "regression_manifest.json"
+    write_json(
+        manifest,
+        {
+            "schema_version": "0.1",
+            "tool": {"kind": "regression_manager", "name": "nightly"},
+            "runs": [
+                {
+                    "name": "uart_rx_seed_1",
+                    "status": "failed",
+                    "logs": ["logs/imported/run_a.log"],
+                    "artifacts": {"spec": "docs/uart.md"},
+                }
+            ],
+        },
+    )
+    monkeypatch.chdir(sample_project)
+
+    result = runner.invoke(app, ["runs", "import", "regression_manifest.json"])
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["imported_count"] == 1
+    run_id = payload["runs"][0]["run_id"]
+
+    show = runner.invoke(app, ["runs", "show", run_id])
+    assert show.exit_code == 0
+    shown = json.loads(show.stdout)
+    assert shown["workflow_type"] == "regression_import"
+    assert shown["tool"]["name"] == "nightly"
+    assert shown["artifacts"]["spec"] == "docs/uart.md"
+
+    dry_run = runner.invoke(app, ["runs", "import", "regression_manifest.json", "--dry-run"])
+    assert dry_run.exit_code == 0
+    assert json.loads(dry_run.stdout)["dry_run"] is True
+
+
 def test_cli_reports_project_config_error(work_root: Path, monkeypatch) -> None:
     monkeypatch.chdir(work_root)
     result = runner.invoke(app, ["index"])
@@ -1355,3 +1395,22 @@ def test_cli_shell_supports_waveform_commands(sample_project: Path, monkeypatch)
     assert result.exit_code == 0
     assert "Waveform Summary" in result.stdout
     assert "Waveform Inspect" in result.stdout
+
+
+def test_cli_shell_supports_runs_import(sample_project: Path, monkeypatch) -> None:
+    imported_logs = sample_project / "logs" / "imported"
+    imported_logs.mkdir(parents=True, exist_ok=True)
+    (imported_logs / "run_a.log").write_text("rtl/uart_rx.sv:42: error: timeout waiting for start bit\n", encoding="utf-8")
+    write_json(
+        sample_project / "regression_manifest.json",
+        {
+            "schema_version": "0.1",
+            "tool": "shell-regress",
+            "runs": [{"name": "seed_1", "status": "failed", "logs": ["logs/imported/run_a.log"]}],
+        },
+    )
+    monkeypatch.chdir(sample_project)
+    result = runner.invoke(app, [], input="/runs import regression_manifest.json\n/exit\n")
+    assert result.exit_code == 0
+    assert "Runs Imported" in result.stdout
+    assert "seed_1" in result.stdout

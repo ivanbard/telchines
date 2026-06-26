@@ -36,6 +36,7 @@ from telchines.operations import (
     format_triage_human,
     gen_cocotb,
     gen_sva,
+    import_runs,
     inspect_waveform,
     index_project,
     index_status,
@@ -71,7 +72,7 @@ SHELL_COMMAND_HELP = [
     ("/gen-sva --spec PATH --rtl PATH [--output PATH]", "Generate assertion draft from spec and RTL"),
     ("/gen-cocotb --dut PATH [--spec PATH] [--output-dir PATH]", "Generate a cocotb scaffold from DUT context"),
     ("/waveforms [list|show TARGET|signals TARGET|inspect TARGET --signal NAME]", "Inspect waveform summaries and signals"),
-    ("/runs [list|doctor|show RUN_ID|replay RUN_ID [--yes]]", "Inspect stored runs"),
+    ("/runs [list|doctor|show RUN_ID|replay RUN_ID [--yes]|import MANIFEST]", "Inspect or import stored runs"),
     ("/eval [run|report]", "Run or show benchmarks"),
     ("/doctor", "Show project/provider/adapter diagnostics"),
     ("/doctor privacy", "Show privacy and artifact-storage diagnostics"),
@@ -97,6 +98,39 @@ PATH_OPTIONS = {
     "--output",
     "--output-dir",
 }
+SHELL_COMMAND_OPTIONS = {
+    "/project init": ("--name",),
+    "/providers check": ("--offline",),
+    "/agent": (
+        "--tool",
+        "--file",
+        "--extra-arg",
+        "--apply",
+        "--logs",
+        "--waveform",
+        "--report",
+        "--exclusions",
+        "--formal-run",
+        "--rtl",
+        "--spec",
+        "--dut",
+        "--output",
+        "--output-dir",
+        "--provider",
+        "--intent",
+    ),
+    "/repair": ("--tool", "--file", "--extra-arg", "--apply"),
+    "/triage": ("--logs", "--waveform"),
+    "/coverage-plan": ("--report", "--exclusions", "--formal-run", "--rtl", "--spec"),
+    "/gen-sva": ("--spec", "--rtl", "--output", "--provider"),
+    "/gen-cocotb": ("--dut", "--spec", "--output-dir", "--intent", "--provider"),
+    "/runs replay": ("--yes",),
+    "/runs import": ("--dry-run",),
+    "/waveforms signals": ("--filter",),
+    "/waveforms inspect": ("--signal", "--window"),
+    "/artifacts purge": ("--yes",),
+}
+REPEATABLE_OPTIONS = {"--file", "--extra-arg", "--logs", "--waveform", "--rtl", "--spec"}
 
 
 @dataclass(slots=True)
@@ -186,10 +220,21 @@ class ShellCompleter(Completer):
         text = document.text_before_cursor
         if not text.startswith("/"):
             return
+        mention_seed = _file_mention_seed(text)
+        if mention_seed is not None:
+            token = f"@{mention_seed}"
+            for value in _file_mention_completions(self.session.cwd, mention_seed):
+                yield Completion(value, start_position=-len(token))
+            return
         if _completing_command_name(text):
             for command in SLASH_COMMANDS:
                 if command.startswith(text):
                     yield Completion(command, start_position=-len(text))
+            return
+        option_seed = _option_completion_seed(text)
+        if option_seed is not None:
+            for option in _option_completions(text, option_seed):
+                yield Completion(option, start_position=-len(option_seed))
             return
         seed = _path_completion_seed(text)
         if seed is None:
@@ -665,7 +710,10 @@ def _execute_command(session: ShellSession, parts: list[str], raw: bool) -> str 
         if parts[1] == "replay" and len(parts) > 2:
             payload = replay_run(session.cwd, parts[2], confirm="--yes" in parts[3:])
             return dump_json(payload) if raw else render_replay_payload(payload)
-        raise ValueError("supported /runs commands are list, doctor, show <run_id>, and replay <run_id> [--yes]")
+        if parts[1] == "import" and len(parts) > 2:
+            payload = import_runs(session.cwd, _resolve_path(session.cwd, parts[2]), dry_run="--dry-run" in parts[3:])
+            return dump_json(payload) if raw else render_import_runs_payload(payload)
+        raise ValueError("supported /runs commands are list, doctor, show <run_id>, replay <run_id> [--yes], and import <manifest> [--dry-run]")
 
     if command == "eval":
         if len(parts) == 1 or parts[1] == "run":
@@ -1005,6 +1053,22 @@ def render_runs_doctor_payload(payload: dict[str, object]) -> str:
             if isinstance(issue, dict):
                 lines.append(f"- {issue.get('path')}: {issue.get('error')}")
     return render_action_panel("Runs Doctor", "\n".join(lines))
+
+
+def render_import_runs_payload(payload: dict[str, object]) -> str:
+    title = "Import Preview" if payload.get("dry_run") else "Runs Imported"
+    lines = [
+        f"manifest: {payload['manifest_path']}",
+        f"runs: {payload['imported_count']}",
+        f"dry run: {payload['dry_run']}",
+    ]
+    for item in payload.get("runs", [])[:5]:
+        if isinstance(item, dict):
+            lines.append(
+                f"- {item.get('run_id')}: {item.get('name')} [{item.get('status')}], "
+                f"observations={item.get('observation_count')}, waveforms={item.get('waveform_count')}"
+            )
+    return render_action_panel(title, "\n".join(lines))
 
 
 def render_run_show(payload: dict[str, object]) -> str:
@@ -1395,6 +1459,40 @@ def _completing_command_name(text: str) -> bool:
     return stripped.startswith("/") and " " not in stripped
 
 
+def _option_completion_seed(text: str) -> str | None:
+    if not text.startswith("/"):
+        return None
+    if text.endswith(" "):
+        return ""
+    current = text.rsplit(maxsplit=1)[-1]
+    if current.startswith("--"):
+        return current
+    return None
+
+
+def _option_completions(text: str, seed: str) -> list[str]:
+    try:
+        parts = shlex.split(text)
+    except ValueError:
+        return []
+    if not parts:
+        return []
+    if seed and parts[-1] == seed:
+        parts = parts[:-1]
+    key = _option_command_key(parts)
+    options = SHELL_COMMAND_OPTIONS.get(key, ())
+    used = {part for part in parts if part.startswith("--")}
+    return [option for option in options if option.startswith(seed) and (option in REPEATABLE_OPTIONS or option not in used)]
+
+
+def _option_command_key(parts: list[str]) -> str:
+    first = parts[0] if parts else ""
+    command = first if first.startswith("/") else f"/{first}"
+    if command in {"/project", "/providers", "/runs", "/waveforms", "/artifacts"} and len(parts) > 1 and not parts[1].startswith("--"):
+        return f"{command} {parts[1]}"
+    return command
+
+
 def _path_completion_seed(text: str) -> str | None:
     if not text or text.endswith(" "):
         parts = shlex.split(text)
@@ -1409,6 +1507,31 @@ def _path_completion_seed(text: str) -> str | None:
     if len(parts) >= 2 and (parts[-2] in PATH_OPTIONS or parts[0] == "/cd"):
         return parts[-1]
     return None
+
+
+def _file_mention_seed(text: str) -> str | None:
+    token = text.rsplit(maxsplit=1)[-1] if text.strip() else ""
+    if token.startswith("@"):
+        return token[1:]
+    return None
+
+
+def _file_mention_completions(cwd: Path, seed: str) -> list[str]:
+    completions: list[str] = []
+    excluded = {".git", ".tel", ".venv", "__pycache__", ".pytest_cache", ".mypy_cache"}
+    for path in sorted(cwd.rglob("*"), key=lambda item: item.as_posix().lower()):
+        try:
+            relative = path.relative_to(cwd)
+        except ValueError:
+            continue
+        if any(part in excluded for part in relative.parts):
+            continue
+        if not path.is_file():
+            continue
+        text = relative.as_posix()
+        if text.startswith(seed):
+            completions.append(f"@{text}")
+    return completions[:25]
 
 
 def _path_completions(cwd: Path, seed: str) -> list[str]:
