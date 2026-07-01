@@ -1,0 +1,21 @@
+{
+  "schema_version": "0.1",
+  "name": "lmstudio",
+  "providers": [
+    {
+      "name": "lmstudio-local",
+      "kind": "openai_compatible",
+      "capabilities": ["repair", "generation"],
+      "base_url_env": "TELCHINES_LMSTUDIO_BASE_URL",
+      "base_url_default": "http://127.0.0.1:1234/v1",
+      "endpoint": "chat/completions",
+      "model_env": "TELCHINES_LMSTUDIO_MODEL",
+      "model_default": "local-model",
+      "api_key_env": "TELCHINES_LMSTUDIO_API_KEY",
+      "timeout_seconds": 120,
+      "enabled_env": "TELCHINES_LIVE_LMSTUDIO",
+      "live": true,
+      "supports": {"repair": true, "generation": true, "shell": true}
+    }
+  ]
+}

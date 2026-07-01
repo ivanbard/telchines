@@ -1,0 +1,28 @@
+{
+  "schema_version": "0.1",
+  "name": "agent_runtime",
+  "providers": [
+    {
+      "name": "matrix-local-base",
+      "kind": "local_command",
+      "capabilities": ["repair"],
+      "command": "{python}",
+      "args": ["tools/matrix_local_provider.py"],
+      "timeout_seconds": 30,
+      "output_limit_chars": 65536,
+      "live": false,
+      "supports": {"repair": true, "generation": false, "shell": false}
+    },
+    {
+      "name": "matrix-agent",
+      "kind": "agent_runtime",
+      "capabilities": ["repair"],
+      "base_provider": "matrix-local-base",
+      "runtime": "langgraph",
+      "max_iterations": 2,
+      "timeout_seconds": 60,
+      "live": false,
+      "supports": {"repair": true, "generation": false, "shell": true}
+    }
+  ]
+}

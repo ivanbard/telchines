@@ -128,6 +128,15 @@ tel providers check --offline
 
 `providers check` exits nonzero when a selected provider is blocked by policy, missing credentials, unreachable, or returns malformed data. It prints JSON first so the failure can be inspected in CI logs.
 
+For broader certification across hosted, local OpenAI-compatible, local command, and agent-runtime providers, use the matrix-backed harness:
+
+```bash
+python scripts/provider_capability_study.py --matrix docs/provider-matrices/openrouter.json --dry-run
+python scripts/provider_capability_study.py --matrix docs/provider-matrices/local_command.json
+```
+
+Live hosted or local HTTP matrices require both `--include-live` and the matrix's `TELCHINES_LIVE_*` gate. See `docs/provider-capability-study.md`.
+
 Telchines includes an optional live pytest smoke for OpenAI-compatible endpoints. It is skipped unless all of these environment variables are set:
 
 ```bash

@@ -36,6 +36,9 @@ def test_release_files_exist() -> None:
         repo_root / "docs" / "quickstart.md",
         repo_root / "docs" / "providers.md",
         repo_root / "docs" / "local-llms.md",
+        repo_root / "docs" / "provider-capability-study.md",
+        repo_root / "docs" / "provider-matrices" / "openrouter.json",
+        repo_root / "docs" / "provider-matrices" / "local_command.json",
         repo_root / "docs" / "generated-artifacts.md",
         repo_root / "docs" / "adapters.md",
         repo_root / "docs" / "external-retrieval-policy.md",
@@ -45,6 +48,7 @@ def test_release_files_exist() -> None:
         repo_root / "docs" / "assets" / "telchines-logo.png",
         repo_root / "examples" / "providers" / "local_command_provider.py",
         repo_root / "scripts" / "tool_smoke.py",
+        repo_root / "scripts" / "provider_capability_study.py",
     ]
     for path in expected:
         assert path.exists(), path

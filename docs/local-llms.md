@@ -46,6 +46,18 @@ tel providers check ollama-local
 
 LM Studio and other local OpenAI-compatible servers use the same shape. Change `base_url`, `model`, and `timeout_seconds` to match the server.
 
+You can also certify local OpenAI-compatible servers with the matrix harness:
+
+```bash
+TELCHINES_LIVE_LOCAL_OPENAI=1 \
+TELCHINES_LOCAL_OPENAI_API_KEY=local \
+python scripts/provider_capability_study.py \
+  --matrix docs/provider-matrices/ollama.json \
+  --include-live
+```
+
+LM Studio, llama.cpp server, vLLM, and LiteLLM presets live under `docs/provider-matrices/`.
+
 ## Local Command Wrapper
 
 Use `local_command` when a local model needs a custom wrapper. The command is executed from the Telchines project root, receives the workflow request as JSON on stdin, and must emit a JSON object on stdout.

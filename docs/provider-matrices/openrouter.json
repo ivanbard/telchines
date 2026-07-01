@@ -1,0 +1,32 @@
+{
+  "schema_version": "0.1",
+  "name": "openrouter",
+  "providers": [
+    {
+      "name": "openrouter",
+      "kind": "openai_compatible",
+      "capabilities": ["repair", "generation"],
+      "base_url": "https://openrouter.ai/api/v1",
+      "endpoint": "chat/completions",
+      "model_env": "TELCHINES_OPENROUTER_MODEL",
+      "model_default": "qwen/qwen3.7-plus",
+      "api_key_env": "OPENROUTER_API_KEY",
+      "timeout_seconds": 90,
+      "enabled_env": "TELCHINES_LIVE_OPENROUTER",
+      "live": true,
+      "supports": {"repair": true, "generation": true, "shell": true}
+    },
+    {
+      "name": "openrouter-agent",
+      "kind": "agent_runtime",
+      "capabilities": ["repair"],
+      "base_provider": "openrouter",
+      "runtime": "langgraph",
+      "max_iterations": 3,
+      "timeout_seconds": 90,
+      "enabled_env": "TELCHINES_LIVE_OPENROUTER",
+      "live": true,
+      "supports": {"repair": true, "generation": false, "shell": true}
+    }
+  ]
+}

@@ -1446,7 +1446,7 @@ def test_openrouter_capability_harness_dry_run_and_missing_key(monkeypatch) -> N
     assert dry_run.returncode == 0
     dry_payload = json.loads(dry_run.stdout)
     assert dry_payload["status"] == "dry_run"
-    assert any(label == "agent_repair" for label, _ in dry_payload["commands"])
+    assert any(item["label"] == "agent_repair" for item in dry_payload["commands"])
 
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     skipped = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, check=False)
@@ -1454,6 +1454,32 @@ def test_openrouter_capability_harness_dry_run_and_missing_key(monkeypatch) -> N
     skipped_payload = json.loads(skipped.stdout)
     assert skipped_payload["status"] == "skipped_missing_key"
     assert skipped_payload["missing_env"] == "OPENROUTER_API_KEY"
+
+
+def test_provider_capability_harness_local_matrix(sample_project: Path) -> None:
+    script = Path(__file__).resolve().parents[1] / "scripts" / "provider_capability_study.py"
+    matrix = Path(__file__).resolve().parents[1] / "docs" / "provider-matrices" / "local_command.json"
+    scratch_root = sample_project.parent / "provider-study"
+    dry_run = subprocess.run([sys.executable, str(script), "--matrix", str(matrix), "--dry-run"], capture_output=True, text=True, check=False)
+    assert dry_run.returncode == 0
+    dry_payload = json.loads(dry_run.stdout)
+    assert dry_payload["matrix"] == "local_command"
+    assert any(item["label"] == "gen_cocotb" for item in dry_payload["commands"])
+
+    result = subprocess.run(
+        [sys.executable, str(script), "--matrix", str(matrix), "--scratch-root", str(scratch_root)],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=60,
+    )
+    assert result.returncode == 0
+    payload = json.loads(result.stdout[result.stdout.rfind("{") :])
+    assert payload["status"] == "passed"
+    summary = read_json(scratch_root / "local_command" / "local_command_provider_capability_summary.json")
+    assert summary["status"] == "passed"
+    assert any(item["label"] == "gen_sva" and item["attempt_count"] == 2 for item in summary["results"])
+    assert (scratch_root / "local_command" / "local_command_provider_capability_summary.md").exists()
 
 
 def test_cli_shell_help_still_works_in_plain_mode(sample_project: Path, monkeypatch) -> None:

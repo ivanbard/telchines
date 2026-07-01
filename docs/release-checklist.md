@@ -9,7 +9,9 @@
 - run the plain shell smoke through `python -m telchines shell --plain`
 - run `pytest tests/test_shell.py` to cover shell parser, completion, and the full-screen prompt_toolkit harness
 - run `tel providers check heuristic`
-- optionally run `pytest tests/test_provider_integration.py` with `TELCHINES_INTEGRATION_OPENAI_*` set
+- run `python scripts/provider_capability_study.py --matrix docs/provider-matrices/local_command.json --dry-run`
+- optionally run `pytest tests/test_provider_integration.py` with provider matrix live env vars set
+- optionally run `python scripts/provider_capability_study.py --matrix docs/provider-matrices/openrouter.json --include-live` with `TELCHINES_LIVE_OPENROUTER=1`
 - run `tel index status` before and after `tel index`
 - run `tel doctor privacy`
 - run `tel adapters check --category simulation` or note unavailable local tools

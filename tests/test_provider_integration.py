@@ -1,44 +1,52 @@
 from __future__ import annotations
 
+import json
 import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
-from telchines.config import ProjectConfig
-from telchines.providers import check_provider_statuses
-from telchines.utils import read_json, write_json
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+MATRIX_DIR = REPO_ROOT / "docs" / "provider-matrices"
 
 
-def test_openai_compatible_provider_live_check_when_env_configured(sample_project: Path) -> None:
-    base_url = os.environ.get("TELCHINES_INTEGRATION_OPENAI_BASE_URL")
-    model = os.environ.get("TELCHINES_INTEGRATION_OPENAI_MODEL")
-    api_key = os.environ.get("TELCHINES_INTEGRATION_OPENAI_API_KEY")
-    if not base_url or not model or not api_key:
-        pytest.skip(
-            "set TELCHINES_INTEGRATION_OPENAI_BASE_URL, TELCHINES_INTEGRATION_OPENAI_MODEL, "
-            "and TELCHINES_INTEGRATION_OPENAI_API_KEY to run this live provider check"
-        )
+def test_live_provider_matrices_when_env_configured() -> None:
+    enabled = _enabled_live_providers()
+    if not enabled:
+        pytest.skip("set a provider matrix TELCHINES_LIVE_* env gate plus credentials to run live provider checks")
 
-    config_path = sample_project / ".tel" / "config.json"
-    payload = read_json(config_path)
-    payload["model_mode"] = "hybrid"
-    payload["project"]["model_policy"] = {
-        "default_provider_by_capability": {"repair": "live-openai", "generation": "live-openai"},
-        "providers": {
-            "live-openai": {
-                "kind": "openai_compatible",
-                "capabilities": ["repair", "generation"],
-                "base_url": base_url,
-                "model": model,
-                "api_key_env": "TELCHINES_INTEGRATION_OPENAI_API_KEY",
-                "timeout_seconds": 30,
-            }
-        },
-    }
-    write_json(config_path, payload)
+    run_workflows = os.environ.get("TELCHINES_LIVE_PROVIDER_WORKFLOWS") == "1"
+    for matrix_path, provider_name in enabled:
+        command = [
+            sys.executable,
+            str(REPO_ROOT / "scripts" / "provider_capability_study.py"),
+            "--matrix",
+            str(matrix_path),
+            "--provider",
+            provider_name,
+            "--include-live",
+        ]
+        if not run_workflows:
+            command.extend(["--max-live-commands", "2"])
+        result = subprocess.run(command, cwd=REPO_ROOT, capture_output=True, text=True, check=False, timeout=240)
+        assert result.returncode == 0, result.stdout + result.stderr
+        payload = json.loads(result.stdout[result.stdout.rfind("{") :])
+        assert payload["status"] in {"passed", "skipped"}
 
-    config = ProjectConfig.load(sample_project)
-    check = check_provider_statuses(config, "live-openai", live=True)[0]
-    assert check.status == "passed", check.summary
-    assert check.checks["transport"]["mode"] == "openai_compatible"
+
+def _enabled_live_providers() -> list[tuple[Path, str]]:
+    enabled: list[tuple[Path, str]] = []
+    for matrix_path in sorted(MATRIX_DIR.glob("*.json")):
+        matrix = json.loads(matrix_path.read_text(encoding="utf-8"))
+        for provider in matrix.get("providers", []):
+            if provider.get("kind") == "agent_runtime":
+                continue
+            if not provider.get("live"):
+                continue
+            enabled_env = provider.get("enabled_env")
+            if isinstance(enabled_env, str) and os.environ.get(enabled_env) == "1":
+                enabled.append((matrix_path, provider["name"]))
+    return enabled

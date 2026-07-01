@@ -1,0 +1,17 @@
+{
+  "schema_version": "0.1",
+  "name": "local_command",
+  "providers": [
+    {
+      "name": "matrix-local",
+      "kind": "local_command",
+      "capabilities": ["repair", "generation"],
+      "command": "{python}",
+      "args": ["tools/matrix_local_provider.py"],
+      "timeout_seconds": 30,
+      "output_limit_chars": 65536,
+      "live": false,
+      "supports": {"repair": true, "generation": true, "shell": true}
+    }
+  ]
+}
