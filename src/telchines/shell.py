@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import shlex
 import sys
+import time
 from dataclasses import dataclass, field
 from collections.abc import Iterable
 from pathlib import Path
@@ -277,6 +278,11 @@ def _run_basic_shell(session: ShellSession) -> None:
         if not user_input:
             continue
         session.history.append(user_input)
+        session.transcript.append(f"{session.prompt()}{user_input}")
+        progress = render_command_progress(user_input)
+        if progress:
+            session.transcript.append(progress)
+            typer.echo(progress)
         try:
             should_exit, rendered = dispatch_input(session, user_input)
         except (ConfigError, ProviderError, AdapterExecutionError, ValueError, KeyError) as exc:
@@ -286,6 +292,7 @@ def _run_basic_shell(session: ShellSession) -> None:
             typer.echo(f"error: {exc}")
             continue
         if rendered:
+            session.transcript.append(rendered)
             typer.echo(rendered)
         if should_exit:
             return
@@ -419,6 +426,8 @@ def _build_fullscreen_shell_app(session: ShellSession, **app_kwargs: Any) -> App
             input_area.prompt = session.prompt()
             return
         session.transcript.append(f"{session.prompt()}{user_input}")
+        progress = render_command_progress(user_input)
+        append_rendered(progress)
         try:
             should_exit, rendered = dispatch_input(session, user_input)
         except (ConfigError, ProviderError, AdapterExecutionError, ValueError, KeyError, TelchinesError) as exc:
@@ -527,8 +536,44 @@ def _dispatch_slash_command(session: ShellSession, command_line: str) -> tuple[b
         payload = _execute_command(session, parts[1:], raw=True)
         return False, payload or ""
 
+    started = time.perf_counter()
     payload = _execute_command(session, parts, raw=False)
+    elapsed = time.perf_counter() - started
+    if payload and command in {"providers", "agent", "repair", "gen-sva", "gen-cocotb", "runs", "artifacts"}:
+        payload = f"{payload}\n\nelapsed: {elapsed:.2f}s"
     return False, payload or ""
+
+
+def render_command_progress(user_input: str) -> str:
+    if not user_input.startswith("/") or user_input.startswith("/raw "):
+        return ""
+    try:
+        parts = shlex.split(user_input[1:])
+    except ValueError:
+        return ""
+    if not parts:
+        return ""
+    phases = _progress_phases(parts)
+    if not phases:
+        return ""
+    return render_action_panel("Progress", "\n".join(f"- {phase}" for phase in phases))
+
+
+def _progress_phases(parts: list[str]) -> list[str]:
+    command = parts[0].lower()
+    if command == "providers" and len(parts) > 1 and parts[1] == "check":
+        return ["provider selected", "request sent", "waiting for provider transport", "check result pending"]
+    if command == "agent":
+        return ["provider selected", "request sent", "waiting for model or workflow", "candidate/evidence collection pending", "validation/review state pending"]
+    if command == "repair":
+        return ["provider selected", "request sent", "waiting for repair candidate", "validation running", "review state pending"]
+    if command in {"gen-sva", "gen-cocotb"}:
+        return ["provider selected", "request sent", "waiting for generated artifact", "validation running", "artifact saved for review"]
+    if command == "runs" and len(parts) > 1 and parts[1] == "show":
+        return ["loading stored run", "collecting validation and artifact metadata"]
+    if command == "artifacts" and len(parts) > 1 and parts[1] == "review":
+        return ["loading stored candidate", "comparing workspace artifact", "collecting validation attempts"]
+    return []
 
 
 def _dispatch_plain_text(session: ShellSession, user_input: str) -> tuple[bool, str]:
@@ -787,14 +832,23 @@ def render_provider_payload(payload: dict[str, object]) -> str:
     table.add_column("Kind")
     table.add_column("Capabilities")
     table.add_column("Default For")
+    table.add_column("Model/Base")
+    table.add_column("Runtime")
     table.add_column("Status")
     for provider in payload["providers"]:
         status = "allowed" if provider["allowed"] else f"blocked: {provider['blocked_reason']}"
+        model_or_base = str(provider.get("model") or provider.get("base_provider") or "n/a")
+        runtime = str(provider.get("runtime") or "n/a")
+        timeout = provider.get("timeout_seconds")
+        if timeout:
+            runtime = f"{runtime} ({timeout}s)" if runtime != "n/a" else f"timeout {timeout}s"
         table.add_row(
             provider["name"],
             provider["kind"],
             ", ".join(provider["capabilities"]),
             ", ".join(provider["default_for"]) or "none",
+            model_or_base,
+            runtime,
             status,
         )
     if defaults:
@@ -814,9 +868,18 @@ def render_provider_check_payload(payload: dict[str, object]) -> str:
     table.add_column("Provider")
     table.add_column("Kind")
     table.add_column("Status")
+    table.add_column("Transport")
+    table.add_column("Runtime")
     table.add_column("Summary")
     for provider in payload["providers"]:
-        table.add_row(provider["name"], provider["kind"], provider["status"], provider["summary"])
+        checks = provider.get("checks", {}) if isinstance(provider, dict) else {}
+        transport = checks.get("transport", {}) if isinstance(checks, dict) else {}
+        transport_mode = transport.get("mode") if isinstance(transport, dict) else None
+        model = transport.get("model") if isinstance(transport, dict) else None
+        runtime_mode = transport.get("runtime_mode") if isinstance(transport, dict) else None
+        runtime_text = str(runtime_mode or transport.get("runtime") or "n/a") if isinstance(transport, dict) else "n/a"
+        transport_text = str(model or transport_mode or "n/a")
+        table.add_row(provider["name"], provider["kind"], provider["status"], transport_text, runtime_text, provider["summary"])
     return _render_rich(table)
 
 
@@ -861,6 +924,24 @@ def render_artifact_review_payload(payload: dict[str, object]) -> str:
         f"lines: stored={payload['baseline_line_count']} workspace={payload['current_line_count']}",
         f"diff lines: {payload['diff_line_count']}" + (" (truncated)" if payload.get("diff_truncated") else ""),
     ]
+    attempts = payload.get("validation_attempts") or []
+    if isinstance(attempts, list) and attempts:
+        body.append("attempts:")
+        for item in attempts[:4]:
+            if isinstance(item, dict):
+                body.append(f"- {item.get('attempt')}: {item.get('result')} run={item.get('run_id')}")
+    generation_attempts = payload.get("attempts") or []
+    if isinstance(generation_attempts, list) and generation_attempts:
+        body.append("generation attempts:")
+        for item in generation_attempts[:4]:
+            if isinstance(item, dict):
+                body.append(f"- {item.get('attempt')}: {item.get('status')} validation={item.get('validation_status')}")
+    rejected = payload.get("rejected_candidate_ids") or []
+    if isinstance(rejected, list) and rejected:
+        body.append(f"rejected candidates: {', '.join(str(item) for item in rejected[:3])}")
+    replay_artifacts = payload.get("replay_artifacts") or {}
+    if isinstance(replay_artifacts, dict) and replay_artifacts:
+        body.append("replay: " + ", ".join(f"{key}={value}" for key, value in list(replay_artifacts.items())[:3]))
     if diff_preview:
         body.extend(["", diff_preview])
     return render_action_panel("Artifact Review", "\n".join(body))
@@ -924,15 +1005,34 @@ def render_agent_payload(payload: dict[str, object]) -> str:
         f"context: {payload['context_id']}",
     ]
     if isinstance(result, dict):
-        for key in ("patch_id", "candidate_id", "validation_run_id", "validation_status", "artifact_path"):
+        for key in ("runtime_mode", "patch_id", "candidate_id", "validation_run_id", "validation_status", "artifact_path"):
             value = result.get(key)
             if value:
                 body.append(f"{key.replace('_', ' ')}: {value}")
+        attempts = result.get("attempts")
+        if isinstance(attempts, list) and attempts:
+            body.append(f"attempts: {len(attempts)}")
+            for item in attempts[:3]:
+                if isinstance(item, dict):
+                    body.append(f"- attempt {item.get('attempt')}: {item.get('status')} validation={item.get('validation_status')}")
+        rejected = result.get("rejected_candidate_ids")
+        if isinstance(rejected, list) and rejected:
+            body.append(f"rejected candidates: {', '.join(str(item) for item in rejected[:3])}")
+        summary = result.get("summary")
+        if summary:
+            body.append(f"summary: {summary}")
     if isinstance(evidence, dict) and evidence.get("replay_artifacts"):
         body.append("evidence: replay artifacts saved")
     review_gate = payload.get("review_gate")
     if isinstance(review_gate, dict):
         body.append(f"review: {review_gate.get('summary')}")
+    if isinstance(result, dict):
+        candidate_id = result.get("candidate_id")
+        validation_run_id = result.get("validation_run_id")
+        if candidate_id:
+            body.append(f"next: /artifacts review {candidate_id}")
+        elif validation_run_id:
+            body.append(f"next: /runs show {validation_run_id}")
     return render_action_panel("Agent Result", "\n".join(body))
 
 
@@ -953,6 +1053,12 @@ def render_sva_payload(payload: dict[str, object]) -> str:
     ]
     if payload["explanation"]:
         body.append(f"explanation: {payload['explanation']}")
+    attempts = payload.get("attempts") or []
+    if isinstance(attempts, list) and attempts:
+        body.append(f"attempts: {len(attempts)}")
+    rejected = payload.get("rejected_candidate_ids") or []
+    if isinstance(rejected, list) and rejected:
+        body.append(f"rejected candidates: {', '.join(str(item) for item in rejected[:3])}")
     for item in payload["property_summaries"][:3]:
         body.append(f"property: {item['name']} -> {item['summary']}")
     return render_action_panel("Spec-to-SVA Result", "\n".join(body))
@@ -969,6 +1075,12 @@ def render_cocotb_payload(payload: dict[str, object]) -> str:
     ]
     if payload["explanation"]:
         body.append(f"explanation: {payload['explanation']}")
+    attempts = payload.get("attempts") or []
+    if isinstance(attempts, list) and attempts:
+        body.append(f"attempts: {len(attempts)}")
+    rejected = payload.get("rejected_candidate_ids") or []
+    if isinstance(rejected, list) and rejected:
+        body.append(f"rejected candidates: {', '.join(str(item) for item in rejected[:3])}")
     for assumption in payload.get("assumptions", [])[:3]:
         body.append(f"assumption: {assumption}")
     return render_action_panel("DUT-to-Cocotb Result", "\n".join(body))
@@ -1099,6 +1211,18 @@ def render_run_show(payload: dict[str, object]) -> str:
         top_module = tool_result.get("top_module")
         if top_module:
             lines.append(f"top module: {top_module}")
+        runtime_mode = tool_result.get("runtime_mode")
+        if runtime_mode:
+            lines.append(f"runtime mode: {runtime_mode}")
+        attempts = tool_result.get("attempts") or []
+        if isinstance(attempts, list) and attempts:
+            lines.append(f"attempts: {len(attempts)}")
+            for item in attempts[:3]:
+                if isinstance(item, dict):
+                    lines.append(f"- attempt {item.get('attempt')}: {item.get('status')} validation={item.get('validation_status')}")
+        rejected_candidate_ids = tool_result.get("rejected_candidate_ids") or []
+        if isinstance(rejected_candidate_ids, list) and rejected_candidate_ids:
+            lines.append(f"rejected candidates: {', '.join(str(item) for item in rejected_candidate_ids[:3])}")
         assumptions = tool_result.get("assumptions") or []
         if assumptions:
             lines.append(f"assumptions: {'; '.join(str(item) for item in assumptions[:2])}")

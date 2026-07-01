@@ -48,69 +48,125 @@ def execute_cocotb_generation(
     )
     store.save_task(task)
 
-    request = CocotbGenerationRequest(
-        task_id=task.task_id,
-        project_root=config.project_root,
-        dut_path=dut_rel,
-        spec_path=spec_rel,
-        output_dir=output_dir_rel,
-        intent=intent,
-        retrieval_context=context,
-        conventions=config.generation,
-    )
-    provider_result = provider.generate_cocotb(request)
-    request_artifact = store.save_task_artifact(task.task_id, "cocotb_request", provider_result.request_payload)
-    response_artifact = store.save_task_artifact(task.task_id, "cocotb_response", provider_result.response_payload)
-    replay_artifact = store.save_task_artifact(
-        task.task_id,
-        "cocotb_replay",
-        {
-            "task_id": task.task_id,
-            "provider": provider_result.provider_name,
-            "context_id": context.context_id,
-            "request_artifact": str(request_artifact),
-            "response_artifact": str(response_artifact),
-            "dut_path": dut_rel,
-            "spec_path": spec_rel,
-            "output_dir": output_dir_rel,
-            "intent": intent,
-        },
-    )
-    task.metadata.update(
-        {
-            "provider": provider_result.provider_name,
-            "context_id": context.context_id,
+    max_attempts = _generation_max_attempts(config, "cocotb")
+    feedback: list[dict[str, object]] = []
+    attempts: list[dict[str, object]] = []
+    rejected_candidate_ids: list[str] = []
+    candidate: CocotbCandidate | None = None
+    validation_run: VerificationRun | None = None
+    provider_name = getattr(provider, "name", "")
+    provider_summary = ""
+    request_artifact: Path | None = None
+    response_artifact: Path | None = None
+    replay_artifact: Path | None = None
+
+    for attempt in range(1, max_attempts + 1):
+        request = CocotbGenerationRequest(
+            task_id=task.task_id,
+            project_root=config.project_root,
+            dut_path=dut_rel,
+            spec_path=spec_rel,
+            output_dir=output_dir_rel,
+            intent=intent,
+            retrieval_context=context,
+            conventions=config.generation,
+            feedback=list(feedback),
+        )
+        provider_result = provider.generate_cocotb(request)
+        provider_name = provider_result.provider_name
+        provider_summary = provider_result.summary
+        suffix = "" if attempt == 1 else f"_attempt_{attempt}"
+        request_artifact = store.save_task_artifact(task.task_id, f"cocotb_request{suffix}", provider_result.request_payload)
+        response_artifact = store.save_task_artifact(task.task_id, f"cocotb_response{suffix}", provider_result.response_payload)
+        replay_artifact = store.save_task_artifact(
+            task.task_id,
+            f"cocotb_replay{suffix}",
+            {
+                "task_id": task.task_id,
+                "provider": provider_result.provider_name,
+                "attempt": attempt,
+                "context_id": context.context_id,
+                "request_artifact": str(request_artifact),
+                "response_artifact": str(response_artifact),
+                "dut_path": dut_rel,
+                "spec_path": spec_rel,
+                "output_dir": output_dir_rel,
+                "intent": intent,
+                "previous_attempts": list(feedback),
+            },
+        )
+        candidate = provider_result.candidate
+        if candidate is None:
+            attempts.append(
+                {
+                    "attempt": attempt,
+                    "status": "no_generation",
+                    "provider": provider_result.provider_name,
+                    "summary": provider_result.summary,
+                    "request_artifact": str(request_artifact),
+                    "response_artifact": str(response_artifact),
+                    "replay_artifact": str(replay_artifact),
+                }
+            )
+            break
+
+        candidate.candidate_id = stable_id("cocotb", task.task_id, candidate.file_path, str(attempt))
+        candidate.replay_artifacts = {
             "request_artifact": str(request_artifact),
             "response_artifact": str(response_artifact),
             "replay_artifact": str(replay_artifact),
-            "provider_summary": provider_result.summary,
         }
-    )
+        generated_path = config.project_root / candidate.file_path
+        ensure_directory(generated_path.parent)
+        generated_path.write_text(candidate.candidate_content, encoding="utf-8")
 
-    candidate = provider_result.candidate
+        manifest_payload = _build_manifest_payload(candidate)
+        manifest_path = config.project_root / candidate.manifest_path
+        write_json(manifest_path, manifest_payload)
+
+        validation_run = validate_cocotb_candidate(config, store, candidate)
+        candidate.status = "validated" if validation_run.status == "passed" else "rejected"
+        candidate.validation_attempts.append(
+            ValidationAttempt(attempt=attempt, result=validation_run.status, run_id=validation_run.run_id, notes=validation_run.summary)
+        )
+        attempt_record = _attempt_record(
+            attempt,
+            candidate_id=candidate.candidate_id,
+            provider=provider_result.provider_name,
+            status=candidate.status,
+            validation_run=validation_run,
+            artifact_path=candidate.file_path,
+            request_artifact=str(request_artifact),
+            response_artifact=str(response_artifact),
+            replay_artifact=str(replay_artifact),
+        )
+        attempts.append(attempt_record)
+        candidate.attempts = list(attempts)
+        candidate.rejected_candidate_ids = list(rejected_candidate_ids)
+        store.save_cocotb_candidate(candidate)
+        if validation_run.status == "passed":
+            break
+        rejected_candidate_ids.append(candidate.candidate_id)
+        candidate.rejected_candidate_ids = list(rejected_candidate_ids)
+        candidate.attempts = list(attempts)
+        store.save_cocotb_candidate(candidate)
+        feedback.append(_validation_feedback(attempt, validation_run, candidate.candidate_id, candidate.file_path))
+
     if candidate is None:
         task.status = "no_generation"
+        task.metadata.update(
+            {
+                "provider": provider_name,
+                "context_id": context.context_id,
+                "provider_summary": provider_summary,
+                "attempts": attempts,
+            }
+        )
         store.save_task(task)
         return None, None, None, context
 
-    candidate.replay_artifacts = {
-        "request_artifact": str(request_artifact),
-        "response_artifact": str(response_artifact),
-        "replay_artifact": str(replay_artifact),
-    }
-    generated_path = config.project_root / candidate.file_path
-    ensure_directory(generated_path.parent)
-    generated_path.write_text(candidate.candidate_content, encoding="utf-8")
-
-    manifest_payload = _build_manifest_payload(candidate)
-    manifest_path = config.project_root / candidate.manifest_path
-    write_json(manifest_path, manifest_payload)
-
-    validation_run = validate_cocotb_candidate(config, store, candidate)
-    candidate.status = "validated" if validation_run.status == "passed" else "rejected"
-    candidate.validation_attempts.append(
-        ValidationAttempt(attempt=1, result=validation_run.status, run_id=validation_run.run_id, notes=validation_run.summary)
-    )
+    candidate.attempts = list(attempts)
+    candidate.rejected_candidate_ids = list(rejected_candidate_ids)
     store.save_cocotb_candidate(candidate)
 
     run = VerificationRun(
@@ -124,7 +180,7 @@ def execute_cocotb_generation(
             "spec_path": candidate.spec_path,
             "intent": candidate.intent,
             "output_dir": output_dir_rel,
-            "provider": provider_result.provider_name,
+            "provider": provider_name,
         },
         status=candidate.status,
         started_at=utc_now(),
@@ -133,8 +189,8 @@ def execute_cocotb_generation(
         artifacts={
             "generated_file": candidate.file_path,
             "manifest_path": candidate.manifest_path,
-            "request_artifact": str(request_artifact),
-            "response_artifact": str(response_artifact),
+            "request_artifact": str(request_artifact) if request_artifact else "",
+            "response_artifact": str(response_artifact) if response_artifact else "",
         },
         tool_result={
             "status": candidate.status,
@@ -143,13 +199,21 @@ def execute_cocotb_generation(
             "port_count": len(candidate.ports),
             "validation_run_id": validation_run.run_id,
             "validation_status": validation_run.status,
+            "attempts": attempts,
+            "rejected_candidate_ids": rejected_candidate_ids,
         },
-        summary=_generation_summary(candidate, validation_run, provider_result),
+        summary=_generation_summary(candidate, validation_run, provider_name),
     )
     store.save_run(run)
     task.metadata["candidate_id"] = candidate.candidate_id
     task.metadata["generation_run_id"] = run.run_id
     task.metadata["validation_run_id"] = validation_run.run_id
+    task.metadata["attempt_count"] = len(attempts)
+    task.metadata["rejected_candidate_ids"] = rejected_candidate_ids
+    task.metadata["request_artifact"] = str(request_artifact) if request_artifact else None
+    task.metadata["response_artifact"] = str(response_artifact) if response_artifact else None
+    task.metadata["replay_artifact"] = str(replay_artifact) if replay_artifact else None
+    task.metadata["provider_summary"] = provider_summary
     task.status = candidate.status
     store.save_task(task)
     return candidate, run, validation_run, context
@@ -251,10 +315,10 @@ def _build_manifest_payload(candidate: CocotbCandidate) -> dict[str, object]:
     }
 
 
-def _generation_summary(candidate: CocotbCandidate, validation_run: VerificationRun, provider_result: CocotbGenerationProviderResult) -> str:
+def _generation_summary(candidate: CocotbCandidate, validation_run: VerificationRun, provider_name: str) -> str:
     if validation_run.status == "passed":
-        return f"{provider_result.provider_name} generated cocotb scaffold for {candidate.top_module}; python syntax validation passed"
-    return f"{provider_result.provider_name} generated cocotb scaffold for {candidate.top_module}; python syntax validation failed"
+        return f"{provider_name} generated cocotb scaffold for {candidate.top_module}; python syntax validation passed"
+    return f"{provider_name} generated cocotb scaffold for {candidate.top_module}; python syntax validation failed"
 
 
 def _validation_summary(exit_code: int, combined: str) -> str:
@@ -269,6 +333,51 @@ def _validation_summary(exit_code: int, combined: str) -> str:
 def _default_cocotb_output_dir(config: ProjectConfig) -> str:
     section = config.generation.get("cocotb", {}) if isinstance(config.generation, dict) else {}
     return str(section.get("output_dir", Path(config.artifacts_dir) / "generated" / "cocotb"))
+
+
+def _generation_max_attempts(config: ProjectConfig, section_name: str) -> int:
+    section = config.generation.get(section_name, {}) if isinstance(config.generation, dict) else {}
+    value = section.get("max_attempts", 1) if isinstance(section, dict) else 1
+    return max(int(value), 1) if isinstance(value, int) else 1
+
+
+def _attempt_record(
+    attempt: int,
+    *,
+    candidate_id: str,
+    provider: str,
+    status: str,
+    validation_run: VerificationRun,
+    artifact_path: str,
+    request_artifact: str,
+    response_artifact: str,
+    replay_artifact: str,
+) -> dict[str, object]:
+    return {
+        "attempt": attempt,
+        "candidate_id": candidate_id,
+        "provider": provider,
+        "status": status,
+        "artifact_path": artifact_path,
+        "validation_run_id": validation_run.run_id,
+        "validation_status": validation_run.status,
+        "validation_summary": validation_run.summary,
+        "request_artifact": request_artifact,
+        "response_artifact": response_artifact,
+        "replay_artifact": replay_artifact,
+    }
+
+
+def _validation_feedback(attempt: int, validation_run: VerificationRun, candidate_id: str, artifact_path: str) -> dict[str, object]:
+    return {
+        "attempt": attempt,
+        "candidate_id": candidate_id,
+        "artifact_path": artifact_path,
+        "validation_status": validation_run.status,
+        "validation_summary": validation_run.summary,
+        "observation_ids": validation_run.observation_ids,
+        "tool_result": validation_run.tool_result,
+    }
 
 
 def _cocotb_structural_errors(content: str) -> list[str]:

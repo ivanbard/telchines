@@ -11,18 +11,20 @@ SRC_ROOT = REPO_ROOT / "src"
 if SRC_ROOT.exists():
     sys.path.insert(0, str(SRC_ROOT))
 
-from telchines.adapters.open_tools import IcarusAdapter, VerilatorAdapter  # noqa: E402
+from telchines.adapters.open_tools import IcarusAdapter, SlangAdapter, SymbiYosysAdapter, VerilatorAdapter  # noqa: E402
 
 
 ADAPTERS = {
     "verilator": VerilatorAdapter,
     "iverilog": IcarusAdapter,
+    "slang": SlangAdapter,
+    "symbiyosys": SymbiYosysAdapter,
 }
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run real-tool Telchines adapter smoke tests.")
-    parser.add_argument("--adapters", nargs="+", default=["verilator", "iverilog"], choices=sorted(ADAPTERS))
+    parser.add_argument("--adapters", nargs="+", default=["verilator", "iverilog", "slang", "symbiyosys"], choices=sorted(ADAPTERS))
     parser.add_argument("--allow-missing", action="store_true", help="Skip adapters whose required binaries are not on PATH.")
     args = parser.parse_args()
 
@@ -85,6 +87,26 @@ endmodule
             files = ["rtl/smoke_counter.sv"]
             if adapter_name == "iverilog":
                 files.append("rtl/smoke_counter_tb.sv")
+            if adapter_name == "symbiyosys":
+                sby_file = root / "smoke_counter.sby"
+                sby_file.write_text(
+                    """[options]
+mode bmc
+depth 2
+
+[engines]
+smtbmc
+
+[script]
+read -formal rtl/smoke_counter.sv
+prep -top smoke_counter
+
+[files]
+rtl/smoke_counter.sv
+""",
+                    encoding="utf-8",
+                )
+                files = [sby_file.name]
             execution = adapter.run(f"smoke_{adapter_name}", root, files, artifacts_dir)
             status = "PASS" if execution.exit_code == 0 else "FAIL"
             print(f"{status} {adapter_name}: {execution.summary}")

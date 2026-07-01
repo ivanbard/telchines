@@ -23,6 +23,7 @@ def default_generation_config() -> dict[str, Any]:
             "reset_names": ["rst_n", "reset_n", "rst", "reset"],
             "active_low_reset_names": ["rst_n", "reset_n"],
             "validation_adapters": ["slang", "verilator"],
+            "max_attempts": 1,
         },
         "cocotb": {
             "output_dir": ".tel/artifacts/generated/cocotb",
@@ -31,6 +32,7 @@ def default_generation_config() -> dict[str, Any]:
             "clock_names": ["clk", "clock"],
             "reset_names": ["rst_n", "reset_n", "rst", "reset"],
             "active_low_reset_names": ["rst_n", "reset_n"],
+            "max_attempts": 1,
         },
     }
 
@@ -352,6 +354,9 @@ class ProjectConfig:
             values = section.get(key, [])
             if not isinstance(values, list) or any(not isinstance(item, str) or not item.strip() for item in values):
                 raise ConfigError(f"generation.{section_name}.{key} must be a list of non-empty strings")
+        max_attempts = section.get("max_attempts", 1)
+        if not isinstance(max_attempts, int) or max_attempts <= 0:
+            raise ConfigError(f"generation.{section_name}.max_attempts must be a positive integer")
         if section_name == "sva":
             adapters = section.get("validation_adapters", [])
             if not isinstance(adapters, list) or any(not isinstance(item, str) or not item.strip() for item in adapters):

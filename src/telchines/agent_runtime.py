@@ -12,6 +12,20 @@ from telchines.run_store import RunStore
 from telchines.utils import dataclass_to_dict
 
 
+def runtime_capability() -> dict[str, object]:
+    available = find_spec("langgraph") is not None
+    return {
+        "runtime": "langgraph",
+        "runtime_mode": "langgraph" if available else "bounded_loop_no_langgraph",
+        "runtime_available": available,
+        "runtime_reason": (
+            "langgraph package is available; graph-shaped repair runtime can be used"
+            if available
+            else "langgraph package is not installed; using bounded retry loop fallback"
+        ),
+    }
+
+
 class RepairAgentRuntime(Protocol):
     def run_repair(self, request) -> object:
         ...
@@ -24,9 +38,39 @@ class LangGraphRepairRuntime:
         self.provider_config = provider_config
         self.base_provider = base_provider
         self.max_iterations = int(provider_config.get("max_iterations", 3))
-        self.langgraph_available = find_spec("langgraph") is not None
+        self.runtime_info = runtime_capability()
 
     def run_repair(self, request):
+        if self._runtime_mode() == "langgraph":
+            return self._run_langgraph_repair(request)
+        return self._run_bounded_loop_repair(request)
+
+    def _run_langgraph_repair(self, request):
+        try:
+            from langgraph.graph import END, StateGraph
+        except ImportError:
+            self.runtime_info = {
+                **self.runtime_info,
+                "runtime_mode": "bounded_loop_no_langgraph",
+                "runtime_available": False,
+                "runtime_reason": "langgraph import failed at runtime; using bounded retry loop fallback",
+            }
+            return self._run_bounded_loop_repair(request)
+
+        graph = StateGraph(dict)
+
+        def repair_node(state: dict[str, object]) -> dict[str, object]:
+            state["result"] = self._run_bounded_loop_repair(state["request"])
+            return state
+
+        graph.add_node("repair_loop", repair_node)
+        graph.set_entry_point("repair_loop")
+        graph.add_edge("repair_loop", END)
+        compiled = graph.compile()
+        final_state = compiled.invoke({"request": request})
+        return final_state["result"]
+
+    def _run_bounded_loop_repair(self, request):
         from telchines.providers import RepairProviderResult
 
         store = RunStore(self.config)
@@ -155,6 +199,8 @@ class LangGraphRepairRuntime:
             "provider": self.provider_name,
             "runtime": self.provider_config.get("runtime", "langgraph"),
             "runtime_mode": self._runtime_mode(),
+            "runtime_available": self.runtime_info["runtime_available"],
+            "runtime_reason": self.runtime_info["runtime_reason"],
             "base_provider": self.provider_config["base_provider"],
             "max_iterations": self.max_iterations,
             "task_id": request.task_id,
@@ -175,6 +221,8 @@ class LangGraphRepairRuntime:
         agent_runtime: dict[str, object] = {
             "runtime": self.provider_config.get("runtime", "langgraph"),
             "runtime_mode": self._runtime_mode(),
+            "runtime_available": self.runtime_info["runtime_available"],
+            "runtime_reason": self.runtime_info["runtime_reason"],
             "base_provider": self.provider_config["base_provider"],
             "max_iterations": self.max_iterations,
             "steps": steps,
@@ -198,4 +246,4 @@ class LangGraphRepairRuntime:
         }
 
     def _runtime_mode(self) -> str:
-        return "langgraph" if self.langgraph_available else "bounded_loop_no_langgraph"
+        return str(self.runtime_info["runtime_mode"])

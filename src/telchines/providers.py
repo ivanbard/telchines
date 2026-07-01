@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 from urllib import error, request
 
-from telchines.agent_runtime import LangGraphRepairRuntime
+from telchines.agent_runtime import LangGraphRepairRuntime, runtime_capability
 from telchines.config import ProjectConfig
 from telchines.errors import ConfigError, ProviderError
 from telchines.models import CocotbCandidate, CocotbPort, Observation, PatchProposal, RetrievalContext, SvaCandidate, SvaProperty, VerificationRun
@@ -49,6 +49,7 @@ class GenerationRequest:
     output_file: str
     retrieval_context: RetrievalContext
     conventions: dict[str, Any] = field(default_factory=dict)
+    feedback: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -70,6 +71,7 @@ class CocotbGenerationRequest:
     intent: str
     retrieval_context: RetrievalContext
     conventions: dict[str, Any] = field(default_factory=dict)
+    feedback: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -699,7 +701,7 @@ def _build_generation_request_payload(request_value: GenerationRequest, provider
         raise ProviderError(f"spec file does not exist: {request_value.spec_path}")
     if not rtl.exists():
         raise ProviderError(f"rtl file does not exist: {request_value.rtl_path}")
-    return {
+    payload: dict[str, Any] = {
         "provider": provider_name,
         "task_id": request_value.task_id,
         "workflow_type": "spec_to_sva",
@@ -732,11 +734,15 @@ def _build_generation_request_payload(request_value: GenerationRequest, provider
             "Use status='no_generation' if no grounded assertion draft can be produced."
         ),
     }
+    if request_value.feedback:
+        payload["previous_attempts"] = request_value.feedback
+        payload["instructions"] += " Use previous_attempts validator feedback to revise the next assertion draft."
+    return payload
 
 
 def _build_cocotb_generation_request_payload(request_value: CocotbGenerationRequest, provider_name: str) -> dict[str, Any]:
     loaded = _load_cocotb_generation_inputs(request_value)
-    return {
+    payload: dict[str, Any] = {
         "provider": provider_name,
         "task_id": request_value.task_id,
         "workflow_type": "dut_to_cocotb",
@@ -792,6 +798,10 @@ def _build_cocotb_generation_request_payload(request_value: CocotbGenerationRequ
             "The ports field must be a list of objects with keys: name, direction, width, role."
         ),
     }
+    if request_value.feedback:
+        payload["previous_attempts"] = request_value.feedback
+        payload["instructions"] += " Use previous_attempts validator feedback to revise the next cocotb scaffold."
+    return payload
 
 
 def _invoke_openai_compatible(provider_name: str, config: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
@@ -916,10 +926,14 @@ def _check_provider_transport(provider_name: str, config: dict[str, Any], projec
             "parsed_keys": sorted(parsed.keys()),
         }
     if kind == "agent_runtime":
+        runtime_info = runtime_capability()
         return {
             "status": "passed",
             "mode": "agent_runtime",
             "runtime": config.get("runtime", "langgraph"),
+            "runtime_mode": runtime_info["runtime_mode"],
+            "runtime_available": runtime_info["runtime_available"],
+            "runtime_reason": runtime_info["runtime_reason"],
             "base_provider": config.get("base_provider"),
             "max_iterations": int(config.get("max_iterations", 3)),
         }

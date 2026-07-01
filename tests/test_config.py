@@ -287,6 +287,19 @@ def test_config_rejects_invalid_sva_validation_adapters(sample_project: Path) ->
         ProjectConfig.load(sample_project)
 
 
+def test_config_validates_generation_max_attempts(sample_project: Path) -> None:
+    config = ProjectConfig.load(sample_project)
+    assert config.generation["sva"]["max_attempts"] == 1
+    assert config.generation["cocotb"]["max_attempts"] == 1
+
+    config_path = sample_project / ".tel" / "config.json"
+    payload = read_json(config_path)
+    payload["generation"] = {"cocotb": {"max_attempts": 0}}
+    write_json(config_path, payload)
+    with pytest.raises(ConfigError, match="generation.cocotb.max_attempts"):
+        ProjectConfig.load(sample_project)
+
+
 def test_config_loads_utf8_bom_json(sample_project: Path) -> None:
     config_path = sample_project / ".tel" / "config.json"
     text = config_path.read_text(encoding="utf-8")

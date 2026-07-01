@@ -136,6 +136,9 @@ class PatchProposal:
     evidence_paths: list[str] = field(default_factory=list)
     replay_artifacts: dict[str, str] = field(default_factory=dict)
     validation_attempts: list[ValidationAttempt] = field(default_factory=list)
+    runtime_mode: str = ""
+    runtime_available: bool | None = None
+    runtime_reason: str = ""
     schema_version: str = SCHEMA_VERSION
 
 
@@ -162,6 +165,8 @@ class SvaCandidate:
     properties: list[SvaProperty] = field(default_factory=list)
     replay_artifacts: dict[str, str] = field(default_factory=dict)
     validation_attempts: list[ValidationAttempt] = field(default_factory=list)
+    attempts: list[dict[str, Any]] = field(default_factory=list)
+    rejected_candidate_ids: list[str] = field(default_factory=list)
     schema_version: str = SCHEMA_VERSION
 
 
@@ -192,6 +197,8 @@ class CocotbCandidate:
     ports: list[CocotbPort] = field(default_factory=list)
     replay_artifacts: dict[str, str] = field(default_factory=dict)
     validation_attempts: list[ValidationAttempt] = field(default_factory=list)
+    attempts: list[dict[str, Any]] = field(default_factory=list)
+    rejected_candidate_ids: list[str] = field(default_factory=list)
     schema_version: str = SCHEMA_VERSION
 
 

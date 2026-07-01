@@ -227,10 +227,12 @@ def _execute_selected_workflow(
         run, clusters, context = triage_logs(config, store, retrieval, logs, waveform_paths=waveforms or None)
         payload = {
             "run_id": run.run_id,
+            "status": "triaged",
             "cluster_count": len(clusters),
             "context_id": context.context_id,
             "waveform_count": int(run.inputs.get("waveform_count", 0)),
             "clusters": [dataclass_to_dict(cluster) for cluster in clusters],
+            "summary": f"triaged {len(clusters)} failure cluster(s)",
         }
         return {
             "payload": payload,
@@ -253,10 +255,12 @@ def _execute_selected_workflow(
         payload = {
             "run_id": run.run_id,
             "context_id": context.context_id,
+            "status": "planned",
             "plan_id": plan.plan_id,
             "report_path": plan.report_path,
             "recommendation_count": len(plan.recommendations),
             "recommendations": [dataclass_to_dict(item) for item in plan.recommendations],
+            "summary": f"planned {len(plan.recommendations)} coverage recommendation(s)",
         }
         return {
             "payload": payload,
@@ -274,6 +278,8 @@ def _execute_selected_workflow(
             "provider": candidate.provider if candidate else getattr(provider, "name", ""),
             "status": candidate.status if candidate else "no_generation",
             "artifact_path": candidate.file_path if candidate else None,
+            "attempts": candidate.attempts if candidate else [],
+            "rejected_candidate_ids": candidate.rejected_candidate_ids if candidate else [],
             "validation_run_id": validation_run.run_id if validation_run else None,
             "validation_status": validation_run.status if validation_run else None,
             "validation_summary": validation_run.summary if validation_run else None,
@@ -289,6 +295,8 @@ def _execute_selected_workflow(
                 "candidate_id": payload["candidate_id"],
                 "validation_run_id": payload["validation_run_id"],
                 "artifact_path": payload["artifact_path"],
+                "attempts": payload["attempts"],
+                "rejected_candidate_ids": payload["rejected_candidate_ids"],
                 "replay_artifacts": candidate.replay_artifacts if candidate else {},
             },
         }
@@ -315,6 +323,8 @@ def _execute_selected_workflow(
             "status": candidate.status if candidate else "no_generation",
             "artifact_path": candidate.file_path if candidate else None,
             "manifest_path": candidate.manifest_path if candidate else None,
+            "attempts": candidate.attempts if candidate else [],
+            "rejected_candidate_ids": candidate.rejected_candidate_ids if candidate else [],
             "validation_run_id": validation_run.run_id if validation_run else None,
             "validation_status": validation_run.status if validation_run else None,
             "validation_summary": validation_run.summary if validation_run else None,
@@ -332,6 +342,8 @@ def _execute_selected_workflow(
                 "validation_run_id": payload["validation_run_id"],
                 "artifact_path": payload["artifact_path"],
                 "manifest_path": payload["manifest_path"],
+                "attempts": payload["attempts"],
+                "rejected_candidate_ids": payload["rejected_candidate_ids"],
                 "replay_artifacts": candidate.replay_artifacts if candidate else {},
             },
         }
@@ -385,6 +397,9 @@ def _execute_agent_repair(
         "proposal_explanation": proposal.explanation if proposal else None,
         "evidence_paths": proposal.evidence_paths if proposal else [],
         "replay_artifacts": proposal.replay_artifacts if proposal else {},
+        "runtime_mode": proposal.runtime_mode if proposal else None,
+        "runtime_available": proposal.runtime_available if proposal else None,
+        "runtime_reason": proposal.runtime_reason if proposal else None,
         "validation_run_id": validation_run.run_id if validation_run else None,
         "validation_status": validation_run.status if validation_run else None,
         "validation_summary": validation_run.summary if validation_run else None,
@@ -510,6 +525,8 @@ def _agent_status(result: dict[str, object], *, apply_patch: bool) -> str:
         return "applied" if apply_patch else "review_required"
     status = payload.get("status")
     if status in {"passed", "planned", "validated"}:
+        return str(status)
+    if status in {"triaged", "reported"}:
         return str(status)
     if status in {"failed", "rejected"} or validation_status == "failed":
         return "failed"

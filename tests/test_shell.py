@@ -23,7 +23,9 @@ from telchines.shell import (
     _parse_repair_args,
     _parse_repeated_option,
     render_artifact_review_payload,
+    render_command_progress,
     render_help,
+    render_provider_check_payload,
     render_replay_payload,
     render_runs_doctor_payload,
     render_run_show,
@@ -290,6 +292,34 @@ def test_shell_artifact_review_rendering() -> None:
     assert "Artifact Review" in rendered
     assert "modified" in rendered
     assert "human note" in rendered
+
+
+def test_shell_progress_and_provider_runtime_rendering() -> None:
+    progress = render_command_progress('/agent "fix counter" --tool fixture --file rtl/broken_counter.sv')
+    assert "Progress" in progress
+    assert "waiting for model or workflow" in progress
+
+    rendered = render_provider_check_payload(
+        {
+            "providers": [
+                {
+                    "name": "agent-repair",
+                    "kind": "agent_runtime",
+                    "status": "passed",
+                    "summary": "provider check passed",
+                    "checks": {
+                        "transport": {
+                            "mode": "agent_runtime",
+                            "runtime": "langgraph",
+                            "runtime_mode": "bounded_loop_no_langgraph",
+                        }
+                    },
+                }
+            ]
+        }
+    )
+    assert "bounded_loop_no" in rendered
+    assert "agent_runtime" in rendered
 
 
 def test_shell_supports_index_status_and_clean(sample_project: Path) -> None:

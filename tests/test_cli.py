@@ -162,9 +162,9 @@ sys.stdout.write("provider log line\\n" + json.dumps({{"status": "ok", "workflow
     )
 
 
-def _write_local_sva_provider(project_root: Path, *, invalid: bool = False, bind_signal: str = "start_seen") -> None:
+def _write_local_sva_provider(project_root: Path, *, invalid: bool = False, bind_signal: str = "start_seen", valid_after_feedback: bool = False) -> None:
     provider_script = project_root / "tools" / "local_sva_provider.py"
-    candidate_content = """module uart_rx_assertions(
+    valid_candidate_content = """module uart_rx_assertions(
   input logic clk,
   input logic rst_n,
   input logic serial_i,
@@ -186,6 +186,7 @@ bind uart_rx uart_rx_assertions uart_rx_assertions_i(
   .start_seen(%s)
 );
 """ % bind_signal
+    candidate_content = valid_candidate_content
     if invalid:
         candidate_content = """module uart_rx_assertions(
   input logic clk,
@@ -205,10 +206,11 @@ import json
 import sys
 
 payload = json.loads(sys.stdin.read())
+invalid = {invalid!r} and not ({valid_after_feedback!r} and payload.get("previous_attempts"))
 response = {{
     "status": "proposed",
     "file_path": payload["output_file"],
-    "candidate_content": {candidate_content!r},
+    "candidate_content": ({valid_candidate_content!r} if not invalid else {candidate_content!r}),
     "explanation": "Generated a UART receiver start-bit assertion.",
     "evidence_paths": [payload["spec"]["path"], payload["rtl"]["path"]],
     "properties": [
@@ -220,6 +222,45 @@ response = {{
         }}
     ],
 }}
+sys.stdout.write(json.dumps(response))
+""",
+        encoding="utf-8",
+    )
+
+
+def _write_local_cocotb_provider(project_root: Path) -> None:
+    provider_script = project_root / "tools" / "local_cocotb_provider.py"
+    provider_script.write_text(
+        """from __future__ import annotations
+import json
+import sys
+
+payload = json.loads(sys.stdin.read())
+has_feedback = bool(payload.get("previous_attempts"))
+content = '''import cocotb
+
+@cocotb.test()
+async def test_smoke(dut):
+    dut._log.info("smoke")
+'''
+if not has_feedback:
+    content = '''import cocotb
+
+@cocotb.test()
+async def test_smoke(dut):
+    dut._log.info("unterminated)
+'''
+response = {
+    "status": "proposed",
+    "file_path": payload["default_output_file"],
+    "manifest_path": payload["default_manifest_file"],
+    "candidate_content": content,
+    "explanation": "Generated a retry-aware cocotb smoke scaffold.",
+    "evidence_paths": [payload["dut"]["path"]],
+    "top_module": payload["dut"]["module_name"],
+    "assumptions": payload["inference"]["assumptions"],
+    "ports": payload["dut"]["ports"],
+}
 sys.stdout.write(json.dumps(response))
 """,
         encoding="utf-8",
@@ -955,6 +996,9 @@ def test_cli_checks_agent_runtime_provider(sample_project: Path, monkeypatch) ->
     transport = payload["providers"][0]["checks"]["transport"]
     assert transport["mode"] == "agent_runtime"
     assert transport["runtime"] == "langgraph"
+    assert transport["runtime_mode"] in {"bounded_loop_no_langgraph", "langgraph"}
+    assert isinstance(transport["runtime_available"], bool)
+    assert transport["runtime_reason"]
     assert transport["base_provider"] == "local-base"
 
 
@@ -1122,6 +1166,26 @@ def test_cli_gen_sva_reports_validation_failure(sample_project: Path, monkeypatc
     assert "validation failed" in payload["validation_summary"].lower()
 
 
+def test_cli_gen_sva_retries_with_validation_feedback(sample_project: Path, monkeypatch) -> None:
+    _write_local_sva_provider(sample_project, invalid=True, valid_after_feedback=True)
+    _set_model_policy(sample_project, _generation_model_policy(sys.executable, "tools/local_sva_provider.py"))
+    _set_generation_config(sample_project, {"sva": {"validation_adapters": [], "max_attempts": 2}})
+    monkeypatch.chdir(sample_project)
+    runner.invoke(app, ["index"])
+    result = runner.invoke(app, ["gen-sva", "--spec", "docs/uart.md", "--rtl", "rtl/uart_rx.sv"])
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "validated"
+    assert payload["validation_status"] == "passed"
+    assert len(payload["attempts"]) == 2
+    assert payload["attempts"][0]["validation_status"] == "failed"
+    assert payload["attempts"][1]["validation_status"] == "passed"
+    assert len(payload["rejected_candidate_ids"]) == 1
+    rejected = runner.invoke(app, ["artifacts", "review", payload["rejected_candidate_ids"][0]])
+    assert rejected.exit_code == 0
+    assert json.loads(rejected.stdout)["candidate_id"] == payload["rejected_candidate_ids"][0]
+
+
 def test_cli_gen_sva_rejects_unknown_bind_signal(sample_project: Path, monkeypatch) -> None:
     _write_local_sva_provider(sample_project, bind_signal="missing_signal")
     _set_model_policy(sample_project, _generation_model_policy(sys.executable, "tools/local_sva_provider.py"))
@@ -1208,6 +1272,23 @@ def test_cli_gen_cocotb_with_heuristic_provider(sample_project: Path, monkeypatc
     assert "+# human review note" in modified_payload["diff"]
 
 
+def test_cli_gen_cocotb_retries_with_validation_feedback(sample_project: Path, monkeypatch) -> None:
+    _write_local_cocotb_provider(sample_project)
+    _set_model_policy(sample_project, _generation_model_policy(sys.executable, "tools/local_cocotb_provider.py"))
+    _set_generation_config(sample_project, {"cocotb": {"max_attempts": 2}})
+    monkeypatch.chdir(sample_project)
+    runner.invoke(app, ["index"])
+    result = runner.invoke(app, ["gen-cocotb", "--dut", "rtl/uart_rx.sv"])
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "validated"
+    assert payload["validation_status"] == "passed"
+    assert len(payload["attempts"]) == 2
+    assert payload["attempts"][0]["validation_status"] == "failed"
+    assert payload["attempts"][1]["validation_status"] == "passed"
+    assert len(payload["rejected_candidate_ids"]) == 1
+
+
 def test_cli_gen_cocotb_uses_generation_conventions(sample_project: Path, monkeypatch) -> None:
     config_path = sample_project / ".tel" / "config.json"
     payload = read_json(config_path)
@@ -1250,6 +1331,23 @@ def test_cli_coverage_plan(sample_project: Path, monkeypatch) -> None:
     assert payload["recommendations"][0]["classification"] == "missing_stimulus"
     assert payload["recommendations"][1]["classification"] == "missing_checker"
     assert payload["recommendations"][0]["evidence_citations"]
+
+
+def test_cli_agent_evidence_workflows_use_success_statuses(sample_project: Path, monkeypatch) -> None:
+    monkeypatch.chdir(sample_project)
+    runner.invoke(app, ["index"])
+    triage_result = runner.invoke(app, ["agent", "triage the UART regression", "--logs", "logs/regressions"])
+    assert triage_result.exit_code == 0
+    triage_payload = json.loads(triage_result.stdout)
+    assert triage_payload["status"] == "triaged"
+    assert triage_payload["result"]["status"] == "triaged"
+
+    _write_coverage_report(sample_project)
+    coverage_result = runner.invoke(app, ["agent", "plan coverage closure", "--report", "cov/coverage.json"])
+    assert coverage_result.exit_code == 0
+    coverage_payload = json.loads(coverage_result.stdout)
+    assert coverage_payload["status"] == "planned"
+    assert coverage_payload["result"]["status"] == "planned"
 
 
 def test_cli_enters_shell_by_default(sample_project: Path, monkeypatch) -> None:
@@ -1340,6 +1438,22 @@ def test_cli_plain_shell_subprocess_exits_on_eof(sample_project: Path) -> None:
     assert result.returncode == 0
     assert "mode: plain" in result.stdout
     assert str(sample_project) in result.stdout
+
+
+def test_openrouter_capability_harness_dry_run_and_missing_key(monkeypatch) -> None:
+    script = Path(__file__).resolve().parents[1] / "scripts" / "openrouter_capability_study.py"
+    dry_run = subprocess.run([sys.executable, str(script), "--dry-run"], capture_output=True, text=True, check=False)
+    assert dry_run.returncode == 0
+    dry_payload = json.loads(dry_run.stdout)
+    assert dry_payload["status"] == "dry_run"
+    assert any(label == "agent_repair" for label, _ in dry_payload["commands"])
+
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    skipped = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, check=False)
+    assert skipped.returncode == 0
+    skipped_payload = json.loads(skipped.stdout)
+    assert skipped_payload["status"] == "skipped_missing_key"
+    assert skipped_payload["missing_env"] == "OPENROUTER_API_KEY"
 
 
 def test_cli_shell_help_still_works_in_plain_mode(sample_project: Path, monkeypatch) -> None:

@@ -122,6 +122,8 @@ def review_artifact(root: Path | None = None, reference: str = "", *, max_diff_l
         "diff_truncated": truncated,
         "diff": "\n".join(diff_lines),
         "validation_attempts": validation_attempts,
+        "attempts": candidate.get("attempts", []),
+        "rejected_candidate_ids": candidate.get("rejected_candidate_ids", []),
         "evidence_paths": candidate.get("evidence_paths", []),
         "replay_artifacts": candidate.get("replay_artifacts", {}),
         "summary": _artifact_review_summary(status, file_path, len(diff_lines), truncated),
@@ -380,6 +382,9 @@ def repair(root: Path | None, tool: str, files: list[str], extra_arg: list[str] 
         "proposal_explanation": proposal.explanation if proposal else None,
         "evidence_paths": proposal.evidence_paths if proposal else [],
         "replay_artifacts": proposal.replay_artifacts if proposal else {},
+        "runtime_mode": proposal.runtime_mode if proposal else None,
+        "runtime_available": proposal.runtime_available if proposal else None,
+        "runtime_reason": proposal.runtime_reason if proposal else None,
         "validation_run_id": validation_run.run_id if validation_run else None,
         "validation_status": validation_run.status if validation_run else None,
         "validation_summary": validation_run.summary if validation_run else None,
@@ -457,6 +462,8 @@ def gen_sva(
         "property_summaries": [dataclass_to_dict(item) for item in candidate.properties] if candidate else [],
         "evidence_paths": candidate.evidence_paths if candidate else [],
         "replay_artifacts": candidate.replay_artifacts if candidate else {},
+        "attempts": candidate.attempts if candidate else [],
+        "rejected_candidate_ids": candidate.rejected_candidate_ids if candidate else [],
         "validation_run_id": validation_run.run_id if validation_run else None,
         "validation_status": validation_run.status if validation_run else None,
         "validation_summary": validation_run.summary if validation_run else None,
@@ -505,6 +512,8 @@ def gen_cocotb(
         "ports": [dataclass_to_dict(item) for item in candidate.ports] if candidate else [],
         "evidence_paths": candidate.evidence_paths if candidate else [],
         "replay_artifacts": candidate.replay_artifacts if candidate else {},
+        "attempts": candidate.attempts if candidate else [],
+        "rejected_candidate_ids": candidate.rejected_candidate_ids if candidate else [],
         "validation_run_id": validation_run.run_id if validation_run else None,
         "validation_status": validation_run.status if validation_run else None,
         "validation_summary": validation_run.summary if validation_run else None,
@@ -566,6 +575,7 @@ def triage(root: Path | None, logs: list[Path], waveforms: list[Path] | None = N
 
 def list_providers(root: Path | None = None) -> dict[str, object]:
     config, _, _ = load_services(root)
+    provider_configs = config.project.model_policy.get("providers", {})
     return {
         "default_provider_by_capability": config.default_provider_by_capability(),
         "providers": [
@@ -576,6 +586,10 @@ def list_providers(root: Path | None = None) -> dict[str, object]:
                 "default_for": status.default_for,
                 "allowed": status.allowed,
                 "blocked_reason": status.blocked_reason or None,
+                "model": provider_configs.get(status.name, {}).get("model") if isinstance(provider_configs.get(status.name), dict) else None,
+                "base_provider": provider_configs.get(status.name, {}).get("base_provider") if isinstance(provider_configs.get(status.name), dict) else None,
+                "runtime": provider_configs.get(status.name, {}).get("runtime") if isinstance(provider_configs.get(status.name), dict) else None,
+                "timeout_seconds": provider_configs.get(status.name, {}).get("timeout_seconds") if isinstance(provider_configs.get(status.name), dict) else None,
             }
             for status in list_provider_statuses(config)
         ],

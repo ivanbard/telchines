@@ -9,6 +9,8 @@ tel gen-cocotb --dut rtl/uart_rx.sv --spec docs/uart.md
 
 The generated files are drafts. The JSON output includes `validation_status`, `validation_mode`, `validation_summary`, and `validation_limitations` so reviewers can see what was checked and what still needs tool-backed review.
 
+If `generation.sva.max_attempts` or `generation.cocotb.max_attempts` is greater than `1`, failed validation output is fed back into the next model request. JSON output then includes `attempts` and `rejected_candidate_ids`, and each rejected candidate remains reviewable by id.
+
 Use `tel artifacts review REF` to compare a saved generated candidate with the current workspace file. `REF` can be a generation candidate id, a validation run id, or the generated artifact path:
 
 ```bash
@@ -50,7 +52,8 @@ Projects can configure generation naming and inference conventions in `.tel/conf
       "clock_names": ["clk", "clock"],
       "reset_names": ["rst_n", "reset_n", "rst", "reset"],
       "active_low_reset_names": ["rst_n", "reset_n"],
-      "validation_adapters": ["slang", "verilator"]
+      "validation_adapters": ["slang", "verilator"],
+      "max_attempts": 1
     },
     "cocotb": {
       "output_dir": ".tel/artifacts/generated/cocotb",
@@ -58,7 +61,8 @@ Projects can configure generation naming and inference conventions in `.tel/conf
       "manifest_file_template": "{module}_cocotb_manifest.json",
       "clock_names": ["clk", "clock"],
       "reset_names": ["rst_n", "reset_n", "rst", "reset"],
-      "active_low_reset_names": ["rst_n", "reset_n"]
+      "active_low_reset_names": ["rst_n", "reset_n"],
+      "max_attempts": 1
     }
   }
 }

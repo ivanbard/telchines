@@ -72,6 +72,16 @@ def execute_repair(
         store.save_task(task)
         return None, None, context
 
+    agent_runtime = provider_result.response_payload.get("agent_runtime", {})
+    if isinstance(agent_runtime, dict):
+        proposal.runtime_mode = str(agent_runtime.get("runtime_mode") or "")
+        runtime_available = agent_runtime.get("runtime_available")
+        proposal.runtime_available = runtime_available if isinstance(runtime_available, bool) else None
+        proposal.runtime_reason = str(agent_runtime.get("runtime_reason") or "")
+        task.metadata["runtime_mode"] = proposal.runtime_mode
+        task.metadata["runtime_available"] = proposal.runtime_available
+        task.metadata["runtime_reason"] = proposal.runtime_reason
+
     proposal.replay_artifacts = {
         "request_artifact": str(request_artifact),
         "response_artifact": str(response_artifact),
