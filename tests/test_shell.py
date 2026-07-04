@@ -3,10 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from hypothesis import given
+from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
 from telchines.config import ProjectConfig
+from telchines.config import SUPPORTED_REASONING_LEVELS
 from prompt_toolkit.document import Document
 from prompt_toolkit.data_structures import Size
 from prompt_toolkit.input.defaults import create_pipe_input
@@ -17,6 +18,7 @@ from telchines.shell import (
     ShellSession,
     _build_fullscreen_shell_app,
     _dispatch_slash_command,
+    _header_fragments,
     _is_help_command,
     _parse_agent_args,
     _parse_coverage_plan_args,
@@ -24,6 +26,7 @@ from telchines.shell import (
     _parse_gen_sva_args,
     _parse_repair_args,
     _parse_repeated_option,
+    _sidebar_text,
     render_artifact_review_payload,
     render_agent_payload,
     render_cocotb_payload,
@@ -37,11 +40,35 @@ from telchines.shell import (
     render_sva_payload,
     render_welcome,
 )
+from telchines.utils import read_json, write_json
 
 
 PATH_TEXT = st.from_regex(r"[A-Za-z0-9_/.-]{1,24}", fullmatch=True).filter(lambda value: not value.startswith("-"))
 OPTION_VALUE = st.from_regex(r"[A-Za-z0-9_=./-]{1,24}", fullmatch=True).filter(lambda value: not value.startswith("--"))
 IDENT = st.from_regex(r"[A-Za-z_][A-Za-z0-9_]{0,12}", fullmatch=True)
+PROVIDER_NAME = st.from_regex(r"[A-Za-z][A-Za-z0-9_-]{0,12}", fullmatch=True).filter(lambda value: value != "heuristic")
+MODEL_NAME = st.from_regex(r"[A-Za-z0-9_.:/-]{1,24}", fullmatch=True)
+
+
+def _install_shell_model_policy(project_root: Path, provider_name: str = "local-test") -> None:
+    config_path = project_root / ".tel" / "config.json"
+    payload = read_json(config_path)
+    payload["project"]["model_policy"] = {
+        "default_provider_by_capability": {"repair": provider_name, "generation": "heuristic"},
+        "providers": {
+            "heuristic": {"kind": "heuristic", "capabilities": ["generation"]},
+            provider_name: {
+                "kind": "local_command",
+                "capabilities": ["repair"],
+                "command": "python",
+                "args": ["tools/local_provider.py"],
+                "model": "w-latest",
+                "reasoning_level": "medium",
+                "timeout_seconds": 5,
+            },
+        },
+    }
+    write_json(config_path, payload)
 
 
 class NarrowOutput(DummyOutput):
@@ -63,6 +90,7 @@ def test_shell_help_renders_core_commands() -> None:
     rendered = render_help()
     assert "/providers" in rendered
     assert "/providers [check [NAME] [--offline]]" in rendered
+    assert "/model [list|select|set|reasoning]" in rendered
     assert "/agent TASK" in rendered
     assert "/triage --logs PATH" in rendered
     assert "/coverage-plan --report PATH" in rendered
@@ -79,6 +107,70 @@ def test_shell_detects_help_command() -> None:
     assert _is_help_command("/help") is True
     assert _is_help_command("help") is True
     assert _is_help_command("/providers") is False
+
+
+def test_shell_model_list_command_renders_offline_picker(sample_project: Path) -> None:
+    _install_shell_model_policy(sample_project)
+    session = ShellSession(cwd=sample_project)
+    _, rendered = _dispatch_slash_command(session, "model list --offline")
+    assert "Model Selection" in rendered
+    assert "local-test" in rendered
+    assert "w-latest" in rendered
+    assert "medium" in rendered
+    assert "configured" in rendered
+    assert "model alias" in rendered
+    assert "may move" in rendered
+
+
+def test_shell_model_commands_update_config_and_status_summaries(sample_project: Path) -> None:
+    _install_shell_model_policy(sample_project)
+    session = ShellSession(cwd=sample_project)
+
+    _dispatch_slash_command(session, "model set --provider local-test --model wrapper-v2")
+    _dispatch_slash_command(session, "model reasoning --provider local-test --level high")
+    _dispatch_slash_command(session, "model select --capability repair --provider local-test")
+
+    payload = read_json(sample_project / ".tel" / "config.json")
+    provider = payload["project"]["model_policy"]["providers"]["local-test"]
+    header = "".join(fragment for _, fragment in _header_fragments(session))
+    sidebar = _sidebar_text(session)
+    assert provider["model"] == "wrapper-v2"
+    assert provider["reasoning_level"] == "high"
+    assert "repair: local-test:wrapper-v2/high" in header
+    assert "repair: local-test:wrapper-v2/high" in sidebar
+
+
+@settings(max_examples=30, suppress_health_check=[HealthCheck.function_scoped_fixture])
+@given(provider_name=PROVIDER_NAME, model=MODEL_NAME, level=st.sampled_from(sorted(SUPPORTED_REASONING_LEVELS)))
+def test_shell_model_commands_round_trip_generated_values(sample_project: Path, provider_name: str, model: str, level: str) -> None:
+    _install_shell_model_policy(sample_project, provider_name)
+    session = ShellSession(cwd=sample_project)
+
+    _dispatch_slash_command(session, f"model set --provider {provider_name} --model {model}")
+    _dispatch_slash_command(session, f"model reasoning --provider {provider_name} --level {level}")
+    _dispatch_slash_command(session, f"model select --capability repair --provider {provider_name}")
+
+    payload = read_json(sample_project / ".tel" / "config.json")
+    provider = payload["project"]["model_policy"]["providers"][provider_name]
+    assert payload["project"]["model_policy"]["default_provider_by_capability"]["repair"] == provider_name
+    assert provider["model"] == model
+    assert provider["reasoning_level"] == level
+
+
+@pytest.mark.parametrize(
+    ("command", "message"),
+    [
+        ("model select --capability repair --provider", "--provider requires a value"),
+        ("model select --capability --provider local-test", "--capability requires a value"),
+        ("model set --provider local-test --model", "--model requires a value"),
+        ("model reasoning --provider local-test --level", "--level requires a value"),
+    ],
+)
+def test_shell_model_commands_report_missing_values(sample_project: Path, command: str, message: str) -> None:
+    _install_shell_model_policy(sample_project)
+    session = ShellSession(cwd=sample_project)
+    with pytest.raises(ValueError, match=message):
+        _dispatch_slash_command(session, command)
 
 
 def test_shell_parser_reports_missing_option_values(sample_project: Path) -> None:
@@ -308,6 +400,19 @@ def test_fullscreen_shell_accepts_pipe_input(sample_project: Path) -> None:
     assert session.history == ["/pwd", "/exit"]
     assert any(str(sample_project) in item for item in session.transcript)
     assert session.transcript[-1] == "leaving Telchines shell"
+
+
+def test_fullscreen_shell_accepts_model_list_pipe_input(sample_project: Path) -> None:
+    _install_shell_model_policy(sample_project)
+    session = ShellSession(cwd=sample_project)
+    session.add_transcript("Telchines", render_welcome(session))
+    with create_pipe_input() as pipe_input:
+        app = _build_fullscreen_shell_app(session, input=pipe_input, output=DummyOutput())
+        pipe_input.send_text("/model list --offline\r/exit\r")
+        app.run()
+
+    assert session.history == ["/model list --offline", "/exit"]
+    assert any("Model Selection" in item for item in session.transcript)
 
 
 def test_fullscreen_shell_supports_history_navigation(sample_project: Path) -> None:

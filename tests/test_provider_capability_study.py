@@ -79,6 +79,117 @@ def test_provider_capability_repair_commands_select_provider(work_root: Path) ->
     assert repair_command["command"][-2:] == ["--provider", "matrix-local"]
 
 
+def test_provider_capability_repeat_count_adds_stability_metadata(work_root: Path) -> None:
+    matrix = provider_capability_study.load_matrix(REPO_ROOT / "docs" / "provider-matrices" / "local_command.json")
+    plan = provider_capability_study.build_plan(matrix, matrix["providers"], work_root, include_live=False, dry_run=True, repeat_count=2)
+    repair_commands = [command for command in plan["commands"] if command["label"] == "agent_repair"]
+    assert [command["repeat_index"] for command in repair_commands] == [1, 2]
+    assert all(command["repeat_count"] == 2 for command in repair_commands)
+    assert all(command["provider_kind"] == "local_command" for command in repair_commands)
+
+
+def test_provider_capability_repeat_count_must_be_positive(work_root: Path) -> None:
+    matrix = provider_capability_study.load_matrix(REPO_ROOT / "docs" / "provider-matrices" / "local_command.json")
+
+    with pytest.raises(provider_capability_study.MatrixError, match="repeat-count"):
+        provider_capability_study.build_plan(matrix, matrix["providers"], work_root, include_live=False, dry_run=True, repeat_count=0)
+
+
+def test_provider_capability_provider_config_copies_model_selection_fields() -> None:
+    provider = {
+        "name": "remote",
+        "kind": "openai_compatible",
+        "capabilities": ["repair"],
+        "base_url": "http://127.0.0.1:9999/v1",
+        "model": "configured-model",
+        "api_key_env": "TELCHINES_TEST_API_KEY",
+        "reasoning_level": "high",
+        "reasoning_summary": "concise",
+        "reasoning_wire_format": "openai_chat",
+        "model_source": "manual",
+        "supports_reasoning_effort": True,
+    }
+
+    config = provider_capability_study._provider_config(provider)
+
+    assert config["model"] == "configured-model"
+    assert config["reasoning_level"] == "high"
+    assert config["reasoning_summary"] == "concise"
+    assert config["reasoning_wire_format"] == "openai_chat"
+    assert config["model_source"] == "manual"
+    assert config["supports_reasoning_effort"] is True
+
+
+def test_provider_capability_markdown_report_includes_model_stability_fields(work_root: Path) -> None:
+    summary = {
+        "matrix": "demo",
+        "status": "passed",
+        "scratch_root": str(work_root),
+        "providers": [
+            {
+                "name": "remote",
+                "kind": "openai_compatible",
+                "model": "configured-model",
+                "reasoning_level": "high",
+                "status": "planned",
+                "reason": "",
+            }
+        ],
+        "results": [
+            {
+                "provider": "remote",
+                "label": "provider_check",
+                "repeat_index": 1,
+                "model": "configured-model",
+                "reasoning_level": "high",
+                "status": "passed",
+                "exit_code": 0,
+                "elapsed_seconds": 0.1,
+                "validation_status": None,
+                "candidate_id": None,
+                "attempt_count": None,
+                "semantic_fingerprint": "abc123",
+            }
+        ],
+        "metrics": {
+            "stability": [
+                {
+                    "provider": "remote",
+                    "label": "provider_check",
+                    "model": "configured-model",
+                    "reasoning_level": "high",
+                    "runs": 1,
+                    "stable": True,
+                    "statuses": ["passed"],
+                    "fingerprints": ["abc123"],
+                }
+            ]
+        },
+    }
+
+    rendered = provider_capability_study._markdown_report(summary)
+
+    assert "| Provider | Kind | Model | Reasoning | Status | Reason |" in rendered
+    assert "| Provider | Scenario | Repeat | Model | Reasoning | Status |" in rendered
+    assert "## Stability" in rendered
+    assert "configured-model" in rendered
+    assert "abc123" in rendered
+
+
+def test_provider_capability_redaction_removes_secret_env_values(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TELCHINES_TEST_API_KEY", "super-secret-token")
+    summary = {
+        "providers": [{"name": "remote", "model_warnings": ["safe"]}],
+        "results": [{"stdout": "super-secret-token", "stderr": "Authorization: super-secret-token"}],
+    }
+
+    redacted = provider_capability_study._redact_summary(summary)
+
+    encoded = json.dumps(redacted)
+    assert "super-secret-token" not in encoded
+    assert encoded.count("[REDACTED]") >= 1
+
+
 def test_provider_capability_scorer_rejects_false_green_agent_repair() -> None:
     status, reason = provider_capability_study._score_command_result(
         {"label": "agent_repair"},

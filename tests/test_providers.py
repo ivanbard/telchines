@@ -5,11 +5,16 @@ import sys
 from pathlib import Path
 
 import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
 from telchines.errors import ProviderError
 from telchines.models import Observation, RetrievalContext, ToolReference, VerificationRun
 from telchines.providers import (
+    LocalCommandRepairProvider,
     RepairRequest,
+    _build_anthropic_message_payload,
+    _build_openai_compatible_payload,
     _build_patch_from_content_payload,
     _extract_anthropic_response_content,
     _extract_json_object,
@@ -17,6 +22,9 @@ from telchines.providers import (
     _invoke_local_command,
     _openai_compatible_url,
 )
+
+
+REASONING_LEVELS = st.sampled_from(["none", "minimal", "low", "medium", "high", "xhigh"])
 
 
 def _repair_request(project_root: Path) -> RepairRequest:
@@ -157,6 +165,132 @@ def test_extract_openai_response_content_accepts_legacy_function_call_arguments(
         ]
     }
     assert _extract_openai_response_content(payload, "mock") == {"status": "ok", "workflow_type": "provider_check"}
+
+
+def test_extract_openai_response_content_accepts_responses_output_text() -> None:
+    assert _extract_openai_response_content({"output_text": '{"status":"ok"}'}, "mock") == {"status": "ok"}
+
+
+def test_openai_responses_reasoning_payload_uses_canonical_level() -> None:
+    payload = _build_openai_compatible_payload(
+        {"model": "gpt-test", "endpoint": "responses", "reasoning_level": "high", "reasoning_summary": "concise"},
+        "Return JSON.",
+        {"workflow_type": "provider_check"},
+    )
+    assert payload["input"] == '{"workflow_type": "provider_check"}'
+    assert payload["reasoning"] == {"effort": "high", "summary": "concise"}
+    assert "messages" not in payload
+
+
+def test_openai_chat_reasoning_effort_is_gated_by_provider_support() -> None:
+    unsupported = _build_openai_compatible_payload(
+        {"model": "chat-test", "reasoning_level": "medium"},
+        "Return JSON.",
+        {"workflow_type": "provider_check"},
+    )
+    supported = _build_openai_compatible_payload(
+        {"model": "chat-test", "reasoning_level": "medium", "supports_reasoning_effort": True},
+        "Return JSON.",
+        {"workflow_type": "provider_check"},
+    )
+    assert "reasoning_effort" not in unsupported
+    assert supported["reasoning_effort"] == "medium"
+
+
+def test_openai_chat_reasoning_effort_can_be_enabled_by_explicit_wire_format() -> None:
+    payload = _build_openai_compatible_payload(
+        {"model": "chat-test", "reasoning_level": "medium", "reasoning_wire_format": "openai_chat"},
+        "Return JSON.",
+        {"workflow_type": "provider_check"},
+    )
+
+    assert payload["reasoning_effort"] == "medium"
+
+
+@settings(max_examples=20)
+@given(level=REASONING_LEVELS)
+def test_openai_auto_omits_reasoning_fields_for_all_non_auto_levels_when_unsupported(level: str) -> None:
+    payload = _build_openai_compatible_payload(
+        {"model": "chat-test", "reasoning_level": level},
+        "Return JSON.",
+        {"workflow_type": "provider_check"},
+    )
+
+    assert "reasoning" not in payload
+    assert "reasoning_effort" not in payload
+
+
+def test_openai_auto_reasoning_level_omits_provider_specific_fields() -> None:
+    responses_payload = _build_openai_compatible_payload(
+        {"model": "gpt-test", "endpoint": "responses", "reasoning_level": "auto"},
+        "Return JSON.",
+        {"workflow_type": "provider_check"},
+    )
+    chat_payload = _build_openai_compatible_payload(
+        {"model": "chat-test", "reasoning_level": "auto", "supports_reasoning_effort": True},
+        "Return JSON.",
+        {"workflow_type": "provider_check"},
+    )
+
+    assert "reasoning" not in responses_payload
+    assert "reasoning_effort" not in chat_payload
+
+
+def test_anthropic_reasoning_payload_uses_adaptive_thinking() -> None:
+    payload = _build_anthropic_message_payload(
+        {"model": "claude-test", "reasoning_level": "low"},
+        "Return JSON.",
+        {"workflow_type": "provider_check"},
+    )
+    assert payload["thinking"] == {"type": "adaptive"}
+    assert payload["output_config"] == {"effort": "low"}
+
+
+@settings(max_examples=20)
+@given(level=st.sampled_from(["auto", "none", "minimal", "xhigh"]))
+def test_anthropic_unsupported_reasoning_levels_are_omitted(level: str) -> None:
+    payload = _build_anthropic_message_payload(
+        {"model": "claude-test", "reasoning_level": level},
+        "Return JSON.",
+        {"workflow_type": "provider_check"},
+    )
+
+    assert "thinking" not in payload
+    assert "output_config" not in payload
+
+
+def test_local_command_repair_payload_includes_model_selection(sample_project: Path) -> None:
+    script = sample_project / "tools" / "metadata_provider.py"
+    script.write_text(
+        "\n".join(
+            [
+                "import json, sys",
+                "payload = json.loads(sys.stdin.read())",
+                "selection = payload['model_selection']",
+                "assert selection['model'] == 'wrapper-model'",
+                "assert selection['reasoning_level'] == 'high'",
+                "print(json.dumps({'status': 'no_patch', 'seen_selection': selection}))",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    provider = LocalCommandRepairProvider(
+        "local-test",
+        {
+            "kind": "local_command",
+            "command": sys.executable,
+            "args": [str(script)],
+            "model": "wrapper-model",
+            "reasoning_level": "high",
+            "timeout_seconds": 5,
+        },
+    )
+
+    result = provider.propose_patch(_repair_request(sample_project))
+
+    assert result.request_payload["model_selection"]["model"] == "wrapper-model"
+    assert result.request_payload["model_selection"]["reasoning_level"] == "high"
+    assert result.response_payload["parsed"]["seen_selection"]["model"] == "wrapper-model"
 
 
 def test_extract_anthropic_response_content_accepts_text_blocks() -> None:

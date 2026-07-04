@@ -3,10 +3,16 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from hypothesis import HealthCheck, given, settings
+from hypothesis import strategies as st
 
-from telchines.config import ProjectConfig
+from telchines.config import ProjectConfig, SUPPORTED_REASONING_LEVELS
 from telchines.errors import ConfigError, ProjectNotInitializedError
 from telchines.utils import read_json, write_json
+
+
+SUPPORTED_REASONING_SUMMARIES = {"auto", "concise", "detailed"}
+SUPPORTED_REASONING_WIRE_FORMATS = {"auto", "openai_responses", "openai_chat", "anthropic_adaptive", "none"}
 
 
 def test_config_discovery_from_nested_directory(sample_project: Path) -> None:
@@ -115,6 +121,128 @@ def test_config_accepts_openai_auth_none(sample_project: Path) -> None:
     payload["project"]["model_policy"]["default_provider_by_capability"]["repair"] = "local-http"
     write_json(config_path, payload)
     assert ProjectConfig.load(sample_project).default_provider_by_capability()["repair"] == "local-http"
+
+
+def test_config_accepts_valid_reasoning_level(sample_project: Path) -> None:
+    config_path = sample_project / ".tel" / "config.json"
+    payload = read_json(config_path)
+    payload["project"]["model_policy"]["providers"]["local-http"] = {
+        "kind": "openai_compatible",
+        "capabilities": ["repair"],
+        "base_url": "http://127.0.0.1:11434/v1",
+        "model": "local-model",
+        "auth": "none",
+        "reasoning_level": "medium",
+        "reasoning_wire_format": "openai_chat",
+        "supports_reasoning_effort": True,
+    }
+    payload["project"]["model_policy"]["default_provider_by_capability"]["repair"] = "local-http"
+    write_json(config_path, payload)
+    assert ProjectConfig.load(sample_project).provider_capabilities("local-http") == ["repair"]
+
+
+def test_config_rejects_invalid_reasoning_level(sample_project: Path) -> None:
+    config_path = sample_project / ".tel" / "config.json"
+    payload = read_json(config_path)
+    payload["project"]["model_policy"]["providers"]["local-http"] = {
+        "kind": "openai_compatible",
+        "capabilities": ["repair"],
+        "base_url": "http://127.0.0.1:11434/v1",
+        "model": "local-model",
+        "auth": "none",
+        "reasoning_level": "maximum",
+    }
+    payload["project"]["model_policy"]["default_provider_by_capability"]["repair"] = "local-http"
+    write_json(config_path, payload)
+    with pytest.raises(ConfigError, match="reasoning_level"):
+        ProjectConfig.load(sample_project)
+
+
+@settings(max_examples=30, suppress_health_check=[HealthCheck.function_scoped_fixture])
+@given(level=st.sampled_from(sorted(SUPPORTED_REASONING_LEVELS)))
+def test_config_accepts_all_supported_reasoning_levels(sample_project: Path, level: str) -> None:
+    config_path = sample_project / ".tel" / "config.json"
+    payload = read_json(config_path)
+    payload["project"]["model_policy"]["providers"]["local-http"] = {
+        "kind": "openai_compatible",
+        "capabilities": ["repair"],
+        "base_url": "http://127.0.0.1:11434/v1",
+        "model": "local-model",
+        "auth": "none",
+        "reasoning_level": level,
+    }
+    payload["project"]["model_policy"]["default_provider_by_capability"]["repair"] = "local-http"
+    write_json(config_path, payload)
+
+    assert ProjectConfig.load(sample_project).project.model_policy["providers"]["local-http"]["reasoning_level"] == level
+
+
+@settings(max_examples=30, suppress_health_check=[HealthCheck.function_scoped_fixture])
+@given(summary=st.sampled_from(sorted(SUPPORTED_REASONING_SUMMARIES)))
+def test_config_accepts_supported_reasoning_summaries(sample_project: Path, summary: str) -> None:
+    config_path = sample_project / ".tel" / "config.json"
+    payload = read_json(config_path)
+    payload["project"]["model_policy"]["providers"]["local-http"] = {
+        "kind": "openai_compatible",
+        "capabilities": ["repair"],
+        "base_url": "http://127.0.0.1:11434/v1",
+        "model": "local-model",
+        "auth": "none",
+        "reasoning_summary": summary,
+    }
+    payload["project"]["model_policy"]["default_provider_by_capability"]["repair"] = "local-http"
+    write_json(config_path, payload)
+
+    assert ProjectConfig.load(sample_project).project.model_policy["providers"]["local-http"]["reasoning_summary"] == summary
+
+
+@settings(max_examples=30, suppress_health_check=[HealthCheck.function_scoped_fixture])
+@given(wire_format=st.sampled_from(sorted(SUPPORTED_REASONING_WIRE_FORMATS)))
+def test_config_accepts_supported_reasoning_wire_formats(sample_project: Path, wire_format: str) -> None:
+    config_path = sample_project / ".tel" / "config.json"
+    payload = read_json(config_path)
+    payload["project"]["model_policy"]["providers"]["local-http"] = {
+        "kind": "openai_compatible",
+        "capabilities": ["repair"],
+        "base_url": "http://127.0.0.1:11434/v1",
+        "model": "local-model",
+        "auth": "none",
+        "reasoning_wire_format": wire_format,
+    }
+    payload["project"]["model_policy"]["default_provider_by_capability"]["repair"] = "local-http"
+    write_json(config_path, payload)
+
+    assert ProjectConfig.load(sample_project).project.model_policy["providers"]["local-http"]["reasoning_wire_format"] == wire_format
+
+
+@settings(max_examples=30, suppress_health_check=[HealthCheck.function_scoped_fixture])
+@given(
+    field=st.sampled_from(["reasoning_level", "reasoning_summary", "reasoning_wire_format"]),
+    value=st.text(min_size=0, max_size=16),
+)
+def test_config_rejects_unsupported_reasoning_fields(sample_project: Path, field: str, value: str) -> None:
+    supported = {
+        "reasoning_level": SUPPORTED_REASONING_LEVELS,
+        "reasoning_summary": SUPPORTED_REASONING_SUMMARIES,
+        "reasoning_wire_format": SUPPORTED_REASONING_WIRE_FORMATS,
+    }[field]
+    if value in supported:
+        return
+    config_path = sample_project / ".tel" / "config.json"
+    payload = read_json(config_path)
+    payload["project"]["model_policy"]["providers"]["local-http"] = {
+        "kind": "openai_compatible",
+        "capabilities": ["repair"],
+        "base_url": "http://127.0.0.1:11434/v1",
+        "model": "local-model",
+        "auth": "none",
+        field: value,
+    }
+    payload["project"]["model_policy"]["default_provider_by_capability"]["repair"] = "local-http"
+    write_json(config_path, payload)
+
+    with pytest.raises(ConfigError, match=field):
+        ProjectConfig.load(sample_project)
 
 
 def test_config_rejects_invalid_openai_auth(sample_project: Path) -> None:

@@ -111,6 +111,13 @@ class ProviderCheck:
     capabilities: list[str]
     default_for: list[str]
     checks: dict[str, Any]
+    model: str | None = None
+    reasoning_level: str = "auto"
+    reasoning_summary: str | None = None
+    model_source: str | None = None
+    reasoning_supported: bool = False
+    reasoning_wire_format: str = "none"
+    model_warnings: list[str] = field(default_factory=list)
 
 
 class RepairProvider:
@@ -625,6 +632,7 @@ class ProviderRegistry:
         default_for = [capability for capability, name in self.defaults.items() if name == provider_name]
         blocked_reason = self._blocked_reason(provider_config)
         kind = str(provider_config.get("kind", ""))
+        model_fields = _provider_check_model_fields(provider_model_metadata(provider_name, provider_config, self.providers))
         checks: dict[str, Any] = {
             "configured": {"status": "passed"},
             "policy": {"status": "blocked" if blocked_reason else "passed", "reason": blocked_reason or None},
@@ -639,9 +647,10 @@ class ProviderRegistry:
                 capabilities=capabilities,
                 default_for=default_for,
                 checks=checks,
+                **model_fields,
             )
         if not live:
-            checks["transport"] = {"status": "skipped", "reason": "offline check requested"}
+            checks["transport"] = {"status": "skipped", "reason": "offline check requested", **_transport_model_fields(model_fields)}
             return ProviderCheck(
                 name=provider_name,
                 kind=kind,
@@ -651,6 +660,7 @@ class ProviderRegistry:
                 capabilities=capabilities,
                 default_for=default_for,
                 checks=checks,
+                **model_fields,
             )
         if kind == "agent_runtime":
             transport = _agent_runtime_transport(provider_config)
@@ -672,6 +682,7 @@ class ProviderRegistry:
                     capabilities=capabilities,
                     default_for=default_for,
                     checks=checks,
+                    **model_fields,
                 )
             try:
                 base_transport = _check_provider_transport(base_provider_name, base_provider_config, self.config.project_root)
@@ -686,6 +697,7 @@ class ProviderRegistry:
                     capabilities=capabilities,
                     default_for=default_for,
                     checks=checks,
+                    **model_fields,
                 )
             checks["base_provider_transport"] = {"provider": base_provider_name, **base_transport}
         else:
@@ -702,6 +714,7 @@ class ProviderRegistry:
                     capabilities=capabilities,
                     default_for=default_for,
                     checks=checks,
+                    **model_fields,
                 )
             checks["transport"] = transport
         return ProviderCheck(
@@ -713,6 +726,7 @@ class ProviderRegistry:
             capabilities=capabilities,
             default_for=default_for,
             checks=checks,
+            **model_fields,
         )
 
     def _resolve_provider(self, capability: str, provider_name: str | None) -> tuple[str, dict[str, Any]]:
@@ -981,7 +995,13 @@ def _apply_openai_reasoning(payload: dict[str, Any], config: dict[str, Any]) -> 
     level = str(config.get("reasoning_level", "auto"))
     if level == "auto":
         return payload
-    wire_format = str(provider_model_metadata("__provider__", config).get("reasoning_wire_format") or "none")
+    endpoint = str(config.get("endpoint", "chat/completions")).strip("/")
+    if endpoint.endswith("responses"):
+        wire_format = "openai_responses"
+    elif bool(config.get("supports_reasoning_effort", False)):
+        wire_format = "openai_chat"
+    else:
+        wire_format = str(provider_model_metadata("__provider__", config).get("reasoning_wire_format") or "none")
     if wire_format == "openai_responses":
         reasoning: dict[str, Any] = {"effort": level}
         summary = config.get("reasoning_summary")
@@ -1178,6 +1198,10 @@ def _transport_model_fields(metadata: dict[str, Any]) -> dict[str, Any]:
         "reasoning_wire_format": metadata.get("reasoning_wire_format", "none"),
         "model_warnings": metadata.get("model_warnings", []),
     }
+
+
+def _provider_check_model_fields(metadata: dict[str, Any]) -> dict[str, Any]:
+    return _transport_model_fields(metadata)
 
 
 def _agent_runtime_transport(config: dict[str, Any]) -> dict[str, Any]:

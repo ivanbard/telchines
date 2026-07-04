@@ -1166,17 +1166,190 @@ def test_cli_checks_heuristic_provider(sample_project: Path, monkeypatch) -> Non
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert payload["status"] == "passed"
-    assert payload["providers"][0]["checks"]["transport"]["mode"] == "builtin"
+    provider = payload["providers"][0]
+    assert provider["model"] == "heuristic"
+    assert provider["reasoning_level"] == "auto"
+    assert provider["checks"]["transport"]["mode"] == "builtin"
+    assert provider["checks"]["transport"]["model"] == "heuristic"
 
 
 def test_cli_checks_local_command_provider(sample_project: Path, monkeypatch) -> None:
     _write_local_check_provider(sample_project)
     _set_model_policy(sample_project, _local_model_policy(sys.executable, "tools/local_check_provider.py"))
+    config_path = sample_project / ".tel" / "config.json"
+    config = read_json(config_path)
+    config["project"]["model_policy"]["providers"]["local-test"]["model"] = "wrapper-model"
+    config["project"]["model_policy"]["providers"]["local-test"]["reasoning_level"] = "medium"
+    write_json(config_path, config)
     monkeypatch.chdir(sample_project)
     result = runner.invoke(app, ["providers", "check", "local-test"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["providers"][0]["checks"]["transport"]["parsed_keys"] == ["status", "workflow_type"]
+    provider = payload["providers"][0]
+    assert provider["model"] == "wrapper-model"
+    assert provider["reasoning_level"] == "medium"
+    assert provider["checks"]["transport"]["model"] == "wrapper-model"
+    assert provider["checks"]["transport"]["reasoning_level"] == "medium"
+    assert provider["checks"]["transport"]["parsed_keys"] == ["status", "workflow_type"]
+
+
+def test_cli_model_selection_commands_persist_config(sample_project: Path, monkeypatch) -> None:
+    _write_local_check_provider(sample_project)
+    _set_model_policy(sample_project, _local_model_policy(sys.executable, "tools/local_check_provider.py"))
+    monkeypatch.chdir(sample_project)
+
+    result = runner.invoke(app, ["providers", "set-model", "local-test", "wrapper-v2"])
+    assert result.exit_code == 0
+    result = runner.invoke(app, ["providers", "set-reasoning", "local-test", "high"])
+    assert result.exit_code == 0
+    result = runner.invoke(app, ["providers", "select", "--capability", "repair", "--provider", "local-test"])
+    assert result.exit_code == 0
+    result = runner.invoke(app, ["providers", "models", "local-test", "--offline"])
+    assert result.exit_code == 0
+
+    payload = json.loads(result.stdout)
+    provider = payload["providers"][0]
+    assert provider["model"] == "wrapper-v2"
+    assert provider["reasoning_level"] == "high"
+    config = read_json(sample_project / ".tel" / "config.json")
+    assert config["project"]["model_policy"]["providers"]["local-test"]["model"] == "wrapper-v2"
+    assert config["project"]["model_policy"]["providers"]["local-test"]["reasoning_level"] == "high"
+
+
+def test_cli_models_discovers_openai_compatible_models(sample_project: Path, monkeypatch) -> None:
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802
+            assert self.path == "/models"
+            assert self.headers["Authorization"] == "Bearer test-token"
+            response = {"data": [{"id": "live-model-a"}, {"id": "live-model-b"}]}
+            encoded = json.dumps(response).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(encoded)))
+            self.end_headers()
+            self.wfile.write(encoded)
+
+        def log_message(self, format, *args):  # noqa: A003
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        _set_model_policy(sample_project, _remote_model_policy(f"http://127.0.0.1:{server.server_address[1]}", "TELCHINES_TEST_API_KEY"))
+        monkeypatch.setenv("TELCHINES_TEST_API_KEY", "test-token")
+        monkeypatch.chdir(sample_project)
+        result = runner.invoke(app, ["providers", "models", "mock-remote"])
+        assert result.exit_code == 0
+        payload = json.loads(result.stdout)
+        provider = payload["providers"][0]
+        assert provider["discovery_status"] == "passed"
+        assert provider["model_source"] == "live"
+        assert provider["models"][:2] == ["live-model-a", "live-model-b"]
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_cli_models_falls_back_when_credentials_are_missing(sample_project: Path, monkeypatch) -> None:
+    _set_model_policy(sample_project, _remote_model_policy("https://example.invalid/v1", "TELCHINES_TEST_API_KEY"))
+    monkeypatch.delenv("TELCHINES_TEST_API_KEY", raising=False)
+    monkeypatch.chdir(sample_project)
+
+    result = runner.invoke(app, ["providers", "models", "mock-remote"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    provider = payload["providers"][0]
+    assert provider["discovery_status"] == "fallback"
+    assert provider["model"] == "mock-model"
+    assert "missing credentials" in provider["discovery_error"]
+
+
+def test_cli_models_handles_openai_discovery_malformed_data(sample_project: Path, monkeypatch) -> None:
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802
+            response = {"data": "not-a-list"}
+            encoded = json.dumps(response).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(encoded)))
+            self.end_headers()
+            self.wfile.write(encoded)
+
+        def log_message(self, format, *args):  # noqa: A003
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        _set_model_policy(sample_project, _remote_model_policy(f"http://127.0.0.1:{server.server_address[1]}", "TELCHINES_TEST_API_KEY"))
+        monkeypatch.setenv("TELCHINES_TEST_API_KEY", "test-token")
+        monkeypatch.chdir(sample_project)
+        result = runner.invoke(app, ["providers", "models", "mock-remote"])
+        assert result.exit_code == 0
+        provider = json.loads(result.stdout)["providers"][0]
+        assert provider["discovery_status"] == "fallback"
+        assert provider["models"][0] == "mock-model"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_cli_models_discovers_anthropic_models(sample_project: Path, monkeypatch) -> None:
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802
+            assert self.path == "/models"
+            assert self.headers["x-api-key"] == "test-token"
+            assert self.headers["anthropic-version"] == "2023-06-01"
+            response = {"data": [{"id": "claude-live-a"}]}
+            encoded = json.dumps(response).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(encoded)))
+            self.end_headers()
+            self.wfile.write(encoded)
+
+        def log_message(self, format, *args):  # noqa: A003
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        _set_model_policy(sample_project, _anthropic_model_policy(f"http://127.0.0.1:{server.server_address[1]}", "TELCHINES_TEST_API_KEY"))
+        monkeypatch.setenv("TELCHINES_TEST_API_KEY", "test-token")
+        monkeypatch.chdir(sample_project)
+        result = runner.invoke(app, ["providers", "models", "mock-anthropic"])
+        assert result.exit_code == 0
+        provider = json.loads(result.stdout)["providers"][0]
+        assert provider["discovery_status"] == "passed"
+        assert provider["model_source"] == "live"
+        assert provider["models"][0] == "claude-live-a"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_cli_provider_model_commands_report_config_errors(sample_project: Path, monkeypatch) -> None:
+    _write_local_check_provider(sample_project)
+    _set_model_policy(sample_project, _local_model_policy(sys.executable, "tools/local_check_provider.py"))
+    monkeypatch.chdir(sample_project)
+
+    missing = runner.invoke(app, ["providers", "models", "missing", "--offline"])
+    bad_capability = runner.invoke(app, ["providers", "select", "--capability", "simulation", "--provider", "local-test"])
+    bad_provider = runner.invoke(app, ["providers", "set-model", "missing", "model"])
+    bad_reasoning = runner.invoke(app, ["providers", "set-reasoning", "local-test", "maximum"])
+
+    assert missing.exit_code == 2
+    assert "provider missing is not configured" in missing.stderr
+    assert bad_capability.exit_code == 2
+    assert "capability must be repair or generation" in bad_capability.stderr
+    assert bad_provider.exit_code == 2
+    assert "provider missing is not configured" in bad_provider.stderr
+    assert bad_reasoning.exit_code == 2
+    assert "reasoning level must be one of" in bad_reasoning.stderr
 
 
 def test_cli_checks_agent_runtime_provider(sample_project: Path, monkeypatch) -> None:
@@ -1268,6 +1441,10 @@ def test_cli_checks_openai_compatible_provider(sample_project: Path, monkeypatch
         assert transport["mode"] == "openai_compatible"
         assert transport["auth_mode"] == "bearer"
         assert transport["network_scope"] == "local_http"
+        assert payload["providers"][0]["model"] == "mock-model"
+        assert payload["providers"][0]["reasoning_level"] == "auto"
+        assert "test-token" not in result.stdout
+        assert "Authorization" not in result.stdout
     finally:
         server.shutdown()
         thread.join(timeout=5)

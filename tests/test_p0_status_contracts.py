@@ -4,7 +4,7 @@ import importlib.util
 import os
 from pathlib import Path
 
-from hypothesis import given, settings
+from hypothesis import assume, given, settings
 from hypothesis import strategies as st
 
 from telchines.models import ToolReference, VerificationRun
@@ -180,6 +180,7 @@ def test_payload_extractors_prefer_top_level_and_survive_malformed_nested_values
 
 
 PROVIDER_NAME = st.text(alphabet=st.characters(whitelist_categories=("Ll", "Lu", "Nd"), whitelist_characters="-_"), min_size=1, max_size=12).filter(lambda value: value != "__inactive_provider__")
+SAFE_TEXT = st.text(alphabet=st.characters(whitelist_categories=("Ll", "Lu", "Nd"), whitelist_characters="-_."), min_size=1, max_size=12)
 
 
 @settings(max_examples=50)
@@ -192,6 +193,110 @@ def test_active_providers_are_exactly_providers_with_planned_commands(planned: l
     active = provider_capability_study._active_providers(providers, commands)
 
     assert [provider["name"] for provider in active] == planned
+
+
+@settings(max_examples=50)
+@given(provider=PROVIDER_NAME, label=SAFE_TEXT, model_a=SAFE_TEXT, model_b=SAFE_TEXT, reasoning_a=SAFE_TEXT, reasoning_b=SAFE_TEXT)
+def test_stability_metrics_group_by_provider_label_model_and_reasoning(
+    provider: str,
+    label: str,
+    model_a: str,
+    model_b: str,
+    reasoning_a: str,
+    reasoning_b: str,
+) -> None:
+    assume((model_a, reasoning_a) != (model_b, reasoning_b))
+    results = [
+        {
+            "provider": provider,
+            "label": label,
+            "model": model_a,
+            "reasoning_level": reasoning_a,
+            "status": "passed",
+            "semantic_fingerprint": "fp-a",
+            "elapsed_seconds": 0.1,
+        },
+        {
+            "provider": provider,
+            "label": label,
+            "model": model_b,
+            "reasoning_level": reasoning_b,
+            "status": "passed",
+            "semantic_fingerprint": "fp-b",
+            "elapsed_seconds": 0.2,
+        },
+    ]
+
+    metrics = provider_capability_study._stability_metrics(results)
+
+    keys = {(item["provider"], item["label"], item["model"], item["reasoning_level"]) for item in metrics}
+    assert keys == {(provider, label, model_a, reasoning_a), (provider, label, model_b, reasoning_b)}
+    assert all(item["runs"] == 1 for item in metrics)
+
+
+@settings(max_examples=50)
+@given(status_a=SAFE_TEXT, status_b=SAFE_TEXT, fingerprint_a=SAFE_TEXT, fingerprint_b=SAFE_TEXT)
+def test_stability_metrics_require_single_status_and_fingerprint(
+    status_a: str,
+    status_b: str,
+    fingerprint_a: str,
+    fingerprint_b: str,
+) -> None:
+    results = [
+        {
+            "provider": "provider",
+            "label": "scenario",
+            "model": "model",
+            "reasoning_level": "high",
+            "status": status_a,
+            "semantic_fingerprint": fingerprint_a,
+            "elapsed_seconds": 0.1,
+        },
+        {
+            "provider": "provider",
+            "label": "scenario",
+            "model": "model",
+            "reasoning_level": "high",
+            "status": status_b,
+            "semantic_fingerprint": fingerprint_b,
+            "elapsed_seconds": 0.3,
+        },
+    ]
+
+    [metric] = provider_capability_study._stability_metrics(results)
+
+    assert metric["runs"] == 2
+    assert metric["stable"] is (status_a == status_b and fingerprint_a == fingerprint_b)
+    assert metric["latency_seconds_min"] == 0.1
+    assert metric["latency_seconds_max"] == 0.3
+
+
+@settings(max_examples=50)
+@given(status=SAFE_TEXT, validation=st.one_of(st.none(), SAFE_TEXT), candidate=st.one_of(st.none(), SAFE_TEXT), patch=st.one_of(st.none(), SAFE_TEXT))
+def test_semantic_fingerprint_is_deterministic_bounded_and_secret_free(
+    status: str,
+    validation: str | None,
+    candidate: str | None,
+    patch: str | None,
+) -> None:
+    parsed = {
+        "status": status,
+        "validation_status": validation,
+        "candidate_id": candidate,
+        "patch_id": patch,
+        "stdout": "secret-token",
+        "stderr": "Authorization: secret-token",
+    }
+    command = {"label": "gen_sva"}
+
+    first = provider_capability_study._semantic_fingerprint(command, parsed)
+    second = provider_capability_study._semantic_fingerprint(command, parsed)
+
+    assert first == second
+    assert first is not None
+    assert len(first) == 16
+    assert "secret" not in first
+    assert "Authorization" not in first
 
 
 @settings(max_examples=20)

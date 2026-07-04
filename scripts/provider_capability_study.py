@@ -205,15 +205,15 @@ def _provider_skip_reason(provider: dict[str, Any], include_live: bool) -> str:
     return ""
 
 
-def _provider_commands(provider: dict[str, Any]) -> list[dict[str, Any]]:
+def _provider_commands(provider: dict[str, Any], *, repeat_count: int = 1) -> list[dict[str, Any]]:
     name = provider["name"]
     supports = provider.get("supports", {})
-    commands = [
+    base_commands = [
         _command(name, "provider_check_offline", ["providers", "check", name, "--offline"]),
         _command(name, "provider_check", ["providers", "check", name]),
     ]
     if supports.get("repair", "repair" in provider.get("capabilities", [])):
-        commands.append(
+        base_commands.append(
             _command(
                 name,
                 "agent_repair",
@@ -230,15 +230,28 @@ def _provider_commands(provider: dict[str, Any]) -> list[dict[str, Any]]:
             )
         )
     if supports.get("generation", "generation" in provider.get("capabilities", [])):
-        commands.append(_command(name, "gen_sva", ["gen-sva", "--spec", "docs/spec.md", "--rtl", "rtl/broken_counter.sv", "--provider", name]))
-        commands.append(_command(name, "gen_cocotb", ["gen-cocotb", "--dut", "rtl/broken_counter.sv", "--intent", "counter smoke", "--provider", name]))
+        base_commands.append(_command(name, "gen_sva", ["gen-sva", "--spec", "docs/spec.md", "--rtl", "rtl/broken_counter.sv", "--provider", name]))
+        base_commands.append(_command(name, "gen_cocotb", ["gen-cocotb", "--dut", "rtl/broken_counter.sv", "--intent", "counter smoke", "--provider", name]))
     if supports.get("shell", True):
-        commands.append(
+        base_commands.append(
             {
                 **_command(name, "shell_smoke", ["shell", "--plain"]),
-                "stdin": f"/providers\n/providers check {name} --offline\n/transcript\n/exit\n",
+                "stdin": f"/providers\n/model list --offline\n/providers check {name} --offline\n/transcript\n/exit\n",
             }
         )
+    commands: list[dict[str, Any]] = []
+    provider_fields = _provider_model_fields(provider)
+    for command in base_commands:
+        for repeat_index in range(1, repeat_count + 1):
+            commands.append(
+                {
+                    **command,
+                    **provider_fields,
+                    "scenario_id": f"{name}:{command['label']}",
+                    "repeat_index": repeat_index,
+                    "repeat_count": repeat_count,
+                }
+            )
     return commands
 
 
@@ -262,6 +275,19 @@ def _apply_command_budget(commands: list[dict[str, Any]], max_commands: int) -> 
 
 def _command(provider: str, label: str, args: list[str]) -> dict[str, Any]:
     return {"provider": provider, "label": label, "status": "planned", "command": [sys.executable, "-m", "telchines", *args]}
+
+
+def _provider_model_fields(provider: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "provider_kind": provider.get("kind"),
+        "model": provider.get("model") or provider.get("model_default"),
+        "reasoning_level": provider.get("reasoning_level", "auto"),
+        "reasoning_summary": provider.get("reasoning_summary"),
+        "reasoning_wire_format": provider.get("reasoning_wire_format"),
+        "model_source": provider.get("model_source") or ("configured" if provider.get("model") or provider.get("model_default") else "preset"),
+        "supports_reasoning_effort": provider.get("supports_reasoning_effort"),
+        "model_warnings": provider.get("model_warnings", []),
+    }
 
 
 def _prepare_scratch_project(scratch: Path, matrix: dict[str, Any], providers: list[dict[str, Any]]) -> None:
@@ -297,37 +323,46 @@ def _prepare_scratch_project(scratch: Path, matrix: dict[str, Any], providers: l
 def _provider_config(provider: dict[str, Any]) -> dict[str, Any]:
     kind = provider["kind"]
     if kind == "agent_runtime":
-        return {
+        return _with_model_selection(
+            provider,
+            {
             "kind": "agent_runtime",
             "runtime": provider.get("runtime", "langgraph"),
             "base_provider": provider["base_provider"],
             "capabilities": ["repair"],
             "max_iterations": int(provider.get("max_iterations", 3)),
             "timeout_seconds": int(provider.get("timeout_seconds", 90)),
-        }
+            },
+        )
     if kind == "local_command":
         command = _env_or_default(provider, "command")
         args = [_template_arg(str(item)) for item in provider.get("args", [])]
-        return {
-            "kind": "local_command",
-            "capabilities": provider.get("capabilities", []),
-            "command": command,
-            "args": args,
-            "timeout_seconds": int(provider.get("timeout_seconds", 30)),
-            "output_limit_chars": int(provider.get("output_limit_chars", 65536)),
-        }
+        return _with_model_selection(
+            provider,
+            {
+                "kind": "local_command",
+                "capabilities": provider.get("capabilities", []),
+                "command": command,
+                "args": args,
+                "timeout_seconds": int(provider.get("timeout_seconds", 30)),
+                "output_limit_chars": int(provider.get("output_limit_chars", 65536)),
+            },
+        )
     if kind == "anthropic":
-        return {
-            "kind": "anthropic",
-            "capabilities": provider.get("capabilities", []),
-            "base_url": _env_or_default(provider, "base_url"),
-            "endpoint": provider.get("endpoint", "messages"),
-            "model": _env_or_default(provider, "model"),
-            "api_key_env": provider.get("api_key_env", "ANTHROPIC_API_KEY"),
-            "anthropic_version": provider.get("anthropic_version", "2023-06-01"),
-            "max_tokens": int(provider.get("max_tokens", 4096)),
-            "timeout_seconds": int(provider.get("timeout_seconds", 60)),
-        }
+        return _with_model_selection(
+            provider,
+            {
+                "kind": "anthropic",
+                "capabilities": provider.get("capabilities", []),
+                "base_url": _env_or_default(provider, "base_url"),
+                "endpoint": provider.get("endpoint", "messages"),
+                "model": _env_or_default(provider, "model"),
+                "api_key_env": provider.get("api_key_env", "ANTHROPIC_API_KEY"),
+                "anthropic_version": provider.get("anthropic_version", "2023-06-01"),
+                "max_tokens": int(provider.get("max_tokens", 4096)),
+                "timeout_seconds": int(provider.get("timeout_seconds", 60)),
+            },
+        )
     config = {
         "kind": "openai_compatible",
         "capabilities": provider.get("capabilities", []),
@@ -339,6 +374,15 @@ def _provider_config(provider: dict[str, Any]) -> dict[str, Any]:
     }
     if provider.get("auth") == "none":
         config["auth"] = "none"
+    if provider.get("supports_reasoning_effort") is not None:
+        config["supports_reasoning_effort"] = bool(provider.get("supports_reasoning_effort"))
+    return _with_model_selection(provider, config)
+
+
+def _with_model_selection(provider: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
+    for field in ("model_source", "reasoning_level", "reasoning_summary", "reasoning_wire_format"):
+        if provider.get(field) is not None:
+            config[field] = provider[field]
     return config
 
 
@@ -510,6 +554,7 @@ def _run_commands(scratch: Path, commands: list[dict[str, Any]]) -> list[dict[st
                 "candidate_id": _payload_candidate_id(parsed),
                 "patch_id": _payload_patch_id(parsed),
                 "attempt_count": len(parsed.get("attempts", [])) if isinstance(parsed, dict) and isinstance(parsed.get("attempts"), list) else None,
+                "semantic_fingerprint": _semantic_fingerprint(item, parsed),
             }
         )
     return results
@@ -576,6 +621,27 @@ def _payload_patch_id(parsed: dict[str, Any]) -> Any:
     return None
 
 
+def _semantic_fingerprint(command: dict[str, Any], parsed: dict[str, Any]) -> str | None:
+    if not isinstance(parsed, dict):
+        return None
+    label = str(command.get("label", ""))
+    material = {
+        "label": label,
+        "status": parsed.get("status"),
+        "validation_status": _payload_validation_status(parsed),
+        "candidate_id": _payload_candidate_id(parsed),
+        "patch_id": _payload_patch_id(parsed),
+    }
+    result = parsed.get("result")
+    if isinstance(result, dict):
+        material["result_status"] = result.get("status")
+        material["file_path"] = result.get("file_path") or result.get("path")
+    if label in {"provider_check", "provider_check_offline"}:
+        material["provider_check_status"] = parsed.get("status")
+    encoded = json.dumps(material, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:16]
+
+
 def _parse_last_json(stdout: str) -> dict[str, Any]:
     decoder = json.JSONDecoder()
     parsed: dict[str, Any] = {}
@@ -610,8 +676,44 @@ def _summary(matrix: dict[str, Any], scratch: Path, plan: dict[str, Any], result
             "failed": len(failed),
             "skipped": len(skipped),
             "total": len(results),
+            "stability": _stability_metrics(results),
         },
     }
+
+
+def _stability_metrics(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    groups: dict[tuple[str, str, str, str], list[dict[str, Any]]] = {}
+    for item in results:
+        if item.get("status") == "skipped":
+            continue
+        key = (
+            str(item.get("provider", "")),
+            str(item.get("label", "")),
+            str(item.get("model") or ""),
+            str(item.get("reasoning_level") or "auto"),
+        )
+        groups.setdefault(key, []).append(item)
+    metrics: list[dict[str, Any]] = []
+    for (provider, label, model, reasoning_level), items in sorted(groups.items()):
+        fingerprints = sorted({str(item.get("semantic_fingerprint")) for item in items if item.get("semantic_fingerprint")})
+        statuses = sorted({str(item.get("status")) for item in items})
+        latencies = [float(item.get("elapsed_seconds", 0)) for item in items if isinstance(item.get("elapsed_seconds"), (int, float))]
+        metrics.append(
+            {
+                "provider": provider,
+                "label": label,
+                "model": model or None,
+                "reasoning_level": reasoning_level,
+                "runs": len(items),
+                "statuses": statuses,
+                "fingerprints": fingerprints,
+                "stable": len(statuses) == 1 and len(fingerprints) <= 1,
+                "latency_seconds_min": min(latencies) if latencies else None,
+                "latency_seconds_max": max(latencies) if latencies else None,
+                "latency_seconds_avg": round(sum(latencies) / len(latencies), 3) if latencies else None,
+            }
+        )
+    return metrics
 
 
 def _redact_summary(value: Any) -> Any:
@@ -650,24 +752,46 @@ def _markdown_report(summary: dict[str, Any]) -> str:
         "",
         "## Providers",
         "",
-        "| Provider | Kind | Status | Reason |",
-        "| --- | --- | --- | --- |",
+        "| Provider | Kind | Model | Reasoning | Status | Reason |",
+        "| --- | --- | --- | --- | --- | --- |",
     ]
     for provider in summary["providers"]:
-        lines.append(f"| `{provider['name']}` | `{provider['kind']}` | `{provider['status']}` | `{provider.get('reason') or ''}` |")
-    lines.extend(["", "## Results", "", "| Provider | Scenario | Status | Exit | Seconds | Validation | Candidate | Attempts |"])
-    lines.append("| --- | --- | --- | ---: | ---: | --- | --- | ---: |")
+        lines.append(
+            f"| `{provider['name']}` | `{provider['kind']}` | "
+            f"`{provider.get('model') or ''}` | `{provider.get('reasoning_level') or 'auto'}` | "
+            f"`{provider['status']}` | `{provider.get('reason') or ''}` |"
+        )
+    lines.extend(["", "## Results", "", "| Provider | Scenario | Repeat | Model | Reasoning | Status | Exit | Seconds | Validation | Candidate | Attempts | Fingerprint |"])
+    lines.append("| --- | --- | ---: | --- | --- | --- | ---: | ---: | --- | --- | ---: | --- |")
     for item in summary["results"]:
         lines.append(
             "| "
             f"`{item.get('provider', '')}` | "
             f"`{item.get('label', '')}` | "
+            f"{item.get('repeat_index') or ''} | "
+            f"`{item.get('model') or ''}` | "
+            f"`{item.get('reasoning_level') or 'auto'}` | "
             f"`{item.get('status', '')}` | "
             f"{item.get('exit_code', '')} | "
             f"{item.get('elapsed_seconds', '')} | "
             f"{item.get('validation_status') or ''} | "
             f"{item.get('candidate_id') or ''} | "
-            f"{item.get('attempt_count') or ''} |"
+            f"{item.get('attempt_count') or ''} | "
+            f"`{item.get('semantic_fingerprint') or ''}` |"
+        )
+    lines.extend(["", "## Stability", "", "| Provider | Scenario | Model | Reasoning | Runs | Stable | Statuses | Fingerprints |"])
+    lines.append("| --- | --- | --- | --- | ---: | --- | --- | --- |")
+    for item in summary.get("metrics", {}).get("stability", []):
+        lines.append(
+            "| "
+            f"`{item.get('provider', '')}` | "
+            f"`{item.get('label', '')}` | "
+            f"`{item.get('model') or ''}` | "
+            f"`{item.get('reasoning_level') or 'auto'}` | "
+            f"{item.get('runs', '')} | "
+            f"{item.get('stable', '')} | "
+            f"`{','.join(item.get('statuses', []))}` | "
+            f"`{','.join(item.get('fingerprints', []))}` |"
         )
     lines.extend(["", "Stdout/stderr are bounded in the JSON summary. Secret-looking environment values are redacted."])
     return "\n".join(lines) + "\n"

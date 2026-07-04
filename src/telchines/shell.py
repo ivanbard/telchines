@@ -23,6 +23,7 @@ from prompt_toolkit.widgets import Frame, TextArea
 from rich.console import Console, Group
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
 
 from telchines.config import ProjectConfig
 from telchines.errors import AdapterExecutionError, ConfigError, ProviderError, TelchinesError
@@ -891,7 +892,7 @@ def render_help() -> str:
     table.add_column("Command", style="white")
     table.add_column("Purpose", style="white")
     for command, purpose in SHELL_COMMAND_HELP:
-        table.add_row(command, purpose)
+        table.add_row(Text(command), purpose)
     return _render_rich(table)
 
 
@@ -960,7 +961,11 @@ def render_model_options_payload(payload: dict[str, object]) -> str:
             continue
         warnings = provider.get("model_warnings") or []
         warning_text = f" ({'; '.join(str(item) for item in warnings)})" if warnings else ""
-        discovery = str(provider.get("discovery_status") or provider.get("model_source") or "configured")
+        discovery_status = str(provider.get("discovery_status") or "")
+        model_source = str(provider.get("model_source") or "configured")
+        discovery = model_source if discovery_status == "skipped" else str(discovery_status or model_source)
+        if discovery_status == "fallback" and model_source:
+            discovery = f"fallback/{model_source}"
         if provider.get("discovery_error"):
             discovery = f"{discovery}: {provider['discovery_error']}"
         reasoning = str(provider.get("reasoning_level") or "auto")
