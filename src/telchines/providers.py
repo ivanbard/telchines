@@ -16,6 +16,7 @@ from urllib.parse import urlparse
 from telchines.agent_runtime import LangGraphRepairRuntime, runtime_capability
 from telchines.config import ProjectConfig
 from telchines.errors import ConfigError, ProviderError, WorkflowInputError
+from telchines.model_catalog import provider_model_metadata
 from telchines.models import CocotbCandidate, CocotbPort, Observation, PatchProposal, RetrievalContext, SvaCandidate, SvaProperty, VerificationRun
 from telchines.utils import stable_id
 
@@ -94,6 +95,10 @@ class ProviderStatus:
     blocked_reason: str = ""
     network_scope: str = ""
     auth_mode: str = ""
+    model: str | None = None
+    reasoning_level: str = "auto"
+    reasoning_supported: bool = False
+    reasoning_wire_format: str = "none"
 
 
 @dataclass(slots=True)
@@ -335,7 +340,7 @@ class OpenAICompatibleRepairProvider(RepairProvider):
         self.name = provider_name
 
     def propose_patch(self, request_value: RepairRequest) -> RepairProviderResult:
-        request_payload = _build_repair_request_payload(request_value, self.provider_name)
+        request_payload = _attach_provider_metadata(_build_repair_request_payload(request_value, self.provider_name), self.provider_name, self.config)
         chat_payload = self._build_chat_payload(request_payload)
         response_payload = _invoke_openai_compatible(self.provider_name, self.config, chat_payload)
         proposal = _build_patch_from_content_payload(self.provider_name, request_value, _extract_openai_response_content(response_payload, self.provider_name))
@@ -353,14 +358,7 @@ class OpenAICompatibleRepairProvider(RepairProvider):
             "system_prompt",
             "You are a hardware verification repair assistant. Return only valid JSON.",
         )
-        return {
-            "model": self.config["model"],
-            "temperature": self.config.get("temperature", 0),
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": json.dumps(provider_request)},
-            ],
-        }
+        return _build_openai_compatible_payload(self.config, system_prompt, provider_request)
 
 
 class OpenAICompatibleGenerationProvider(GenerationProvider):
@@ -370,7 +368,7 @@ class OpenAICompatibleGenerationProvider(GenerationProvider):
         self.name = provider_name
 
     def generate_sva(self, request_value: GenerationRequest) -> GenerationProviderResult:
-        request_payload = _build_generation_request_payload(request_value, self.provider_name)
+        request_payload = _attach_provider_metadata(_build_generation_request_payload(request_value, self.provider_name), self.provider_name, self.config)
         chat_payload = self._build_chat_payload(request_payload)
         response_payload = _invoke_openai_compatible(self.provider_name, self.config, chat_payload)
         candidate = _build_sva_candidate_from_content_payload(
@@ -388,7 +386,7 @@ class OpenAICompatibleGenerationProvider(GenerationProvider):
         )
 
     def generate_cocotb(self, request_value: CocotbGenerationRequest) -> CocotbGenerationProviderResult:
-        request_payload = _build_cocotb_generation_request_payload(request_value, self.provider_name)
+        request_payload = _attach_provider_metadata(_build_cocotb_generation_request_payload(request_value, self.provider_name), self.provider_name, self.config)
         chat_payload = self._build_chat_payload(request_payload)
         response_payload = _invoke_openai_compatible(self.provider_name, self.config, chat_payload)
         candidate = _build_cocotb_candidate_from_content_payload(
@@ -410,14 +408,7 @@ class OpenAICompatibleGenerationProvider(GenerationProvider):
             "system_prompt",
             "You are a hardware verification assertion assistant. Return only valid JSON.",
         )
-        return {
-            "model": self.config["model"],
-            "temperature": self.config.get("temperature", 0),
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": json.dumps(provider_request)},
-            ],
-        }
+        return _build_openai_compatible_payload(self.config, system_prompt, provider_request)
 
 
 class AnthropicRepairProvider(RepairProvider):
@@ -427,7 +418,7 @@ class AnthropicRepairProvider(RepairProvider):
         self.name = provider_name
 
     def propose_patch(self, request_value: RepairRequest) -> RepairProviderResult:
-        request_payload = _build_repair_request_payload(request_value, self.provider_name)
+        request_payload = _attach_provider_metadata(_build_repair_request_payload(request_value, self.provider_name), self.provider_name, self.config)
         message_payload = self._build_message_payload(request_payload)
         response_payload = _invoke_anthropic(self.provider_name, self.config, message_payload)
         proposal = _build_patch_from_content_payload(self.provider_name, request_value, _extract_anthropic_response_content(response_payload, self.provider_name))
@@ -455,7 +446,7 @@ class AnthropicGenerationProvider(GenerationProvider):
         self.name = provider_name
 
     def generate_sva(self, request_value: GenerationRequest) -> GenerationProviderResult:
-        request_payload = _build_generation_request_payload(request_value, self.provider_name)
+        request_payload = _attach_provider_metadata(_build_generation_request_payload(request_value, self.provider_name), self.provider_name, self.config)
         message_payload = self._build_message_payload(request_payload)
         response_payload = _invoke_anthropic(self.provider_name, self.config, message_payload)
         candidate = _build_sva_candidate_from_content_payload(
@@ -473,7 +464,7 @@ class AnthropicGenerationProvider(GenerationProvider):
         )
 
     def generate_cocotb(self, request_value: CocotbGenerationRequest) -> CocotbGenerationProviderResult:
-        request_payload = _build_cocotb_generation_request_payload(request_value, self.provider_name)
+        request_payload = _attach_provider_metadata(_build_cocotb_generation_request_payload(request_value, self.provider_name), self.provider_name, self.config)
         message_payload = self._build_message_payload(request_payload)
         response_payload = _invoke_anthropic(self.provider_name, self.config, message_payload)
         candidate = _build_cocotb_candidate_from_content_payload(
@@ -505,7 +496,7 @@ class LocalCommandRepairProvider(RepairProvider):
         self.name = provider_name
 
     def propose_patch(self, request_value: RepairRequest) -> RepairProviderResult:
-        request_payload = _build_repair_request_payload(request_value, self.provider_name)
+        request_payload = _attach_provider_metadata(_build_repair_request_payload(request_value, self.provider_name), self.provider_name, self.config)
         response_payload = _invoke_local_command(self.provider_name, self.config, request_value.project_root, request_payload)
         proposal = _build_patch_from_content_payload(self.provider_name, request_value, response_payload.get("parsed", {}))
         summary = "local command repair proposal generated" if proposal else "local command provider returned no patch"
@@ -525,7 +516,7 @@ class LocalCommandGenerationProvider(GenerationProvider):
         self.name = provider_name
 
     def generate_sva(self, request_value: GenerationRequest) -> GenerationProviderResult:
-        request_payload = _build_generation_request_payload(request_value, self.provider_name)
+        request_payload = _attach_provider_metadata(_build_generation_request_payload(request_value, self.provider_name), self.provider_name, self.config)
         response_payload = _invoke_local_command(self.provider_name, self.config, request_value.project_root, request_payload)
         candidate = _build_sva_candidate_from_content_payload(self.provider_name, request_value, response_payload.get("parsed", {}))
         summary = "local command SVA candidate generated" if candidate else "local command provider returned no SVA candidate"
@@ -538,7 +529,7 @@ class LocalCommandGenerationProvider(GenerationProvider):
         )
 
     def generate_cocotb(self, request_value: CocotbGenerationRequest) -> CocotbGenerationProviderResult:
-        request_payload = _build_cocotb_generation_request_payload(request_value, self.provider_name)
+        request_payload = _attach_provider_metadata(_build_cocotb_generation_request_payload(request_value, self.provider_name), self.provider_name, self.config)
         response_payload = _invoke_local_command(self.provider_name, self.config, request_value.project_root, request_payload)
         candidate = _build_cocotb_candidate_from_content_payload(self.provider_name, request_value, response_payload.get("parsed", {}))
         summary = "local command cocotb scaffold generated" if candidate else "local command provider returned no cocotb scaffold"
@@ -607,6 +598,7 @@ class ProviderRegistry:
             capabilities = self.config.provider_capabilities(provider_name, provider_config)
             blocked_reason = self._blocked_reason(provider_config)
             default_for = [capability for capability, name in self.defaults.items() if name == provider_name]
+            model_metadata = provider_model_metadata(provider_name, provider_config, self.providers)
             statuses.append(
                 ProviderStatus(
                     name=provider_name,
@@ -617,6 +609,10 @@ class ProviderRegistry:
                     blocked_reason=blocked_reason or "",
                     network_scope=self._network_scope(provider_config),
                     auth_mode=self._auth_mode(provider_config),
+                    model=model_metadata.get("model") if isinstance(model_metadata.get("model"), str) else None,
+                    reasoning_level=str(model_metadata.get("reasoning_level") or "auto"),
+                    reasoning_supported=bool(model_metadata.get("reasoning_supported", False)),
+                    reasoning_wire_format=str(model_metadata.get("reasoning_wire_format") or "none"),
                 )
             )
         return statuses
@@ -956,8 +952,58 @@ def _invoke_openai_compatible(provider_name: str, config: dict[str, Any], payloa
     return _post_json(provider_name, url, payload, headers, int(config.get("timeout_seconds", 30)))
 
 
+def _attach_provider_metadata(payload: dict[str, Any], provider_name: str, config: dict[str, Any]) -> dict[str, Any]:
+    payload["model_selection"] = provider_model_metadata(provider_name, config)
+    return payload
+
+
+def _build_openai_compatible_payload(config: dict[str, Any], system_prompt: str, provider_request: dict[str, Any]) -> dict[str, Any]:
+    if str(config.get("endpoint", "chat/completions")).strip("/").endswith("responses"):
+        payload = {
+            "model": config["model"],
+            "temperature": config.get("temperature", 0),
+            "instructions": system_prompt,
+            "input": json.dumps(provider_request),
+        }
+    else:
+        payload = {
+            "model": config["model"],
+            "temperature": config.get("temperature", 0),
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": json.dumps(provider_request)},
+            ],
+        }
+    return _apply_openai_reasoning(payload, config)
+
+
+def _apply_openai_reasoning(payload: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
+    level = str(config.get("reasoning_level", "auto"))
+    if level == "auto":
+        return payload
+    wire_format = str(provider_model_metadata("__provider__", config).get("reasoning_wire_format") or "none")
+    if wire_format == "openai_responses":
+        reasoning: dict[str, Any] = {"effort": level}
+        summary = config.get("reasoning_summary")
+        if summary and str(summary) != "auto":
+            reasoning["summary"] = summary
+        payload["reasoning"] = reasoning
+    elif wire_format == "openai_chat":
+        payload["reasoning_effort"] = level
+    return payload
+
+
+def _apply_anthropic_reasoning(payload: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
+    level = str(config.get("reasoning_level", "auto"))
+    if level in {"auto", "none", "minimal", "xhigh"}:
+        return payload
+    payload["thinking"] = {"type": "adaptive"}
+    payload["output_config"] = {"effort": level}
+    return payload
+
+
 def _build_anthropic_message_payload(config: dict[str, Any], system_prompt: str, provider_request: dict[str, Any]) -> dict[str, Any]:
-    return {
+    payload = {
         "model": config["model"],
         "max_tokens": int(config.get("max_tokens", 4096)),
         "temperature": config.get("temperature", 0),
@@ -966,6 +1012,7 @@ def _build_anthropic_message_payload(config: dict[str, Any], system_prompt: str,
             {"role": "user", "content": json.dumps(provider_request)},
         ],
     }
+    return _apply_anthropic_reasoning(payload, config)
 
 
 def _invoke_anthropic(provider_name: str, config: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
@@ -1051,18 +1098,23 @@ def _invoke_local_command(provider_name: str, config: dict[str, Any], project_ro
 
 def _check_provider_transport(provider_name: str, config: dict[str, Any], project_root: Path) -> dict[str, Any]:
     kind = config.get("kind")
+    model_metadata = provider_model_metadata(provider_name, config)
     if kind == "heuristic":
-        return {"status": "passed", "mode": "builtin"}
+        return {"status": "passed", "mode": "builtin", **_transport_model_fields(model_metadata)}
     if kind == "local_command":
         command = str(config.get("command", ""))
         resolved = shutil.which(command) if command else None
         if resolved is None:
             raise ProviderError(f"provider {provider_name} command was not found: {command}")
-        payload = {
-            "provider": provider_name,
-            "workflow_type": "provider_check",
-            "instructions": "Return any valid JSON object to confirm the local command provider can run.",
-        }
+        payload = _attach_provider_metadata(
+            {
+                "provider": provider_name,
+                "workflow_type": "provider_check",
+                "instructions": "Return any valid JSON object to confirm the local command provider can run.",
+            },
+            provider_name,
+            config,
+        )
         response = _invoke_local_command(provider_name, config, project_root, payload)
         parsed = response.get("parsed", {})
         return {
@@ -1070,20 +1122,14 @@ def _check_provider_transport(provider_name: str, config: dict[str, Any], projec
             "mode": "local_command",
             "command": [command, *config.get("args", [])],
             "parsed_keys": sorted(parsed.keys()) if isinstance(parsed, dict) else [],
+            **_transport_model_fields(model_metadata),
         }
     if kind == "openai_compatible":
         api_key_env = str(config.get("api_key_env", "OPENAI_API_KEY"))
         auth = str(config.get("auth", "bearer"))
         if auth == "bearer" and not os.environ.get(api_key_env):
             raise ProviderError(f"provider {provider_name} is missing credentials: set {api_key_env}")
-        payload = {
-            "model": config["model"],
-            "temperature": 0,
-            "messages": [
-                {"role": "system", "content": "Return only valid JSON."},
-                {"role": "user", "content": 'Return exactly {"status":"ok"} as JSON.'},
-            ],
-        }
+        payload = _build_openai_compatible_payload(config, "Return only valid JSON.", {"instructions": 'Return exactly {"status":"ok"} as JSON.'})
         response = _invoke_openai_compatible(provider_name, config, payload)
         parsed = _extract_openai_response_content(response, provider_name)
         return {
@@ -1096,6 +1142,7 @@ def _check_provider_transport(provider_name: str, config: dict[str, Any], projec
             "auth_mode": auth,
             "network_scope": _provider_network_scope(config, {}),
             "parsed_keys": sorted(parsed.keys()),
+            **_transport_model_fields(model_metadata),
         }
     if kind == "anthropic":
         api_key_env = str(config.get("api_key_env", "ANTHROPIC_API_KEY"))
@@ -1114,10 +1161,23 @@ def _check_provider_transport(provider_name: str, config: dict[str, Any], projec
             "anthropic_version": config.get("anthropic_version", "2023-06-01"),
             "network_scope": _provider_network_scope(config, {}),
             "parsed_keys": sorted(parsed.keys()),
+            **_transport_model_fields(model_metadata),
         }
     if kind == "agent_runtime":
-        return _agent_runtime_transport(config)
+        return {**_agent_runtime_transport(config), **_transport_model_fields(model_metadata)}
     raise ProviderError(f"provider {provider_name} has unsupported kind: {kind}")
+
+
+def _transport_model_fields(metadata: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "model": metadata.get("model"),
+        "reasoning_level": metadata.get("reasoning_level", "auto"),
+        "reasoning_summary": metadata.get("reasoning_summary"),
+        "model_source": metadata.get("model_source"),
+        "reasoning_supported": bool(metadata.get("reasoning_supported", False)),
+        "reasoning_wire_format": metadata.get("reasoning_wire_format", "none"),
+        "model_warnings": metadata.get("model_warnings", []),
+    }
 
 
 def _agent_runtime_transport(config: dict[str, Any]) -> dict[str, Any]:
@@ -1147,6 +1207,24 @@ def _anthropic_url(config: dict[str, Any]) -> str:
 
 
 def _extract_openai_response_content(response_payload: dict[str, Any], provider_name: str) -> dict[str, Any]:
+    output_text = response_payload.get("output_text")
+    if isinstance(output_text, str) and output_text.strip():
+        return _extract_json_object(output_text, provider_name)
+    output = response_payload.get("output")
+    if isinstance(output, list):
+        text_parts: list[str] = []
+        for item in output:
+            if not isinstance(item, dict):
+                continue
+            content = item.get("content")
+            if isinstance(content, list):
+                for block in content:
+                    if isinstance(block, dict) and isinstance(block.get("text"), str):
+                        text_parts.append(block["text"])
+            elif isinstance(content, str):
+                text_parts.append(content)
+        if text_parts:
+            return _extract_json_object("\n".join(text_parts), provider_name)
     choices = response_payload.get("choices") or []
     if not choices:
         raise ProviderError(f"provider {provider_name} returned no choices")

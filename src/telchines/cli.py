@@ -26,6 +26,7 @@ from telchines.operations import (
     inspect_waveform as inspect_waveform_op,
     initialize_project,
     list_adapters as list_adapters_op,
+    list_model_options as list_model_options_op,
     list_providers as list_providers_op,
     list_runs as list_runs_op,
     list_waveforms as list_waveforms_op,
@@ -37,6 +38,9 @@ from telchines.operations import (
     retrieve_query,
     review_artifact as review_artifact_op,
     run_eval as run_eval_op,
+    select_model_provider as select_model_provider_op,
+    set_provider_model as set_provider_model_op,
+    set_provider_reasoning as set_provider_reasoning_op,
     show_run as show_run_op,
     show_waveform as show_waveform_op,
     triage as triage_op,
@@ -461,6 +465,50 @@ def providers_check(name: Optional[str] = typer.Argument(None), offline: bool = 
     typer.echo(dump_json(payload))
     if payload["status"] != "passed":
         raise typer.Exit(code=1)
+
+
+@providers_app.command("models")
+def providers_models(name: Optional[str] = typer.Argument(None), offline: bool = typer.Option(False, "--offline")) -> None:
+    try:
+        payload = list_model_options_op(None, live=not offline)
+    except ConfigError as exc:
+        _fail(f"config error: {exc}")
+    if name is not None:
+        providers = [provider for provider in payload.get("providers", []) if isinstance(provider, dict) and provider.get("name") == name]
+        if not providers:
+            _fail(f"config error: provider {name} is not configured")
+        payload = {**payload, "providers": providers}
+    typer.echo(dump_json(payload))
+
+
+@providers_app.command("select")
+def providers_select(
+    capability: str = typer.Option(..., "--capability", help="Capability to route: repair or generation."),
+    provider: str = typer.Option(..., "--provider", help="Provider to use as the default for the capability."),
+) -> None:
+    try:
+        payload = select_model_provider_op(None, capability, provider)
+    except ConfigError as exc:
+        _fail(f"config error: {exc}")
+    typer.echo(dump_json(payload))
+
+
+@providers_app.command("set-model")
+def providers_set_model(name: str = typer.Argument(...), model: str = typer.Argument(...)) -> None:
+    try:
+        payload = set_provider_model_op(None, name, model)
+    except ConfigError as exc:
+        _fail(f"config error: {exc}")
+    typer.echo(dump_json(payload))
+
+
+@providers_app.command("set-reasoning")
+def providers_set_reasoning(name: str = typer.Argument(...), level: str = typer.Argument(...)) -> None:
+    try:
+        payload = set_provider_reasoning_op(None, name, level)
+    except ConfigError as exc:
+        _fail(f"config error: {exc}")
+    typer.echo(dump_json(payload))
 
 
 @artifacts_app.command("purge")

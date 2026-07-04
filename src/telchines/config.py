@@ -12,6 +12,7 @@ from telchines.utils import dataclass_to_dict, ensure_directory, read_json, stab
 SUPPORTED_MODEL_MODES = {"local", "hybrid", "remote"}
 SUPPORTED_ADAPTERS = {"verilator", "iverilog", "slang", "verible", "symbiyosys", "fixture"}
 SUPPORTED_PROVIDER_KINDS = {"heuristic", "openai_compatible", "anthropic", "local_command", "agent_runtime"}
+SUPPORTED_REASONING_LEVELS = {"auto", "none", "minimal", "low", "medium", "high", "xhigh"}
 
 
 def default_generation_config() -> dict[str, Any]:
@@ -281,6 +282,25 @@ class ProjectConfig:
             timeout = provider_config.get("timeout_seconds", 30)
             if not isinstance(timeout, int) or timeout <= 0:
                 raise ConfigError(f"provider {provider_name} timeout_seconds must be a positive integer")
+            reasoning_level = provider_config.get("reasoning_level", "auto")
+            if reasoning_level not in SUPPORTED_REASONING_LEVELS:
+                raise ConfigError(
+                    f"provider {provider_name} reasoning_level must be one of: {', '.join(sorted(SUPPORTED_REASONING_LEVELS))}"
+                )
+            reasoning_summary = provider_config.get("reasoning_summary")
+            if reasoning_summary is not None and reasoning_summary not in {"auto", "concise", "detailed"}:
+                raise ConfigError(f"provider {provider_name} reasoning_summary must be auto, concise, or detailed")
+            reasoning_wire_format = provider_config.get("reasoning_wire_format")
+            if reasoning_wire_format is not None and reasoning_wire_format not in {
+                "auto",
+                "openai_responses",
+                "openai_chat",
+                "anthropic_adaptive",
+                "none",
+            }:
+                raise ConfigError(
+                    f"provider {provider_name} reasoning_wire_format must be auto, openai_responses, openai_chat, anthropic_adaptive, or none"
+                )
 
             if kind == "agent_runtime":
                 runtime = provider_config.get("runtime")

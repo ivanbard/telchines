@@ -43,6 +43,7 @@ from telchines.operations import (
     index_status,
     initialize_project,
     list_adapters,
+    list_model_options,
     list_providers,
     list_runs,
     list_waveforms,
@@ -54,6 +55,9 @@ from telchines.operations import (
     retrieve_query,
     review_artifact,
     run_eval,
+    select_model_provider,
+    set_provider_model,
+    set_provider_reasoning,
     show_run,
     show_waveform,
     triage,
@@ -66,6 +70,7 @@ SHELL_COMMAND_HELP = [
     ("/index [status|clean]", "Build, inspect, or clean retrieval indexes"),
     ("/retrieve QUERY", "Search project context"),
     ("/providers [check [NAME] [--offline]]", "Show or check configured providers"),
+    ("/model [list|select|set|reasoning]", "Choose provider, model, and reasoning defaults"),
     ("/agent TASK [--tool TOOL --file PATH]", "Plan and run a review-gated hardware agent task"),
     ("/repair --tool TOOL --file PATH", "Run repair workflow"),
     ("/triage --logs PATH [--logs PATH] [--waveform PATH]", "Run regression triage"),
@@ -104,6 +109,10 @@ PATH_OPTIONS = {
 SHELL_COMMAND_OPTIONS = {
     "/project init": ("--name",),
     "/providers check": ("--offline",),
+    "/model list": ("--offline",),
+    "/model select": ("--capability", "--provider"),
+    "/model set": ("--provider", "--model"),
+    "/model reasoning": ("--provider", "--level"),
     "/agent": (
         "--tool",
         "--file",
@@ -674,6 +683,28 @@ def _execute_command(session: ShellSession, parts: list[str], raw: bool) -> str 
         payload = list_providers(session.cwd)
         return dump_json(payload) if raw else render_provider_payload(payload)
 
+    if command == "model":
+        action = parts[1].lower() if len(parts) > 1 else "list"
+        if action == "list":
+            payload = list_model_options(session.cwd, live="--offline" not in parts[2:])
+            return dump_json(payload) if raw else render_model_options_payload(payload)
+        if action == "select":
+            capability = _parse_required_argument(parts[2:], "--capability")
+            provider = _parse_required_argument(parts[2:], "--provider")
+            payload = select_model_provider(session.cwd, capability, provider)
+            return dump_json(payload) if raw else render_model_update_payload(payload)
+        if action == "set":
+            provider = _parse_required_argument(parts[2:], "--provider")
+            model = _parse_required_argument(parts[2:], "--model")
+            payload = set_provider_model(session.cwd, provider, model)
+            return dump_json(payload) if raw else render_model_update_payload(payload)
+        if action == "reasoning":
+            provider = _parse_required_argument(parts[2:], "--provider")
+            level = _parse_required_argument(parts[2:], "--level")
+            payload = set_provider_reasoning(session.cwd, provider, level)
+            return dump_json(payload) if raw else render_model_update_payload(payload)
+        raise ValueError("supported /model commands are list, select, set, and reasoning")
+
     if command == "agent":
         agent_args = _parse_agent_args(parts[1:])
         payload = agent(
@@ -877,6 +908,7 @@ def render_provider_payload(payload: dict[str, object]) -> str:
     table.add_column("Capabilities")
     table.add_column("Default For")
     table.add_column("Model/Base")
+    table.add_column("Reasoning")
     table.add_column("Runtime")
     table.add_column("Status")
     for provider in payload["providers"]:
@@ -886,12 +918,17 @@ def render_provider_payload(payload: dict[str, object]) -> str:
         timeout = provider.get("timeout_seconds")
         if timeout:
             runtime = f"{runtime} ({timeout}s)" if runtime != "n/a" else f"timeout {timeout}s"
+        reasoning = str(provider.get("reasoning_level") or "auto")
+        wire = str(provider.get("reasoning_wire_format") or "none")
+        if wire != "none":
+            reasoning = f"{reasoning}/{wire}"
         table.add_row(
             provider["name"],
             provider["kind"],
             ", ".join(provider["capabilities"]),
             ", ".join(provider["default_for"]) or "none",
             model_or_base,
+            reasoning,
             runtime,
             status,
         )
@@ -907,6 +944,57 @@ def render_provider_payload(payload: dict[str, object]) -> str:
     return _render_rich(group)
 
 
+def render_model_options_payload(payload: dict[str, object]) -> str:
+    defaults = payload.get("default_provider_by_capability", {})
+    defaults_text = "\n".join(f"{capability}: {provider}" for capability, provider in dict(defaults).items()) or "none configured"
+    table = Table(title="Model Selection", show_header=True, header_style="bold cyan")
+    table.add_column("Provider")
+    table.add_column("Capabilities")
+    table.add_column("Default")
+    table.add_column("Selected Model")
+    table.add_column("Reasoning")
+    table.add_column("Available Models")
+    table.add_column("Discovery")
+    for provider in payload.get("providers", []):
+        if not isinstance(provider, dict):
+            continue
+        warnings = provider.get("model_warnings") or []
+        warning_text = f" ({'; '.join(str(item) for item in warnings)})" if warnings else ""
+        discovery = str(provider.get("discovery_status") or provider.get("model_source") or "configured")
+        if provider.get("discovery_error"):
+            discovery = f"{discovery}: {provider['discovery_error']}"
+        reasoning = str(provider.get("reasoning_level") or "auto")
+        wire = str(provider.get("reasoning_wire_format") or "none")
+        if wire != "none":
+            reasoning = f"{reasoning} / {wire}"
+        models = provider.get("models") if isinstance(provider.get("models"), list) else []
+        table.add_row(
+            str(provider.get("name") or ""),
+            ", ".join(str(item) for item in provider.get("capabilities", [])),
+            ", ".join(str(item) for item in provider.get("default_for", [])) or "none",
+            str(provider.get("model") or "wrapper-managed"),
+            reasoning + warning_text,
+            "\n".join(str(item) for item in models[:5]) or "n/a",
+            discovery,
+        )
+    help_text = "\n".join(
+        [
+            "/model select --capability repair --provider NAME",
+            "/model set --provider NAME --model MODEL",
+            "/model reasoning --provider NAME --level auto|none|minimal|low|medium|high|xhigh",
+        ]
+    )
+    return _render_rich(Group(Panel(defaults_text, title="Active Defaults", border_style="green"), table, Panel(help_text, title="Commands", border_style="cyan")))
+
+
+def render_model_update_payload(payload: dict[str, object]) -> str:
+    lines = [f"{key}: {value}" for key, value in payload.items() if key != "default_provider_by_capability"]
+    defaults = payload.get("default_provider_by_capability")
+    if isinstance(defaults, dict):
+        lines.append("defaults: " + ", ".join(f"{capability}={provider}" for capability, provider in defaults.items()))
+    return render_action_panel("Model Selection Updated", "\n".join(lines))
+
+
 def render_provider_check_payload(payload: dict[str, object]) -> str:
     table = Table(title="Provider Checks", show_header=True, header_style="bold cyan")
     table.add_column("Provider")
@@ -920,9 +1008,12 @@ def render_provider_check_payload(payload: dict[str, object]) -> str:
         transport = checks.get("transport", {}) if isinstance(checks, dict) else {}
         transport_mode = transport.get("mode") if isinstance(transport, dict) else None
         model = transport.get("model") if isinstance(transport, dict) else None
+        reasoning = transport.get("reasoning_level") if isinstance(transport, dict) else None
         runtime_mode = transport.get("runtime_mode") if isinstance(transport, dict) else None
         runtime_text = str(runtime_mode or transport.get("runtime") or "n/a") if isinstance(transport, dict) else "n/a"
         transport_text = str(model or transport_mode or "n/a")
+        if reasoning:
+            transport_text = f"{transport_text} ({reasoning})"
         table.add_row(provider["name"], provider["kind"], provider["status"], transport_text, runtime_text, provider["summary"])
     return _render_rich(table)
 
@@ -1324,7 +1415,7 @@ def _header_fragments(session: ShellSession) -> list[tuple[str, str]]:
     cwd = _compact_path(session.cwd, max_chars=48)
     text = (
         f" Telchines | {project} | cwd: {cwd} | "
-        f"repair: {session.active_provider()} | gen: {session.active_generation_provider()} "
+        f"repair: {_active_model_summary(session, 'repair')} | gen: {_active_model_summary(session, 'generation')} "
     )
     return [("class:header", text)]
 
@@ -1335,8 +1426,8 @@ def _sidebar_text(session: ShellSession) -> str:
         f"project: {config.project.name if config else 'none'}",
         f"cwd: {session.cwd.name}",
         f"index: {session.index_hint()}",
-        f"repair: {session.active_provider()}",
-        f"gen: {session.active_generation_provider()}",
+        f"repair: {_active_model_summary(session, 'repair')}",
+        f"gen: {_active_model_summary(session, 'generation')}",
         f"last ctx: {session.last_context_id or 'none'}",
         f"logs: {session.logs_hint()}",
         "",
@@ -1347,6 +1438,20 @@ def _sidebar_text(session: ShellSession) -> str:
     else:
         lines.append("- none")
     return "\n".join(lines)
+
+
+def _active_model_summary(session: ShellSession, capability: str) -> str:
+    config = session.project_config()
+    if config is None:
+        return "none"
+    provider_name = config.default_provider_by_capability().get(capability, "heuristic")
+    providers = config.project.model_policy.get("providers", {})
+    provider_config = providers.get(provider_name)
+    if not isinstance(provider_config, dict):
+        return provider_name
+    model = provider_config.get("model") or provider_config.get("base_provider") or ("heuristic" if provider_config.get("kind") == "heuristic" else "wrapper")
+    reasoning = provider_config.get("reasoning_level", "auto")
+    return f"{provider_name}:{model}/{reasoning}"
 
 
 def _hint_fragments(session: ShellSession) -> list[tuple[str, str]]:

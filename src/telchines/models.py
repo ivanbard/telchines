@@ -316,6 +316,9 @@ class WaveformEvidence:
     source_path: str
     matched_signals: list[str] = field(default_factory=list)
     excerpt: str = ""
+    relevance: str = "unrelated"
+    score: float = 0.0
+    reason: str = ""
 
 
 @dataclass(slots=True)

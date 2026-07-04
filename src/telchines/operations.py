@@ -13,6 +13,13 @@ from telchines.adapters.registry import AdapterRegistry
 from telchines.config import ProjectConfig
 from telchines.eval import run_default_suite
 from telchines.import_manifest import import_regression_manifest
+from telchines.model_catalog import (
+    list_model_options as list_model_options_catalog,
+    set_default_provider as set_default_provider_catalog,
+    set_provider_model as set_provider_model_catalog,
+    set_provider_reasoning as set_provider_reasoning_catalog,
+    provider_model_metadata,
+)
 from telchines.models import VerificationRun
 from telchines.providers import _provider_network_scope, build_generation_provider, build_repair_provider, check_provider_statuses, list_provider_statuses
 from telchines.retrieval import RetrievalService
@@ -733,6 +740,7 @@ def list_providers(root: Path | None = None) -> dict[str, object]:
                 "timeout_seconds": provider_configs.get(status.name, {}).get("timeout_seconds") if isinstance(provider_configs.get(status.name), dict) else None,
                 "network_scope": status.network_scope,
                 "auth_mode": status.auth_mode,
+                **_provider_model_details(status.name, provider_configs),
             }
             for status in list_provider_statuses(config)
         ],
@@ -747,6 +755,33 @@ def check_providers(root: Path | None = None, provider_name: str | None = None, 
         "providers": checks,
         "status": "passed" if all(item["status"] == "passed" for item in checks) else "failed",
     }
+
+
+def list_model_options(root: Path | None = None, *, live: bool = True) -> dict[str, object]:
+    config, _, _ = load_services(root)
+    return list_model_options_catalog(config, live=live)
+
+
+def select_model_provider(root: Path | None, capability: str, provider_name: str) -> dict[str, object]:
+    config, _, _ = load_services(root)
+    return set_default_provider_catalog(config, capability, provider_name)
+
+
+def set_provider_model(root: Path | None, provider_name: str, model: str) -> dict[str, object]:
+    config, _, _ = load_services(root)
+    return set_provider_model_catalog(config, provider_name, model)
+
+
+def set_provider_reasoning(root: Path | None, provider_name: str, level: str) -> dict[str, object]:
+    config, _, _ = load_services(root)
+    return set_provider_reasoning_catalog(config, provider_name, level)
+
+
+def _provider_model_details(provider_name: str, provider_configs: dict[str, object]) -> dict[str, object]:
+    provider_config = provider_configs.get(provider_name)
+    if not isinstance(provider_config, dict):
+        return {}
+    return provider_model_metadata(provider_name, provider_config, provider_configs)
 
 
 def run_eval(root: Path | None = None) -> dict[str, object]:
@@ -797,6 +832,7 @@ def inspect_waveform(root: Path | None, target: str, signal: str, window: int = 
         "source_path": summary.source_path,
         "signal_name": sample.signal_name,
         "full_name": sample.full_name,
+        "match_type": "full_name" if sample.full_name.lower() == signal.lower() else "leaf_name",
         "timescale": summary.timescale,
         "transition_count": len(sample.transitions),
         "transitions": [dataclass_to_dict(item) for item in transitions],
@@ -823,6 +859,9 @@ def format_triage_ci(payload: dict[str, object]) -> dict[str, object]:
                         "waveform_id": item["waveform_id"],
                         "source_path": item["source_path"],
                         "matched_signals": item["matched_signals"],
+                        "relevance": item.get("relevance", "unrelated"),
+                        "score": item.get("score", 0.0),
+                        "reason": item.get("reason", ""),
                     }
                     for item in cluster["waveform_evidence"]
                 ],
@@ -849,10 +888,7 @@ def format_triage_human(payload: dict[str, object]) -> str:
     for index, cluster in enumerate(payload["clusters"], start=1):
         evidence = ", ".join(hit["citation"] for hit in cluster["evidence_hits"][:3]) or "none"
         similar = ", ".join(match["run_id"] for match in cluster["similar_runs"]) or "none"
-        waveforms = ", ".join(
-            f"{item['source_path']} ({', '.join(item['matched_signals']) or 'signals unavailable'})"
-            for item in cluster["waveform_evidence"][:2]
-        ) or "none"
+        waveforms = ", ".join(_format_waveform_evidence(item) for item in cluster["waveform_evidence"][:2]) or "none"
         formal = ", ".join(
             f"{item['run_id']} [{item['status']}]"
             + (f" props={', '.join(item['property_ids'][:2])}" if item.get("property_ids") else "")
@@ -871,6 +907,19 @@ def format_triage_human(payload: dict[str, object]) -> str:
             ]
         )
     return "\n".join(lines)
+
+
+def _format_waveform_evidence(item: dict[str, object]) -> str:
+    relevance = str(item.get("relevance", "unrelated"))
+    reason = str(item.get("reason", "")).strip()
+    signals = ", ".join(str(signal) for signal in item.get("matched_signals", []))
+    if signals:
+        detail = f"{signals}; {relevance}"
+    else:
+        detail = relevance
+    if reason:
+        detail = f"{detail}; {reason}"
+    return f"{item['source_path']} ({detail})"
 
 
 def dump_json(value: object) -> str:

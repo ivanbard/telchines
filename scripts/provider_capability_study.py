@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import shutil
@@ -29,12 +30,13 @@ def main() -> int:
     parser.add_argument("--scratch-root", type=Path, default=DEFAULT_SCRATCH_ROOT)
     parser.add_argument("--include-live", action="store_true", help="Allow live HTTP/local-server providers when their env gates are set.")
     parser.add_argument("--max-live-commands", type=int, help="Optional cap on non-dry-run commands executed.")
+    parser.add_argument("--repeat-count", type=int, default=1, help="Repeat each planned provider scenario this many times.")
     args = parser.parse_args()
 
     try:
         matrix = load_matrix(args.matrix)
         selected = _selected_providers(matrix, args.provider)
-        plan = build_plan(matrix, selected, args.scratch_root.resolve(), include_live=args.include_live, dry_run=args.dry_run)
+        plan = build_plan(matrix, selected, args.scratch_root.resolve(), include_live=args.include_live, dry_run=args.dry_run, repeat_count=args.repeat_count)
     except MatrixError as exc:
         print(json.dumps({"status": "invalid_matrix", "error": str(exc)}, indent=2))
         return 2
@@ -66,7 +68,17 @@ def load_matrix(path: Path) -> dict[str, Any]:
     return payload
 
 
-def build_plan(matrix: dict[str, Any], providers: list[dict[str, Any]], scratch_root: Path, *, include_live: bool, dry_run: bool = False) -> dict[str, Any]:
+def build_plan(
+    matrix: dict[str, Any],
+    providers: list[dict[str, Any]],
+    scratch_root: Path,
+    *,
+    include_live: bool,
+    dry_run: bool = False,
+    repeat_count: int = 1,
+) -> dict[str, Any]:
+    if repeat_count < 1:
+        raise MatrixError("repeat-count must be at least 1")
     commands: list[dict[str, Any]] = []
     provider_summaries: list[dict[str, Any]] = []
     skip_reasons: dict[str, str] = {}
@@ -87,12 +99,22 @@ def build_plan(matrix: dict[str, Any], providers: list[dict[str, Any]], scratch_
                 "capabilities": provider.get("capabilities", []),
                 "status": "skipped" if reason else "planned",
                 "reason": reason,
+                **_provider_model_fields(provider),
             }
         )
         if reason:
-            commands.append({"provider": provider["name"], "label": "provider_skipped", "status": "skipped", "reason": reason, "command": []})
+            commands.append(
+                {
+                    "provider": provider["name"],
+                    "label": "provider_skipped",
+                    "status": "skipped",
+                    "reason": reason,
+                    "command": [],
+                    **_provider_model_fields(provider),
+                }
+            )
             continue
-        commands.extend(_provider_commands(provider))
+        commands.extend(_provider_commands(provider, repeat_count=repeat_count))
     return {
         "matrix": matrix["name"],
         "scratch_root": str(scratch_root / _safe_name(matrix["name"])),

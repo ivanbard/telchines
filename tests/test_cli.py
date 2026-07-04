@@ -525,6 +525,9 @@ def test_cli_triage_human_and_ci_formats(sample_project: Path, monkeypatch) -> N
     assert payload["status"] == "needs_attention"
     assert payload["clusters"][0]["evidence"]
     assert payload["clusters"][0]["waveforms"]
+    assert "relevance" in payload["clusters"][0]["waveforms"][0]
+    assert "reason" in payload["clusters"][0]["waveforms"][0]
+    assert "matched" in human.stdout.lower() or "unrelated" in human.stdout.lower()
 
 
 def test_cli_triage_accepts_multiple_log_paths(retrieval_corpus_project: Path, monkeypatch) -> None:
@@ -568,6 +571,14 @@ def test_cli_waveform_commands(sample_project: Path, monkeypatch) -> None:
     inspect_payload = json.loads(inspect_result.stdout)
     assert inspect_payload["signal_name"] == "start_seen"
     assert inspect_payload["transitions"]
+
+    missing_result = runner.invoke(
+        app,
+        ["waveforms", "inspect", "logs/regressions/uart_rx_trace.vcd", "--signal", "rx", "--window", "4"],
+    )
+    assert missing_result.exit_code != 0
+    assert "signal was not found in waveform: rx" in missing_result.stderr
+    assert "serial_i" in missing_result.stderr
 
 
 def test_cli_runs_replay_requires_confirmation(sample_project: Path, monkeypatch) -> None:

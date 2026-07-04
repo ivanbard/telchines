@@ -11,6 +11,8 @@ from telchines.utils import relative_to, sha256_file, stable_id, tokenize, uniqu
 
 NATIVE_WAVEFORM_EXTENSIONS = {".vcd"}
 KNOWN_WAVEFORM_EXTENSIONS = {".vcd", ".fst"}
+GENERIC_SIGNAL_TOKENS = {"clk", "clock", "rst", "rst_n", "reset", "reset_n"}
+LOW_VALUE_MATCH_TOKENS = {"dut", "tb", "test", "rtl", "sv", "v", "top", "module", "uart"}
 
 
 def ingest_waveform(config: ProjectConfig, store: RunStore, path: Path) -> WaveformSummary:
@@ -49,41 +51,119 @@ def discover_waveforms(paths: list[Path]) -> list[Path]:
 
 
 def summarize_for_cluster(summary: WaveformSummary, signature: str, files: list[str], messages: list[str]) -> WaveformEvidence:
-    cluster_tokens = set(tokenize(" ".join([signature, *files, *messages])))
-    matched_samples = []
+    cluster_tokens = _expanded_tokens(" ".join([signature, *files, *messages]))
+    cluster_identifiers = cluster_tokens - LOW_VALUE_MATCH_TOKENS - GENERIC_SIGNAL_TOKENS
+    scored_samples: list[tuple[float, WaveformSample, list[str]]] = []
     for sample in summary.sampled_signals:
-        signal_tokens = set(tokenize(sample.full_name))
-        if cluster_tokens & signal_tokens:
-            matched_samples.append(sample)
-    if not matched_samples:
-        matched_samples = summary.sampled_signals[:2]
+        signal_tokens = _expanded_tokens(sample.full_name)
+        if _is_generic_signal(sample.signal_name):
+            continue
+        matched_tokens = sorted((cluster_identifiers & signal_tokens) - LOW_VALUE_MATCH_TOKENS)
+        scope_tokens = _expanded_tokens(sample.full_name.rsplit(".", 1)[0] if "." in sample.full_name else "")
+        scope_overlap = sorted((cluster_identifiers & scope_tokens) - LOW_VALUE_MATCH_TOKENS)
+        signal_overlap = sorted((cluster_identifiers & _expanded_tokens(sample.signal_name)) - LOW_VALUE_MATCH_TOKENS)
+        score = 0.0
+        score += 2.0 * len(signal_overlap)
+        score += 1.0 * len(scope_overlap)
+        if {"start", "bit"} <= cluster_identifiers and ("start" in signal_tokens or "serial" in signal_tokens or "rx" in signal_tokens):
+            score += 2.0
+        if {"valid", "ready"} & cluster_identifiers and ({"valid", "ready"} & signal_tokens):
+            score += 1.5
+        if "timeout" in cluster_identifiers and ("start" in signal_tokens or "serial" in signal_tokens or "rx" in signal_tokens):
+            score += 1.0
+        if score > 0:
+            scored_samples.append((score, sample, signal_overlap or matched_tokens or scope_overlap))
+    scored_samples.sort(key=lambda item: (-item[0], item[1].full_name))
+    matched_samples = [sample for score, sample, _ in scored_samples if score >= 2.0][:3]
+    if matched_samples:
+        relevance = "matched"
+        best_score = round(scored_samples[0][0], 3)
+        reason_tokens = scored_samples[0][2]
+        reason = f"matched signal token {reason_tokens[0]}" if reason_tokens else "matched waveform scope and failure context"
+    elif scored_samples:
+        matched_samples = [scored_samples[0][1]]
+        relevance = "weak"
+        best_score = round(scored_samples[0][0], 3)
+        reason = "only weak waveform scope/context overlap"
+    else:
+        relevance = "unrelated"
+        best_score = 0.0
+        reason = "no non-generic signal overlap"
     matched_names = unique_preserve_order(sample.signal_name for sample in matched_samples)
     excerpt_lines: list[str] = []
     for sample in matched_samples[:2]:
         if not sample.transitions:
             continue
-        excerpt_lines.append(
-            f"{sample.signal_name}: "
-            + ", ".join(f"{transition.timestamp}:{transition.value}" for transition in sample.transitions[:4])
-        )
-    excerpt = "; ".join(excerpt_lines) or "no sampled transitions available"
+        excerpt_lines.append(f"{sample.signal_name}: {_activity_summary(sample)}")
+    excerpt = "; ".join(excerpt_lines) or ("no relevant waveform signals matched" if relevance == "unrelated" else "no sampled transitions available")
     return WaveformEvidence(
         waveform_id=summary.waveform_id,
         source_path=summary.source_path,
         matched_signals=matched_names,
         excerpt=excerpt,
+        relevance=relevance,
+        score=best_score,
+        reason=reason,
     )
 
 
 def select_signal(summary: WaveformSummary, signal_name: str) -> WaveformSample:
     lowered = signal_name.lower()
+    full_matches = [sample for sample in summary.sampled_signals if sample.full_name.lower() == lowered]
+    if full_matches:
+        return full_matches[0]
+    leaf_matches = [sample for sample in summary.sampled_signals if sample.signal_name.lower() == lowered]
+    if len(leaf_matches) == 1:
+        return leaf_matches[0]
+    if len(leaf_matches) > 1:
+        full_names = ", ".join(sample.full_name for sample in leaf_matches[:8])
+        raise ValueError(f"signal name is ambiguous: {signal_name}; matches: {full_names}")
+    available = ", ".join(sample.full_name for sample in _signal_suggestions(summary, signal_name))
+    detail = f"; available signals: {available}" if available else ""
+    raise ValueError(f"signal was not found in waveform: {signal_name}{detail}")
+
+
+def _signal_suggestions(summary: WaveformSummary, signal_name: str) -> list[WaveformSample]:
+    query_tokens = _expanded_tokens(signal_name)
+    lowered = signal_name.lower()
+    candidates: list[tuple[int, WaveformSample]] = []
     for sample in summary.sampled_signals:
-        if sample.signal_name.lower() == lowered or sample.full_name.lower() == lowered:
-            return sample
-    for sample in summary.sampled_signals:
-        if sample.full_name.lower().endswith(f".{lowered}") or lowered in sample.full_name.lower():
-            return sample
-    raise ValueError(f"signal was not found in waveform: {signal_name}")
+        sample_tokens = _expanded_tokens(sample.full_name)
+        score = len(query_tokens & sample_tokens)
+        if lowered and lowered in sample.full_name.lower():
+            score += 2
+        candidates.append((score, sample))
+    candidates.sort(key=lambda item: (-item[0], item[1].full_name))
+    return [sample for _, sample in candidates[:8]]
+
+
+def _expanded_tokens(text: str) -> set[str]:
+    pieces: list[str] = []
+    for token in tokenize(text):
+        pieces.append(token)
+        pieces.extend(part for part in re.split(r"[_./\\:-]+", token) if part)
+    return {piece.lower() for piece in pieces if piece}
+
+
+def _is_generic_signal(signal_name: str) -> bool:
+    tokens = _expanded_tokens(signal_name)
+    return signal_name.lower() in GENERIC_SIGNAL_TOKENS or bool(tokens & GENERIC_SIGNAL_TOKENS)
+
+
+def _activity_summary(sample: WaveformSample) -> str:
+    transitions = sample.transitions
+    if not transitions:
+        return "no sampled transitions"
+    toggle_count = max(len(transitions) - 1, 0)
+    first_high = next((transition.timestamp for transition in transitions if transition.value == "1"), None)
+    first_low = next((transition.timestamp for transition in transitions[1:] if transition.value == "0"), None)
+    parts = [f"toggles={toggle_count}"]
+    if first_high is not None:
+        parts.append(f"first_assertion={first_high}")
+    if first_low is not None:
+        parts.append(f"first_fall={first_low}")
+    parts.append("samples=" + ", ".join(f"{transition.timestamp}:{transition.value}" for transition in transitions[:4]))
+    return ", ".join(parts)
 
 
 def _parse_vcd(config: ProjectConfig, path: Path) -> WaveformSummary:

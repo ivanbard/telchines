@@ -24,8 +24,19 @@ def test_triage_clusters_failures(sample_project: Path) -> None:
     assert clusters[0].evidence_hits
     assert any(hit.path.endswith("uart_rx.sv") or hit.path.endswith("uart.md") for hit in clusters[0].evidence_hits)
     assert run.inputs["waveform_count"] == 1
-    assert clusters[0].waveform_evidence
-    assert clusters[0].waveform_evidence[0].source_path.endswith("uart_rx_trace.vcd")
+    rx_cluster = next(cluster for cluster in clusters if cluster.signature == "SIM_TIMEOUT")
+    assert rx_cluster.waveform_evidence
+    rx_evidence = rx_cluster.waveform_evidence[0]
+    assert rx_evidence.source_path.endswith("uart_rx_trace.vcd")
+    assert rx_evidence.relevance == "matched"
+    assert set(rx_evidence.matched_signals) & {"start_seen", "serial_i"}
+    assert not set(rx_evidence.matched_signals) <= {"clk", "rst_n"}
+
+    tx_cluster = next(cluster for cluster in clusters if cluster.signature == "SV_UNKNOWN_IDENTIFIER")
+    tx_evidence = tx_cluster.waveform_evidence[0]
+    assert tx_evidence.relevance == "unrelated"
+    assert tx_evidence.matched_signals == []
+    assert "no non-generic signal overlap" in tx_evidence.reason
 
 
 def test_triage_finds_similar_previous_runs(sample_project: Path) -> None:
