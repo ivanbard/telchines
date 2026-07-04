@@ -1,0 +1,3 @@
+UVM_ERROR tb/uvm/uart_env.svh(42) @ 1000ns: uvm_test_top.env.agent.sequencer [SEQ_TIMEOUT] sequence timed out waiting for rx_done
+UVM_FATAL tb/uvm/uart_env.svh(88) @ 1100ns: uvm_test_top.env [PHASE_TIMEOUT] run phase objection timeout waiting for drain
+UVM_ERROR tb/uvm/uart_scoreboard.svh(31) @ 1200ns: uvm_test_top.env.scoreboard [SB_MISMATCH] scoreboard mismatch expected 0x55 observed 0x54

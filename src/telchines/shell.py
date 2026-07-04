@@ -29,6 +29,7 @@ from telchines.config import ProjectConfig
 from telchines.errors import AdapterExecutionError, ConfigError, ProviderError, TelchinesError
 from telchines.operations import (
     agent,
+    coverage_import,
     coverage_plan,
     check_providers,
     clean_index,
@@ -39,6 +40,7 @@ from telchines.operations import (
     gen_cocotb,
     gen_sva,
     import_runs,
+    import_runs_from_ci,
     inspect_waveform,
     index_project,
     index_status,
@@ -50,6 +52,7 @@ from telchines.operations import (
     list_waveforms,
     load_eval_report,
     privacy_report,
+    project_templates,
     purge_artifacts,
     repair,
     replay_run,
@@ -67,7 +70,8 @@ from telchines.operations import (
 
 SHELL_COMMAND_HELP = [
     ("/help", "Show command reference"),
-    ("/project init [path] [--name NAME]", "Initialize a Telchines project"),
+    ("/project init [path] [--name NAME] [--template NAME]", "Initialize a Telchines project"),
+    ("/project templates", "List built-in project templates"),
     ("/index [status|clean]", "Build, inspect, or clean retrieval indexes"),
     ("/retrieve QUERY", "Search project context"),
     ("/providers [check [NAME] [--offline]]", "Show or check configured providers"),
@@ -76,10 +80,12 @@ SHELL_COMMAND_HELP = [
     ("/repair --tool TOOL --file PATH", "Run repair workflow"),
     ("/triage --logs PATH [--logs PATH] [--waveform PATH]", "Run regression triage"),
     ("/coverage-plan --report PATH [--exclusions PATH] [--formal-run RUN_ID]", "Generate coverage closure recommendations"),
+    ("/coverage import SOURCE --format FORMAT --output PATH", "Normalize coverage exports"),
     ("/gen-sva --spec PATH --rtl PATH [--output PATH]", "Generate assertion draft from spec and RTL"),
     ("/gen-cocotb --dut PATH [--spec PATH] [--output-dir PATH]", "Generate a cocotb scaffold from DUT context"),
     ("/waveforms [list|show TARGET|signals TARGET|inspect TARGET --signal NAME]", "Inspect waveform summaries and signals"),
     ("/runs [list|doctor|show RUN_ID|replay RUN_ID [--yes]|import MANIFEST]", "Inspect or import stored runs"),
+    ("/runs import-junit|import-github-actions|import-jenkins SOURCE", "Normalize CI regression exports"),
     ("/eval [run|report]", "Run or show benchmarks"),
     ("/doctor", "Show project/provider/adapter diagnostics"),
     ("/doctor privacy", "Show privacy and artifact-storage diagnostics"),
@@ -108,7 +114,7 @@ PATH_OPTIONS = {
     "--include-dir",
 }
 SHELL_COMMAND_OPTIONS = {
-    "/project init": ("--name",),
+    "/project init": ("--name", "--template"),
     "/providers check": ("--offline",),
     "/model list": ("--offline",),
     "/model select": ("--capability", "--provider"),
@@ -141,10 +147,14 @@ SHELL_COMMAND_OPTIONS = {
     "/repair": ("--tool", "--file", "--extra-arg", "--adapter-arg", "--filelist", "--include-dir", "--define", "--top", "--worklib", "--apply"),
     "/triage": ("--logs", "--waveform"),
     "/coverage-plan": ("--report", "--exclusions", "--formal-run", "--rtl", "--spec"),
+    "/coverage import": ("--format", "--output"),
     "/gen-sva": ("--spec", "--rtl", "--output", "--provider", "--adapter-arg", "--filelist", "--include-dir", "--define", "--top", "--worklib"),
     "/gen-cocotb": ("--dut", "--spec", "--output-dir", "--intent", "--provider", "--adapter-arg", "--filelist", "--include-dir", "--define", "--top", "--worklib"),
     "/runs replay": ("--yes",),
     "/runs import": ("--dry-run",),
+    "/runs import-junit": ("--dry-run",),
+    "/runs import-github-actions": ("--dry-run",),
+    "/runs import-jenkins": ("--dry-run",),
     "/waveforms signals": ("--filter",),
     "/waveforms inspect": ("--signal", "--window"),
     "/artifacts purge": ("--yes",),
@@ -632,11 +642,17 @@ def _execute_command(session: ShellSession, parts: list[str], raw: bool) -> str 
     command = parts[0].lower()
 
     if command == "project" and len(parts) > 1 and parts[1] == "init":
-        path, name = _parse_project_init(parts[2:])
-        config = initialize_project((session.cwd / path).resolve() if not path.is_absolute() else path.resolve(), name=name)
+        path, name, template = _parse_project_init(parts[2:])
+        config = initialize_project((session.cwd / path).resolve() if not path.is_absolute() else path.resolve(), name=name, template=template)
         session.cwd = config.project_root
-        payload = {"project_id": config.project.project_id, "root_path": config.project.root_path}
+        payload = {"project_id": config.project.project_id, "root_path": config.project.root_path, "template": template}
         return dump_json(payload) if raw else render_action_panel("Project Initialized", f"root: {config.project.root_path}\nproject: {config.project.project_id}")
+    if command == "project" and len(parts) > 1 and parts[1] == "templates":
+        payload = project_templates()
+        return dump_json(payload) if raw else render_action_panel(
+            "Project Templates",
+            "\n".join(f"- {item['name']}: {item['description']}" for item in payload.get("templates", [])),
+        )
 
     if command == "index":
         if len(parts) > 1 and parts[1] == "status":
@@ -781,6 +797,22 @@ def _execute_command(session: ShellSession, parts: list[str], raw: bool) -> str 
         session.note_context(payload)
         return dump_json(payload) if raw else render_coverage_payload(payload)
 
+    if command == "coverage" and len(parts) > 1 and parts[1] == "import":
+        if len(parts) < 3:
+            raise ValueError("/coverage import requires a source path")
+        source_format = _parse_required_argument(parts[3:], "--format")
+        output = _parse_required_argument(parts[3:], "--output")
+        payload = coverage_import(
+            session.cwd,
+            source=_resolve_path(session.cwd, parts[2]),
+            source_format=source_format,
+            output=_resolve_path(session.cwd, output),
+        )
+        return dump_json(payload) if raw else render_action_panel(
+            "Coverage Imported",
+            f"source: {payload['source_path']}\noutput: {payload['output_path']}\nitems: {payload['item_count']}\nwarnings: {payload['warning_count']}",
+        )
+
     if command == "gen-sva":
         spec, rtl, output, provider, context = _parse_gen_sva_args(parts[1:])
         payload = gen_sva(
@@ -834,7 +866,15 @@ def _execute_command(session: ShellSession, parts: list[str], raw: bool) -> str 
         if parts[1] == "import" and len(parts) > 2:
             payload = import_runs(session.cwd, _resolve_path(session.cwd, parts[2]), dry_run="--dry-run" in parts[3:])
             return dump_json(payload) if raw else render_import_runs_payload(payload)
-        raise ValueError("supported /runs commands are list, doctor, show <run_id>, replay <run_id> [--yes], and import <manifest> [--dry-run]")
+        if parts[1] in {"import-junit", "import-github-actions", "import-jenkins"} and len(parts) > 2:
+            importer = {
+                "import-junit": "junit",
+                "import-github-actions": "github-actions",
+                "import-jenkins": "jenkins",
+            }[parts[1]]
+            payload = import_runs_from_ci(session.cwd, _resolve_path(session.cwd, parts[2]), importer=importer, dry_run="--dry-run" in parts[3:])
+            return dump_json(payload) if raw else render_import_runs_payload(payload)
+        raise ValueError("supported /runs commands are list, doctor, show <run_id>, replay <run_id> [--yes], import <manifest>, and import-junit/import-github-actions/import-jenkins <source>")
 
     if command == "eval":
         if len(parts) == 1 or parts[1] == "run":
@@ -1464,9 +1504,10 @@ def _hint_fragments(session: ShellSession) -> list[tuple[str, str]]:
     return [("class:subtle", f" {hint}")]
 
 
-def _parse_project_init(parts: list[str]) -> tuple[Path, str | None]:
+def _parse_project_init(parts: list[str]) -> tuple[Path, str | None, str | None]:
     path = Path(".")
     name: str | None = None
+    template: str | None = None
     index = 0
     while index < len(parts):
         part = parts[index]
@@ -1474,9 +1515,13 @@ def _parse_project_init(parts: list[str]) -> tuple[Path, str | None]:
             name = _require_option_value(parts, index, "--name")
             index += 2
             continue
+        if part == "--template":
+            template = _require_option_value(parts, index, "--template")
+            index += 2
+            continue
         path = Path(part)
         index += 1
-    return path, name
+    return path, name, template
 
 
 def _parse_agent_args(parts: list[str]) -> dict[str, Any]:
@@ -1828,7 +1873,7 @@ def _option_completions(text: str, seed: str) -> list[str]:
 def _option_command_key(parts: list[str]) -> str:
     first = parts[0] if parts else ""
     command = first if first.startswith("/") else f"/{first}"
-    if command in {"/project", "/providers", "/runs", "/waveforms", "/artifacts"} and len(parts) > 1 and not parts[1].startswith("--"):
+    if command in {"/project", "/providers", "/runs", "/waveforms", "/artifacts", "/coverage"} and len(parts) > 1 and not parts[1].startswith("--"):
         return f"{command} {parts[1]}"
     return command
 

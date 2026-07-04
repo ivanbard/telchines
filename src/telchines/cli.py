@@ -12,6 +12,7 @@ from telchines.operations import (
     check_adapters as check_adapters_op,
     check_providers as check_providers_op,
     clean_index as clean_index_op,
+    coverage_import as coverage_import_op,
     coverage_plan as coverage_plan_op,
     doctor_runs as doctor_runs_op,
     dump_json,
@@ -21,6 +22,7 @@ from telchines.operations import (
     gen_cocotb as gen_cocotb_op,
     gen_sva as gen_sva_op,
     import_runs as import_runs_op,
+    import_runs_from_ci as import_runs_from_ci_op,
     index_status as index_status_op,
     index_project as index_project_op,
     inspect_waveform as inspect_waveform_op,
@@ -32,6 +34,7 @@ from telchines.operations import (
     list_waveforms as list_waveforms_op,
     load_eval_report,
     privacy_report as privacy_report_op,
+    project_templates as project_templates_op,
     purge_artifacts as purge_artifacts_op,
     repair as repair_op,
     replay_run as replay_run_op,
@@ -52,6 +55,7 @@ app = typer.Typer(help="Telchines CLI", invoke_without_command=True, add_complet
 project_app = typer.Typer(no_args_is_help=True)
 index_app = typer.Typer(invoke_without_command=True)
 runs_app = typer.Typer(no_args_is_help=True)
+coverage_app = typer.Typer(no_args_is_help=True)
 eval_app = typer.Typer(no_args_is_help=True)
 adapters_app = typer.Typer(no_args_is_help=True)
 providers_app = typer.Typer(no_args_is_help=True)
@@ -61,6 +65,7 @@ doctor_app = typer.Typer(no_args_is_help=True)
 app.add_typer(project_app, name="project")
 app.add_typer(index_app, name="index")
 app.add_typer(runs_app, name="runs")
+app.add_typer(coverage_app, name="coverage")
 app.add_typer(eval_app, name="eval")
 app.add_typer(adapters_app, name="adapters")
 app.add_typer(providers_app, name="providers")
@@ -109,12 +114,27 @@ def shell_command(
 
 
 @project_app.command("init")
-def project_init(path: Path = typer.Argument(Path(".")), name: Optional[str] = typer.Option(None, "--name")) -> None:
+def project_init(
+    path: Path = typer.Argument(Path(".")),
+    name: Optional[str] = typer.Option(None, "--name"),
+    template: Optional[str] = typer.Option(None, "--template", help="Built-in scaffold template to apply."),
+) -> None:
     try:
-        config = initialize_project(path, name=name)
+        config = initialize_project(path, name=name, template=template)
     except ConfigError as exc:
         _fail(f"config error: {exc}")
+    except ValueError as exc:
+        _fail(str(exc))
     typer.echo(f"initialized project {config.project.project_id} at {config.project.root_path}")
+
+
+@project_app.command("templates")
+def project_templates() -> None:
+    try:
+        payload = project_templates_op()
+    except ValueError as exc:
+        _fail(str(exc))
+    typer.echo(dump_json(payload))
 
 
 @index_app.callback()
@@ -373,6 +393,23 @@ def coverage_plan(
     typer.echo(dump_json(payload))
 
 
+@coverage_app.command("import")
+def coverage_import(
+    source: Path = typer.Argument(..., help="Coverage export to normalize."),
+    source_format: str = typer.Option(..., "--format", help="Source format: telchines-json, ucis-json, vivado, quartus, or questa-text."),
+    output: Path = typer.Option(..., "--output", help="Normalized Telchines coverage JSON output path."),
+) -> None:
+    try:
+        payload = coverage_import_op(None, source, source_format=source_format, output=output)
+    except ConfigError as exc:
+        _fail(f"config error: {exc}")
+    except WorkflowInputError as exc:
+        _fail(f"input error: {exc}")
+    except ValueError as exc:
+        _fail(str(exc))
+    typer.echo(dump_json(payload))
+
+
 @app.command("gen-sva")
 def gen_sva(
     spec: Path = typer.Option(..., "--spec"),
@@ -478,6 +515,40 @@ def providers_models(name: Optional[str] = typer.Argument(None), offline: bool =
         if not providers:
             _fail(f"config error: provider {name} is not configured")
         payload = {**payload, "providers": providers}
+    typer.echo(dump_json(payload))
+
+
+@runs_app.command("import-junit")
+def import_junit(
+    source: Path = typer.Argument(..., help="JUnit XML report to normalize and import."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Validate and preview imported runs without storing them."),
+) -> None:
+    _import_ci("junit", source, dry_run=dry_run)
+
+
+@runs_app.command("import-github-actions")
+def import_github_actions(
+    source: Path = typer.Argument(..., help="GitHub Actions JSON export to normalize and import."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Validate and preview imported runs without storing them."),
+) -> None:
+    _import_ci("github-actions", source, dry_run=dry_run)
+
+
+@runs_app.command("import-jenkins")
+def import_jenkins(
+    source: Path = typer.Argument(..., help="Jenkins JSON export to normalize and import."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Validate and preview imported runs without storing them."),
+) -> None:
+    _import_ci("jenkins", source, dry_run=dry_run)
+
+
+def _import_ci(importer: str, source: Path, *, dry_run: bool) -> None:
+    try:
+        payload = import_runs_from_ci_op(None, source, importer=importer, dry_run=dry_run)
+    except ConfigError as exc:
+        _fail(f"config error: {exc}")
+    except ValueError as exc:
+        _fail(str(exc))
     typer.echo(dump_json(payload))
 
 

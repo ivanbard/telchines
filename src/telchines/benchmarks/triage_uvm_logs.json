@@ -1,0 +1,13 @@
+{
+  "benchmark_id": "triage_uvm_logs",
+  "task_type": "triage",
+  "title": "Cluster UVM testbench failures",
+  "fixture_root": "benchmarks/assets/triage_uvm_logs",
+  "config": {
+    "logs_path": "logs"
+  },
+  "scoring": {
+    "min_clusters": 2,
+    "expected_signatures": ["UVM_PHASE_OBJECTION_TIMEOUT", "UVM_SCOREBOARD_MISMATCH"]
+  }
+}

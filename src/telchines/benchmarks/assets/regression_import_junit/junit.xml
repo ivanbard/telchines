@@ -1,0 +1,6 @@
+<testsuite name="nightly" tests="2" failures="1">
+  <testcase classname="uart_rx_test" name="seed_1">
+    <failure message="timeout">rtl/uart_rx.sv:42: error: timeout waiting for start bit</failure>
+  </testcase>
+  <testcase classname="uart_rx_test" name="seed_2"/>
+</testsuite>

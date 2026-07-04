@@ -1,0 +1,3 @@
+ERROR: [Synth 8-439] module 'uart_top' not found [rtl/top.sv:17]
+Error (14566): The Fitter cannot place 1 periphery component due to illegal location assignment at rtl/top.sv(21)
+ERROR: TIMING-003: Timing constraint violation on clk_rx File: constraints/top.pdc, Line: 12

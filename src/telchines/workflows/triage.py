@@ -43,7 +43,8 @@ def triage_logs(
 
     overall_query = " ".join(observation.message for observation in all_observations[:12]) or "triage failure summary"
     overall_focus = unique_preserve_order(observation.file for observation in all_observations if observation.file)
-    context = retrieval.search(query=overall_query, mode="triage", focus_paths=overall_focus)
+    retrieval_mode = _retrieval_mode_for_observations(all_observations)
+    context = retrieval.search(query=overall_query, mode=retrieval_mode, focus_paths=overall_focus)
     store.save_context(context)
 
     clusters = build_clusters(store, retrieval, all_observations, waveform_summaries)
@@ -58,6 +59,9 @@ def triage_logs(
             "logs_path": [str(path) for path in requested_paths],
             "log_file_count": len(log_files),
             "waveform_count": len(waveform_summaries),
+            "log_families": _cluster_values(all_observations, "log_family"),
+            "tool_names": _cluster_values(all_observations, "tool_name"),
+            "retrieval_mode": retrieval_mode,
         },
         status="passed",
         started_at=utc_now(),
@@ -97,7 +101,7 @@ def build_clusters(
         lead_message = items[0].message
         evidence_context = retrieval.search(
             query=" ".join([signature, *files, *(item.message for item in items[:3])]),
-            mode="triage",
+            mode=_retrieval_mode_for_observations(items),
             focus_paths=files,
             limit=4,
         )
@@ -117,6 +121,14 @@ def build_clusters(
                 similar_runs=_find_similar_runs(store, previous_runs, items),
                 formal_evidence=_find_formal_evidence(formal_runs, items),
                 waveform_evidence=_waveform_evidence(signature, files, items, waveform_summaries),
+                log_family=_primary_value(items, "log_family"),
+                tool_name=_primary_value(items, "tool_name"),
+                domain=_domain_for_items(items),
+                metadata={
+                    "log_families": _cluster_values(items, "log_family"),
+                    "tool_names": _cluster_values(items, "tool_name"),
+                    "retrieval_mode": _retrieval_mode_for_observations(items),
+                },
             )
         )
     return clusters
@@ -201,6 +213,11 @@ def _cluster_summary(items: list[Observation], signature: str, lead_message: str
 
 def _likely_cause(signature: str, files: list[str]) -> str:
     target = files[0] if files else "the failing design path"
+    if signature.startswith("UVM_"):
+        return _uvm_likely_cause(signature, target)
+    if signature.startswith("VIVADO_") or signature.startswith("QUARTUS_") or signature.startswith("LIBERO_"):
+        tool = signature.split("_", maxsplit=1)[0].title()
+        return f"{tool} build diagnostics point at {target}; the failure is likely in setup, constraints, or the referenced design source."
     if signature == "SIM_TIMEOUT":
         return f"Repeated timeout behavior suggests a stalled handshake or missing stimulus path near {target}."
     if signature == "SV_UNKNOWN_IDENTIFIER":
@@ -214,6 +231,16 @@ def _likely_cause(signature: str, files: list[str]) -> str:
 
 def _suggested_action(signature: str, files: list[str]) -> str:
     target = files[0] if files else "the primary failing file"
+    if signature == "UVM_PHASE_OBJECTION_TIMEOUT":
+        return f"Inspect the UVM phase objection and timeout path around {target}, then rerun the smallest test with phase tracing enabled."
+    if signature == "UVM_CONFIG_DB_ERROR" or signature == "UVM_VIRTUAL_INTERFACE_ERROR":
+        return f"Trace config_db set/get paths for {target}, especially virtual-interface wiring between the test, env, and agent."
+    if signature == "UVM_SCOREBOARD_MISMATCH":
+        return f"Compare expected and observed transactions in the scoreboard near {target}, then inspect the driving sequence and monitor sampling."
+    if signature.startswith("UVM_"):
+        return f"Start from the cited UVM component near {target}, reduce to one failing seed, and inspect the related sequence, monitor, or scoreboard."
+    if signature.startswith("VIVADO_") or signature.startswith("QUARTUS_") or signature.startswith("LIBERO_"):
+        return f"Open the cited vendor build stage around {target}, verify constraints and generated file inputs, then rerun that stage before the full flow."
     if signature == "SIM_TIMEOUT":
         return f"Inspect the timeout site in {target}, then check the driving sequence and reset/ready conditions around that block."
     if signature == "SV_UNKNOWN_IDENTIFIER":
@@ -223,6 +250,54 @@ def _suggested_action(signature: str, files: list[str]) -> str:
     if signature == "FILE_NOT_FOUND":
         return "Confirm the missing file is present and included in the tool invocation before rerunning the regression."
     return f"Start from {target}, inspect the first cited evidence block, and rerun the smallest reproducer before scaling back to the full regression."
+
+
+def _uvm_likely_cause(signature: str, target: str) -> str:
+    if signature == "UVM_PHASE_OBJECTION_TIMEOUT":
+        return f"UVM phase progress appears blocked near {target}, often from an uncleared objection or a sequence that never completes."
+    if signature == "UVM_CONFIG_DB_ERROR":
+        return f"UVM configuration lookup failed near {target}, likely from a missing config_db set, bad hierarchy path, or wrong field name."
+    if signature == "UVM_VIRTUAL_INTERFACE_ERROR":
+        return f"Virtual-interface binding failed near {target}, usually from config_db wiring or a testbench top connection issue."
+    if signature == "UVM_SCOREBOARD_MISMATCH":
+        return f"Scoreboard evidence points to a transaction mismatch near {target}, likely from monitor sampling, predictor, or DUT behavior drift."
+    if signature == "UVM_SEQUENCE_TIMEOUT":
+        return f"A UVM sequence timed out near {target}, suggesting stalled stimulus, blocked arbitration, or missing DUT response."
+    return f"UVM diagnostics share {signature.lower()} near {target}; start from the cited component and failing seed."
+
+
+def _retrieval_mode_for_observations(observations: list[Observation]) -> str:
+    families = {item.log_family for item in observations if item.log_family}
+    tools = {item.tool_name for item in observations if item.tool_name}
+    if "uvm" in families:
+        return "uvm_triage"
+    if "vendor_build" in families or tools & {"vivado", "quartus", "libero"}:
+        return "vendor_build"
+    if any(item.type == "imported_log" for item in observations):
+        return "regression"
+    return "triage"
+
+
+def _primary_value(items: list[Observation], attribute: str) -> str:
+    values = [str(getattr(item, attribute)) for item in items if str(getattr(item, attribute, "")).strip()]
+    if not values:
+        return ""
+    return Counter(values).most_common(1)[0][0]
+
+
+def _cluster_values(items: list[Observation], attribute: str) -> list[str]:
+    return sorted({str(getattr(item, attribute)) for item in items if str(getattr(item, attribute, "")).strip()})
+
+
+def _domain_for_items(items: list[Observation]) -> str:
+    family = _primary_value(items, "log_family")
+    if family == "uvm":
+        return "uvm_testbench"
+    if family == "vendor_build":
+        return "fpga_vendor_build"
+    if any(item.type == "imported_log" for item in items):
+        return "regression_import"
+    return "rtl_simulation"
 
 
 def _find_similar_runs(store: RunStore, previous_runs: list[VerificationRun], items: list[Observation]) -> list[SimilarRunMatch]:

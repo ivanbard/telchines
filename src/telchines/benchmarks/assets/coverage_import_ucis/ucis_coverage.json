@@ -1,0 +1,31 @@
+{
+  "tool": "ucis-json",
+  "generated_at": "2026-04-15T00:00:00+00:00",
+  "design": "uart_rx",
+  "focus_paths": ["rtl/uart_rx.sv", "docs/uart.md"],
+  "covergroups": [
+    {
+      "name": "uart_rx_cg",
+      "module": "uart_rx",
+      "coverpoints": [
+        {
+          "name": "start_bit_seen",
+          "metric": "functional",
+          "source": "rtl/uart_rx.sv",
+          "bins": [
+            {"name": "low_start", "count": 0, "at_least": 2, "detail": "Start bit stimulus bin remains uncovered."}
+          ]
+        },
+        {
+          "name": "stop_bit_seen",
+          "metric": "functional",
+          "source": "rtl/uart_rx.sv",
+          "bins": [
+            {"name": "high_stop", "count": 1, "at_least": 1, "detail": "Covered stop bit bin."}
+          ]
+        }
+      ]
+    }
+  ],
+  "exclusions": []
+}

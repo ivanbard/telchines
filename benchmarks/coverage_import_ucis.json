@@ -1,0 +1,16 @@
+{
+  "benchmark_id": "coverage_import_ucis",
+  "task_type": "coverage_import",
+  "title": "Import UCIS-style coverage and plan closure",
+  "fixture_root": "benchmarks/assets/coverage_import_ucis",
+  "config": {
+    "source_format": "ucis-json",
+    "source_path": "ucis_coverage.json",
+    "output_path": "cov/imported_coverage.json"
+  },
+  "scoring": {
+    "min_items": 2,
+    "min_recommendations": 1,
+    "expected_classifications": ["missing_stimulus"]
+  }
+}

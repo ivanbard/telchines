@@ -1,0 +1,110 @@
+{
+  "templates": [
+    {
+      "name": "basic-rtl",
+      "description": "Minimal RTL, docs, logs, and coverage scaffold.",
+      "directories": ["docs", "rtl", "logs/regressions", "cov", "examples"],
+      "aliases": {
+        "reset": ["rst_n", "reset_n", "rst"],
+        "clock": ["clk", "clock"],
+        "regression": ["logs/regressions", "seed", "failure"]
+      },
+      "files": [
+        {
+          "path": "README.telchines.md",
+          "content": "# Telchines Project\n\nThis scaffold keeps RTL, docs, logs, coverage, and import examples in predictable local paths.\n"
+        },
+        {
+          "path": "examples/regression_manifest.json",
+          "kind": "json",
+          "content": {
+            "schema_version": "0.1",
+            "tool": {"kind": "regression_manager", "name": "example", "version": "0.1"},
+            "runs": []
+          }
+        },
+        {
+          "path": "cov/coverage.json",
+          "kind": "json",
+          "content": {
+            "schema_version": "0.1",
+            "tool": "template",
+            "generated_at": "1970-01-01T00:00:00+00:00",
+            "design": "example",
+            "items": [
+              {
+                "item_id": "example_smoke",
+                "module": "example",
+                "metric": "functional",
+                "name": "smoke",
+                "hits": 0,
+                "goal": 1,
+                "coverage": 0.0,
+                "detail": "Replace this template item with real coverage export data."
+              }
+            ],
+            "focus_paths": ["rtl"],
+            "exclusions": [],
+            "reachability_hints": []
+          }
+        }
+      ]
+    },
+    {
+      "name": "cocotb",
+      "description": "Adds cocotb-oriented test and generated-artifact paths.",
+      "directories": ["docs", "rtl", "tests/cocotb", "logs/regressions", "cov", "examples"],
+      "aliases": {"cocotb": ["testbench", "dut", "makefile", "simulator"]},
+      "files": [
+        {"path": "README.telchines.md", "content": "# Cocotb Telchines Project\n\nUse `tel gen-cocotb --dut rtl/<dut>.sv --spec docs/<spec>.md` to draft reviewable tests.\n"},
+        {"path": "tests/cocotb/README.md", "content": "# Cocotb Tests\n\nKeep human-reviewed cocotb tests here.\n"},
+        {"path": "examples/regression_manifest.json", "kind": "json", "content": {"schema_version": "0.1", "tool": "cocotb", "runs": []}}
+      ]
+    },
+    {
+      "name": "uvm",
+      "description": "Adds UVM testbench directories and retrieval aliases.",
+      "directories": ["docs", "rtl", "tb/uvm", "logs/regressions", "cov", "examples"],
+      "aliases": {
+        "uvm timeout": ["UVM_ERROR", "phase", "objection", "sequence timeout"],
+        "vif": ["virtual interface", "config_db"],
+        "scoreboard": ["expected", "observed", "mismatch"]
+      },
+      "files": [
+        {"path": "README.telchines.md", "content": "# UVM Telchines Project\n\nTriage UVM logs with `tel triage --logs logs/regressions --format human`.\n"},
+        {"path": "tb/uvm/README.md", "content": "# UVM Testbench\n\nPlace env, agents, sequences, and scoreboard sources here.\n"},
+        {"path": "examples/junit.xml", "content": "<testsuite name=\"uvm\" tests=\"0\"></testsuite>\n"}
+      ]
+    },
+    {
+      "name": "vivado",
+      "description": "Adds Vivado build-log and constraint placeholders.",
+      "directories": ["docs", "rtl", "constraints", "build/vivado", "logs/regressions", "cov", "examples"],
+      "aliases": {"vivado": ["Synth", "Place", "Route", "Timing"], "xdc": ["constraints", "clock"]},
+      "files": [
+        {"path": "README.telchines.md", "content": "# Vivado Telchines Project\n\nImport exported coverage, index build logs, and triage Vivado diagnostics locally.\n"},
+        {"path": "constraints/README.md", "content": "# Constraints\n\nKeep project XDC files or references here.\n"}
+      ]
+    },
+    {
+      "name": "quartus",
+      "description": "Adds Quartus build-log and constraint placeholders.",
+      "directories": ["docs", "rtl", "constraints", "build/quartus", "logs/regressions", "cov", "examples"],
+      "aliases": {"quartus": ["Analysis", "Synthesis", "Fitter", "TimeQuest"], "sdc": ["constraints", "clock"]},
+      "files": [
+        {"path": "README.telchines.md", "content": "# Quartus Telchines Project\n\nUse vendor build logs with `tel triage` and normalize coverage exports before `coverage-plan`.\n"},
+        {"path": "constraints/README.md", "content": "# Constraints\n\nKeep SDC files or references here.\n"}
+      ]
+    },
+    {
+      "name": "libero",
+      "description": "Adds Libero build-log and constraint placeholders.",
+      "directories": ["docs", "rtl", "constraints", "build/libero", "logs/regressions", "cov", "examples"],
+      "aliases": {"libero": ["synthesis", "place", "route", "timing"], "pdc": ["constraints", "clock"]},
+      "files": [
+        {"path": "README.telchines.md", "content": "# Libero Telchines Project\n\nUse local exports and logs; no vendor install paths or secrets are stored by this template.\n"},
+        {"path": "constraints/README.md", "content": "# Constraints\n\nKeep PDC/SDC files or references here.\n"}
+      ]
+    }
+  ]
+}

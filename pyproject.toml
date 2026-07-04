@@ -72,7 +72,7 @@ package-dir = {"" = "src"}
 where = ["src"]
 
 [tool.setuptools.package-data]
-telchines = ["benchmarks/*.json", "benchmarks/assets/**/*"]
+telchines = ["benchmarks/*.json", "benchmarks/assets/**/*", "templates/*.json"]
 
 [tool.setuptools.exclude-package-data]
 telchines = ["benchmarks/assets/**/__pycache__/*", "benchmarks/assets/**/*.pyc", "benchmarks/assets/**/*.pyo"]

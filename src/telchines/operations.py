@@ -8,6 +8,8 @@ from dataclasses import asdict
 from pathlib import Path
 
 from telchines.adapters.base import AdapterRunSpec
+from telchines.ci_importers import import_ci_runs
+from telchines.coverage_import import import_coverage_report
 from telchines.errors import WorkflowInputError
 from telchines.adapters.registry import AdapterRegistry
 from telchines.config import ProjectConfig
@@ -22,6 +24,7 @@ from telchines.model_catalog import (
 )
 from telchines.models import VerificationRun
 from telchines.providers import _provider_network_scope, build_generation_provider, build_repair_provider, check_provider_statuses, list_provider_statuses
+from telchines.project_templates import apply_project_template, list_project_templates
 from telchines.retrieval import RetrievalService
 from telchines.run_store import RunStore
 from telchines.utils import SECRET_KEY_RE, dataclass_to_dict, ensure_directory, read_json, remove_tree, stable_id, utc_now
@@ -41,8 +44,17 @@ def load_services(root: Path | None = None) -> tuple[ProjectConfig, RunStore, Re
     return config, store, retrieval
 
 
-def initialize_project(path: Path, name: str | None = None) -> ProjectConfig:
-    return ProjectConfig.init_project(path, name=name)
+def initialize_project(path: Path, name: str | None = None, template: str | None = None) -> ProjectConfig:
+    config = ProjectConfig.init_project(path, name=name)
+    if template:
+        apply_project_template(config, template)
+        config = ProjectConfig.load(config.project_root)
+    return config
+
+
+def project_templates() -> dict[str, object]:
+    templates = list_project_templates()
+    return {"templates": templates, "template_count": len(templates)}
 
 
 def index_project(root: Path | None = None) -> int:
@@ -371,6 +383,11 @@ def replay_run(root: Path | None, run_id: str, *, confirm: bool = False) -> dict
 def import_runs(root: Path | None, manifest: Path, *, dry_run: bool = False) -> dict[str, object]:
     config, store, _ = load_services(root)
     return import_regression_manifest(config, store, manifest, dry_run=dry_run)
+
+
+def import_runs_from_ci(root: Path | None, source: Path, *, importer: str, dry_run: bool = False) -> dict[str, object]:
+    config, store, _ = load_services(root)
+    return import_ci_runs(config, store, source, importer=importer, dry_run=dry_run)
 
 
 def repair(
@@ -747,6 +764,19 @@ def list_providers(root: Path | None = None) -> dict[str, object]:
     }
 
 
+def coverage_import(
+    root: Path | None,
+    source: Path,
+    *,
+    source_format: str,
+    output: Path,
+) -> dict[str, object]:
+    config, _, _ = load_services(root)
+    source_path = source if source.is_absolute() else (config.project_root / source).resolve()
+    _require_file(source_path, f"coverage source does not exist: {relative_to_project(config, source_path)}")
+    return import_coverage_report(config, source_path, source_format=source_format, output=output)
+
+
 def check_providers(root: Path | None = None, provider_name: str | None = None, *, live: bool = True) -> dict[str, object]:
     config, _, _ = load_services(root)
     checks = [dataclass_to_dict(check) for check in check_provider_statuses(config, provider_name, live=live)]
@@ -851,6 +881,9 @@ def format_triage_ci(payload: dict[str, object]) -> dict[str, object]:
                 "signature": cluster["signature"],
                 "count": cluster["count"],
                 "summary": cluster["summary"],
+                "log_family": cluster.get("log_family", ""),
+                "tool_name": cluster.get("tool_name", ""),
+                "domain": cluster.get("domain", ""),
                 "likely_cause": cluster["likely_cause"],
                 "suggested_action": cluster["suggested_action"],
                 "evidence": [hit["citation"] for hit in cluster["evidence_hits"]],
@@ -889,6 +922,7 @@ def format_triage_human(payload: dict[str, object]) -> str:
         evidence = ", ".join(hit["citation"] for hit in cluster["evidence_hits"][:3]) or "none"
         similar = ", ".join(match["run_id"] for match in cluster["similar_runs"]) or "none"
         waveforms = ", ".join(_format_waveform_evidence(item) for item in cluster["waveform_evidence"][:2]) or "none"
+        domain = _format_cluster_domain(cluster)
         formal = ", ".join(
             f"{item['run_id']} [{item['status']}]"
             + (f" props={', '.join(item['property_ids'][:2])}" if item.get("property_ids") else "")
@@ -898,6 +932,7 @@ def format_triage_human(payload: dict[str, object]) -> str:
             [
                 "",
                 f"{index}. {cluster['summary']}",
+                f"domain: {domain}",
                 f"likely cause: {cluster['likely_cause']}",
                 f"suggested action: {cluster['suggested_action']}",
                 f"evidence: {evidence}",
@@ -920,6 +955,15 @@ def _format_waveform_evidence(item: dict[str, object]) -> str:
     if reason:
         detail = f"{detail}; {reason}"
     return f"{item['source_path']} ({detail})"
+
+
+def _format_cluster_domain(cluster: dict[str, object]) -> str:
+    parts = [
+        str(cluster.get("domain", "")).strip(),
+        str(cluster.get("log_family", "")).strip(),
+        str(cluster.get("tool_name", "")).strip(),
+    ]
+    return " / ".join(part for part in parts if part) or "generic"
 
 
 def dump_json(value: object) -> str:

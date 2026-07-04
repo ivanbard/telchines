@@ -20,11 +20,21 @@ VALID_IMPORTED_STATUSES = {"passed", "failed", "error", "skipped", "unknown"}
 def import_regression_manifest(config: ProjectConfig, store: RunStore, manifest: Path, *, dry_run: bool = False) -> dict[str, object]:
     manifest_path = _resolve_manifest_file(config, manifest)
     payload = _load_manifest(manifest_path)
+    return import_regression_payload(config, store, payload, manifest_label=_label_path(config, manifest_path), dry_run=dry_run)
+
+
+def import_regression_payload(
+    config: ProjectConfig,
+    store: RunStore,
+    payload: dict[str, Any],
+    *,
+    manifest_label: str,
+    dry_run: bool = False,
+) -> dict[str, object]:
     _validate_manifest_header(payload)
     tool = _tool_reference(payload["tool"])
     run_items = payload["runs"]
     imported_at = utc_now()
-    manifest_label = _label_path(config, manifest_path)
 
     imported_runs: list[dict[str, object]] = []
     for index, item in enumerate(run_items, start=1):
@@ -106,6 +116,7 @@ def _build_imported_run(
     metadata = _metadata(item, index)
     command = _command(item, index)
     log_paths = _path_list(config, item, index, field_names=("logs", "log_paths"))
+    inline_logs = _inline_logs(item, index)
     waveform_paths = _path_list(config, item, index, field_names=("waveforms", "waveform_paths"))
     artifact_paths = _artifact_paths(config, item.get("artifacts"), index)
     run_id = stable_id("run", config.project.project_id, IMPORT_WORKFLOW_TYPE, manifest_label, str(index), name, imported_at)
@@ -113,6 +124,8 @@ def _build_imported_run(
     observations = []
     for log_path in log_paths:
         observations.extend(parse_common_output(run_id, log_path.read_text(encoding="utf-8"), default_type="imported_log"))
+    for log_text in inline_logs:
+        observations.extend(parse_common_output(run_id, log_text, default_type="imported_log"))
 
     waveform_ids: list[str] = []
     if not dry_run:
@@ -143,6 +156,7 @@ def _build_imported_run(
         "seed": seed,
         "metadata": metadata,
         "log_paths": relative_logs,
+        "inline_log_count": len(inline_logs),
         "artifact_paths": relative_artifacts,
         "waveform_paths": relative_waveforms,
     }
@@ -179,6 +193,7 @@ def _build_imported_run(
         "name": name,
         "status": status,
         "observation_count": len(observations),
+        "inline_log_count": len(inline_logs),
         "waveform_count": len(waveform_paths),
         "log_paths": relative_logs,
         "artifact_paths": relative_artifacts,
@@ -210,6 +225,22 @@ def _metadata(item: dict[str, Any], index: int) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError(f"import manifest run {index} metadata must be an object")
     return value
+
+
+def _inline_logs(item: dict[str, Any], index: int) -> list[str]:
+    values: list[str] = []
+    for field_name in ("log_text", "inline_log", "inline_logs"):
+        value = item.get(field_name)
+        if value in (None, ""):
+            continue
+        if isinstance(value, str):
+            values.append(value)
+            continue
+        if isinstance(value, list) and all(isinstance(inner, str) for inner in value):
+            values.extend(value)
+            continue
+        raise ValueError(f"import manifest run {index} {field_name} must be a string or list of strings")
+    return [value for value in values if value.strip()]
 
 
 def _command(item: dict[str, Any], index: int) -> list[str]:

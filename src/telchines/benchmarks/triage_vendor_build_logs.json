@@ -1,0 +1,13 @@
+{
+  "benchmark_id": "triage_vendor_build_logs",
+  "task_type": "triage",
+  "title": "Cluster FPGA vendor build failures",
+  "fixture_root": "benchmarks/assets/triage_vendor_build_logs",
+  "config": {
+    "logs_path": "logs"
+  },
+  "scoring": {
+    "min_clusters": 3,
+    "expected_signatures": ["VIVADO_SYNTH_ERROR", "QUARTUS_FITTER_ERROR", "LIBERO_TIMING_ERROR"]
+  }
+}

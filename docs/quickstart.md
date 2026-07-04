@@ -29,9 +29,12 @@ From the root of a verification repo:
 
 ```bash
 tel project init .
+tel project init . --template uvm
+tel project templates
 ```
 
 This creates `.tel/config.json` and the local storage directories used for indexing, runs, generated artifacts, and reports.
+Templates add minimal local scaffolds for common setups such as `basic-rtl`, `cocotb`, `uvm`, `vivado`, `quartus`, and `libero`.
 
 ## Build The Index
 
@@ -121,6 +124,26 @@ Use `tel runs import MANIFEST` to bring external regression-manager or test-runn
 ```
 
 Imported runs use workflow type `regression_import`, appear in `tel runs list` and `tel runs show`, and their parsed log observations can be matched as similar prior runs during later triage.
+
+Common CI/regression exports can be normalized into the same run store:
+
+```bash
+tel runs import-junit reports/junit.xml --dry-run
+tel runs import-github-actions reports/gha-run.json
+tel runs import-jenkins reports/jenkins-build.json
+```
+
+## Import Coverage Exports
+
+Normalize coverage exports before planning closure:
+
+```bash
+tel coverage import reports/ucis.json --format ucis-json --output cov/coverage.json
+tel coverage import reports/questa.txt --format questa-text --output cov/coverage.json
+tel coverage-plan --report cov/coverage.json --format human
+```
+
+Supported first-pass import formats are `telchines-json`, `ucis-json`, `vivado`, `quartus`, and `questa-text`. Unsupported source lines are reported as import warnings.
 
 ## Use The Shell
 

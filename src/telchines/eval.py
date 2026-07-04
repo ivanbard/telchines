@@ -9,7 +9,9 @@ from pathlib import Path
 from typing import Any
 
 from telchines.adapters.parsing import parse_common_output
+from telchines.ci_importers import import_ci_runs
 from telchines.config import ProjectConfig
+from telchines.coverage_import import import_coverage_report
 from telchines.models import BenchmarkCase, ToolReference, VerificationRun
 from telchines.providers import build_generation_provider, build_repair_provider
 from telchines.retrieval import RetrievalService
@@ -76,6 +78,10 @@ def _run_default_suite(config: ProjectConfig, store: RunStore) -> dict[str, obje
             results.append(_run_cocotb_case(config, case))
         elif case.task_type == "coverage":
             results.append(_run_coverage_case(config, case))
+        elif case.task_type == "import":
+            results.append(_run_import_case(config, case))
+        elif case.task_type == "coverage_import":
+            results.append(_run_coverage_import_case(config, case))
     passed = sum(1 for result in results if result["passed"])
     report = {
         "suite": "default",
@@ -225,13 +231,16 @@ def _run_triage_case(config: ProjectConfig, store: RunStore, retrieval: Retrieva
     logs_path = config.project_root / case.fixture_root / case.config["logs_path"]
     run, clusters, _ = triage_logs(config, store, retrieval, logs_path)
     expected = int(case.scoring.get("min_clusters", 1))
-    passed = len(clusters) >= expected
+    expected_signatures = {str(value) for value in case.scoring.get("expected_signatures", [])}
+    signatures = {cluster.signature for cluster in clusters}
+    passed = len(clusters) >= expected and expected_signatures.issubset(signatures)
     return {
         "benchmark_id": case.benchmark_id,
         "task_type": case.task_type,
         "passed": passed,
         "run_id": run.run_id,
         "cluster_count": len(clusters),
+        "matched_signatures": sorted(expected_signatures & signatures),
         "evidence_hits": sum(len(cluster.evidence_hits) for cluster in clusters),
     }
 
@@ -498,6 +507,76 @@ def _run_coverage_case(config: ProjectConfig, case: BenchmarkCase) -> dict[str, 
         remove_tree(temp_root)
 
 
+def _run_import_case(config: ProjectConfig, case: BenchmarkCase) -> dict[str, object]:
+    fixture_root = config.project_root / case.fixture_root
+    temp_root = copy_tree_to_temp(fixture_root)
+    try:
+        temp_config = ProjectConfig.init_project(temp_root)
+        temp_store = RunStore(temp_config)
+        importer = str(case.config["importer"])
+        source = temp_root / str(case.config["source_path"])
+        payload = import_ci_runs(temp_config, temp_store, source, importer=importer, dry_run=False)
+        expected_count = int(case.scoring.get("expected_imported_count", 1))
+        expected_observations = int(case.scoring.get("min_observations", 1))
+        runs = temp_store.list_runs_by_workflow("regression_import")
+        observation_count = sum(len(run.observation_ids) for run in runs)
+        tool_names = {run.tool.name for run in runs}
+        passed = (
+            int(payload["imported_count"]) >= expected_count
+            and len(runs) >= expected_count
+            and observation_count >= expected_observations
+            and importer in tool_names
+        )
+        return {
+            "benchmark_id": case.benchmark_id,
+            "task_type": case.task_type,
+            "passed": passed,
+            "source_format": importer,
+            "imported_count": payload["imported_count"],
+            "stored_count": len(runs),
+            "observation_count": observation_count,
+        }
+    finally:
+        remove_tree(temp_root)
+
+
+def _run_coverage_import_case(config: ProjectConfig, case: BenchmarkCase) -> dict[str, object]:
+    fixture_root = config.project_root / case.fixture_root
+    temp_root = copy_tree_to_temp(fixture_root)
+    try:
+        temp_config = ProjectConfig.init_project(temp_root)
+        temp_store = RunStore(temp_config)
+        retrieval = RetrievalService(temp_config)
+        retrieval.build_index()
+        output = temp_root / str(case.config.get("output_path", "cov/imported_coverage.json"))
+        import_payload = import_coverage_report(
+            temp_config,
+            temp_root / str(case.config["source_path"]),
+            source_format=str(case.config["source_format"]),
+            output=output,
+        )
+        plan, run, context = execute_coverage_plan(temp_config, temp_store, retrieval, output)
+        expected_classifications = {str(value) for value in case.scoring.get("expected_classifications", [])}
+        actual_classifications = {item.classification for item in plan.recommendations}
+        passed = (
+            int(import_payload["item_count"]) >= int(case.scoring.get("min_items", 1))
+            and len(plan.recommendations) >= int(case.scoring.get("min_recommendations", 1))
+            and expected_classifications.issubset(actual_classifications)
+        )
+        return {
+            "benchmark_id": case.benchmark_id,
+            "task_type": case.task_type,
+            "passed": passed,
+            "context_id": context.context_id,
+            "run_id": run.run_id,
+            "item_count": import_payload["item_count"],
+            "recommendation_count": len(plan.recommendations),
+            "matched_classifications": sorted(expected_classifications & actual_classifications),
+        }
+    finally:
+        remove_tree(temp_root)
+
+
 def _aggregate_metrics(results: list[dict[str, object]]) -> dict[str, object]:
     agent_results = [result for result in results if result["task_type"] == "agent"]
     retrieval_results = [result for result in results if result["task_type"] == "retrieval"]
@@ -594,6 +673,23 @@ def _aggregate_metrics(results: list[dict[str, object]]) -> dict[str, object]:
             ),
             "avg_supporting_run_count": round(
                 sum(int(result["supporting_run_count"]) for result in coverage_results) / len(coverage_results),
+                3,
+            ),
+        }
+    import_results = [result for result in results if result["task_type"] == "import"]
+    if import_results:
+        metrics["import"] = {
+            "cases": len(import_results),
+            "avg_imported_count": round(sum(int(result["imported_count"]) for result in import_results) / len(import_results), 3),
+            "avg_observation_count": round(sum(int(result["observation_count"]) for result in import_results) / len(import_results), 3),
+        }
+    coverage_import_results = [result for result in results if result["task_type"] == "coverage_import"]
+    if coverage_import_results:
+        metrics["coverage_import"] = {
+            "cases": len(coverage_import_results),
+            "avg_item_count": round(sum(int(result["item_count"]) for result in coverage_import_results) / len(coverage_import_results), 3),
+            "avg_recommendation_count": round(
+                sum(int(result["recommendation_count"]) for result in coverage_import_results) / len(coverage_import_results),
                 3,
             ),
         }

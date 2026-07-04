@@ -18,6 +18,9 @@ MODE_KIND_BOOSTS = {
     "general": {"rtl": 0.15, "doc": 0.1, "log": 0.1, "script": 0.05},
     "repair": {"rtl": 0.45, "doc": 0.2, "log": 0.05, "script": 0.0},
     "triage": {"log": 0.45, "rtl": 0.25, "doc": 0.15, "script": 0.0},
+    "uvm_triage": {"log": 0.5, "script": 0.2, "rtl": 0.2, "doc": 0.18},
+    "vendor_build": {"log": 0.5, "rtl": 0.28, "doc": 0.12, "script": 0.04},
+    "regression": {"log": 0.5, "rtl": 0.2, "doc": 0.15, "script": 0.08},
     "generation": {"doc": 0.45, "rtl": 0.35, "log": 0.0, "script": 0.0},
     "coverage": {"doc": 0.35, "rtl": 0.35, "log": 0.05, "script": 0.0},
 }
@@ -25,6 +28,9 @@ MODE_DOMAIN_BOOSTS = {
     "general": {"project": 0.12, "external": 0.0},
     "repair": {"project": 0.3, "external": -0.12},
     "triage": {"project": 0.35, "external": -0.15},
+    "uvm_triage": {"project": 0.35, "external": -0.08},
+    "vendor_build": {"project": 0.32, "external": -0.1},
+    "regression": {"project": 0.3, "external": -0.05},
     "generation": {"project": 0.16, "external": 0.06},
     "coverage": {"project": 0.24, "external": -0.05},
 }

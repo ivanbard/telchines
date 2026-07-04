@@ -71,6 +71,9 @@ class Observation:
     line: int | None
     message: str
     severity: str
+    log_family: str = ""
+    tool_name: str = ""
+    metadata: dict[str, Any] = field(default_factory=dict)
     schema_version: str = SCHEMA_VERSION
 
 
@@ -364,4 +367,8 @@ class FailureCluster:
     similar_runs: list[SimilarRunMatch] = field(default_factory=list)
     formal_evidence: list[FormalEvidence] = field(default_factory=list)
     waveform_evidence: list[WaveformEvidence] = field(default_factory=list)
+    log_family: str = ""
+    tool_name: str = ""
+    domain: str = ""
+    metadata: dict[str, Any] = field(default_factory=dict)
     schema_version: str = SCHEMA_VERSION

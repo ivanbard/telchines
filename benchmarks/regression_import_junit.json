@@ -1,0 +1,14 @@
+{
+  "benchmark_id": "regression_import_junit",
+  "task_type": "import",
+  "title": "Normalize JUnit regression results",
+  "fixture_root": "benchmarks/assets/regression_import_junit",
+  "config": {
+    "importer": "junit",
+    "source_path": "junit.xml"
+  },
+  "scoring": {
+    "expected_imported_count": 2,
+    "min_observations": 1
+  }
+}

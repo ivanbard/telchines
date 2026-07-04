@@ -18,7 +18,7 @@ def test_eval_default_suite(work_root: Path) -> None:
     store = RunStore(config)
     report = run_default_suite(config, store)
     assert report["passed"] == report["total"]
-    assert report["total"] == 20
+    assert report["total"] == 24
     assert report["metrics"]["agent"]["cases"] == 1
     assert report["metrics"]["agent"]["pass_rate"] == 1.0
     assert report["metrics"]["agent"]["review_required_count"] == 1
@@ -44,7 +44,11 @@ def test_eval_default_suite(work_root: Path) -> None:
     assert report["metrics"]["coverage"]["cases"] == 3
     assert report["metrics"]["coverage"]["avg_recommendation_count"] >= 1.0
     assert report["metrics"]["coverage"]["avg_evidence_count"] >= 1.0
-    assert report["metrics"]["triage"]["cases"] == 2
+    assert report["metrics"]["triage"]["cases"] == 4
+    assert report["metrics"]["import"]["cases"] == 1
+    assert report["metrics"]["import"]["avg_imported_count"] == 2.0
+    assert report["metrics"]["coverage_import"]["cases"] == 1
+    assert report["metrics"]["coverage_import"]["avg_item_count"] == 2.0
 
 
 def test_eval_default_suite_uses_bundled_benchmarks(work_root: Path) -> None:
@@ -57,5 +61,5 @@ def test_eval_default_suite_uses_bundled_benchmarks(work_root: Path) -> None:
     report = run_default_suite(config, store)
 
     assert report["passed"] == report["total"]
-    assert report["total"] == 20
-    assert store.load_report("latest_eval")["total"] == 20
+    assert report["total"] == 24
+    assert store.load_report("latest_eval")["total"] == 24
