@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import io
 import shlex
 import sys
 import time
@@ -320,7 +321,8 @@ def _run_basic_shell(session: ShellSession) -> None:
             typer.echo(f"error: {exc}")
             continue
         if rendered:
-            session.transcript.append(rendered)
+            if not _is_transcript_command(user_input):
+                session.transcript.append(rendered)
             typer.echo(rendered)
         if should_exit:
             return
@@ -407,9 +409,10 @@ def _build_fullscreen_shell_app(session: ShellSession, **app_kwargs: Any) -> App
 
     kb = KeyBindings()
 
-    def append_rendered(rendered: str) -> None:
+    def append_rendered(rendered: str, *, record: bool = True) -> None:
         if rendered:
-            session.transcript.append(rendered)
+            if record:
+                session.transcript.append(rendered)
             transcript_area.text = "\n\n".join(session.transcript)
             transcript_area.buffer.cursor_position = len(transcript_area.text)
 
@@ -464,7 +467,7 @@ def _build_fullscreen_shell_app(session: ShellSession, **app_kwargs: Any) -> App
             input_area.prompt = session.prompt()
             app.invalidate()
             return
-        append_rendered(rendered)
+        append_rendered(rendered, record=not _is_transcript_command(user_input))
         input_area.text = ""
         input_area.prompt = session.prompt()
         app.invalidate()
@@ -941,6 +944,11 @@ def _is_help_command(user_input: str) -> bool:
     return stripped in {"/help", "help"}
 
 
+def _is_transcript_command(user_input: str) -> bool:
+    stripped = user_input.strip().lower()
+    return stripped in {"/transcript", "transcript"}
+
+
 def render_provider_payload(payload: dict[str, object]) -> str:
     defaults = payload.get("default_provider_by_capability", {})
     table = Table(title="Provider Status", show_header=True, header_style="bold cyan")
@@ -1191,6 +1199,7 @@ def render_agent_payload(payload: dict[str, object]) -> str:
             value = result.get(key)
             if value:
                 body.append(f"{key.replace('_', ' ')}: {value}")
+        _append_validation_limitations(body, result)
         attempts = result.get("attempts")
         if isinstance(attempts, list) and attempts:
             body.append(f"attempts: {len(attempts)}")
@@ -1230,11 +1239,17 @@ def render_sva_payload(payload: dict[str, object]) -> str:
     body = [
         f"provider: {payload['provider']}",
         f"status: {payload['status']}",
-        f"artifact: {payload['artifact_path']}",
-        f"validation: {payload['validation_status']}",
-        f"validation mode: {payload['validation_mode']}",
     ]
-    if payload["explanation"]:
+    for label, key in (
+        ("artifact", "artifact_path"),
+        ("validation", "validation_status"),
+        ("validation mode", "validation_mode"),
+    ):
+        value = payload.get(key)
+        if value:
+            body.append(f"{label}: {value}")
+    _append_validation_limitations(body, payload)
+    if payload.get("explanation"):
         body.append(f"explanation: {payload['explanation']}")
     attempts = payload.get("attempts") or []
     if isinstance(attempts, list) and attempts:
@@ -1251,13 +1266,19 @@ def render_cocotb_payload(payload: dict[str, object]) -> str:
     body = [
         f"provider: {payload['provider']}",
         f"status: {payload['status']}",
-        f"top module: {payload['top_module']}",
-        f"artifact: {payload['artifact_path']}",
-        f"manifest: {payload['manifest_path']}",
-        f"validation: {payload['validation_status']}",
-        f"validation mode: {payload['validation_mode']}",
     ]
-    if payload["explanation"]:
+    for label, key in (
+        ("top module", "top_module"),
+        ("artifact", "artifact_path"),
+        ("manifest", "manifest_path"),
+        ("validation", "validation_status"),
+        ("validation mode", "validation_mode"),
+    ):
+        value = payload.get(key)
+        if value:
+            body.append(f"{label}: {value}")
+    _append_validation_limitations(body, payload)
+    if payload.get("explanation"):
         body.append(f"explanation: {payload['explanation']}")
     attempts = payload.get("attempts") or []
     if isinstance(attempts, list) and attempts:
@@ -1380,6 +1401,7 @@ def render_run_show(payload: dict[str, object]) -> str:
         validation_mode = tool_result.get("validation_mode")
         if validation_mode:
             lines.append(f"validation mode: {validation_mode}")
+        _append_validation_limitations(lines, tool_result)
         status = tool_result.get("status")
         if status:
             lines.append(f"tool result: {status}")
@@ -1444,7 +1466,28 @@ def render_replay_payload(payload: dict[str, object]) -> str:
 
 
 def render_eval_payload(payload: dict[str, object]) -> str:
-    return render_action_panel("Evaluation", f"suite={payload['suite']}\npassed={payload['passed']}/{payload['total']}")
+    lines = [f"suite={payload['suite']}", f"passed={payload['passed']}/{payload['total']}"]
+    if payload.get("project_context"):
+        lines.append(f"context={payload['project_context']}")
+    if "report_persisted" in payload:
+        lines.append(f"report persisted={payload['report_persisted']}")
+    return render_action_panel("Evaluation", "\n".join(lines))
+
+
+def _append_validation_limitations(lines: list[str], payload: dict[str, object]) -> None:
+    formal_status = payload.get("formal_status")
+    if formal_status:
+        lines.append(f"formal status: {formal_status}")
+    executable_status = payload.get("executable_status")
+    if executable_status:
+        lines.append(f"executable status: {executable_status}")
+    limitations = payload.get("validation_limitations")
+    if not limitations:
+        limitations = payload.get("limitations")
+    if isinstance(limitations, list) and limitations:
+        lines.append("did not prove:")
+        for item in limitations[:3]:
+            lines.append(f"- {item}")
 
 
 def render_action_panel(title: str, body: str) -> str:
@@ -1834,9 +1877,35 @@ def _default_logs_path(cwd: Path) -> Path | None:
 
 
 def _render_rich(renderable, width: int = 100) -> str:
-    console = Console(record=True, width=width, soft_wrap=True)
+    console = Console(record=True, width=width, soft_wrap=True, file=io.StringIO(), legacy_windows=True)
     console.print(renderable)
-    return console.export_text(styles=False).rstrip()
+    return _ascii_safe_boxes(console.export_text(styles=False).rstrip())
+
+
+def _ascii_safe_boxes(text: str) -> str:
+    return text.translate(
+        str.maketrans(
+            {
+                "─": "-",
+                "━": "-",
+                "│": "|",
+                "┃": "|",
+                "┌": "+",
+                "┐": "+",
+                "└": "+",
+                "┘": "+",
+                "├": "+",
+                "┤": "+",
+                "┬": "+",
+                "┴": "+",
+                "┼": "+",
+                "╭": "+",
+                "╮": "+",
+                "╰": "+",
+                "╯": "+",
+            }
+        )
+    )
 
 
 def _completing_command_name(text: str) -> bool:

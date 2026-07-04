@@ -16,10 +16,12 @@ from prompt_toolkit.output import DummyOutput
 from telchines.shell import (
     ShellCompleter,
     ShellSession,
+    _ascii_safe_boxes,
     _build_fullscreen_shell_app,
     _dispatch_slash_command,
     _header_fragments,
     _is_help_command,
+    _is_transcript_command,
     _parse_agent_args,
     _parse_coverage_plan_args,
     _parse_gen_cocotb_args,
@@ -48,6 +50,11 @@ OPTION_VALUE = st.from_regex(r"[A-Za-z0-9_=./-]{1,24}", fullmatch=True).filter(l
 IDENT = st.from_regex(r"[A-Za-z_][A-Za-z0-9_]{0,12}", fullmatch=True)
 PROVIDER_NAME = st.from_regex(r"[A-Za-z][A-Za-z0-9_-]{0,12}", fullmatch=True).filter(lambda value: value != "heuristic")
 MODEL_NAME = st.from_regex(r"[A-Za-z0-9_.:/-]{1,24}", fullmatch=True)
+LIMITATION_TEXT = st.from_regex(r"[A-Za-z][A-Za-z0-9 _./:-]{0,40}", fullmatch=True).filter(lambda value: "None" not in value)
+LIMITATION_LIST = st.lists(st.from_regex(r"lim_[0-9]{3}", fullmatch=True), max_size=6, unique=True)
+OPTIONAL_STATUS = st.one_of(st.none(), st.from_regex(r"[A-Za-z][A-Za-z0-9_./:-]{0,20}", fullmatch=True))
+BOX_TEXT = st.text(alphabet=list("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 -_|+─━│┃┌┐└┘├┤┬┴┼╭╮╰╯"), max_size=80)
+BOX_CHARS = set("─━│┃┌┐└┘├┤┬┴┼╭╮╰╯")
 
 
 def _install_shell_model_policy(project_root: Path, provider_name: str = "local-test") -> None:
@@ -459,9 +466,53 @@ def test_shell_history_and_transcript_commands(sample_project: Path) -> None:
     assert "1. /providers" in history
     _, transcript = _dispatch_slash_command(session, "transcript")
     assert "hello" in transcript
+    assert _is_transcript_command("/transcript") is True
+    assert _is_transcript_command("transcript") is True
+    assert _is_transcript_command("/providers") is False
     _, cleared = _dispatch_slash_command(session, "clear")
     assert cleared == "transcript cleared"
     assert session.transcript == []
+
+
+def test_shell_transcript_command_does_not_append_rendered_transcript(sample_project: Path) -> None:
+    session = ShellSession(cwd=sample_project)
+    session.transcript.extend(["first", "second"])
+
+    _, transcript = _dispatch_slash_command(session, "transcript")
+
+    assert transcript == "first\n\nsecond"
+    assert session.transcript == ["first", "second"]
+
+
+@settings(max_examples=40)
+@given(
+    leading=st.text(alphabet=" \t", max_size=4),
+    trailing=st.text(alphabet=" \t", max_size=4),
+    command=st.sampled_from(["transcript", "TRANSCRIPT", "Transcript"]),
+    slash=st.booleans(),
+)
+def test_transcript_command_detection_accepts_whitespace_case_and_optional_slash(
+    leading: str,
+    trailing: str,
+    command: str,
+    slash: bool,
+) -> None:
+    assert _is_transcript_command(f"{leading}{'/' if slash else ''}{command}{trailing}") is True
+
+
+@settings(max_examples=40)
+@given(text=st.text(alphabet=" \tABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-", max_size=80))
+def test_ascii_safe_boxes_leaves_plain_ascii_unchanged(text: str) -> None:
+    assert _ascii_safe_boxes(text) == text
+
+
+@settings(max_examples=60)
+@given(text=BOX_TEXT)
+def test_ascii_safe_boxes_removes_box_characters_and_is_cp1252_safe(text: str) -> None:
+    translated = _ascii_safe_boxes(text)
+
+    assert not any(char in BOX_CHARS for char in translated)
+    translated.encode("cp1252", errors="strict")
 
 
 def test_shell_replay_confirmation_rendering() -> None:
@@ -606,6 +657,7 @@ def test_shell_result_renderers_include_validation_mode() -> None:
                 "validation_run_id": "run_2",
                 "validation_status": "passed",
                 "validation_mode": "adapter_replay",
+                "validation_limitations": ["adapter replay does not prove behavior"],
             },
             "evidence": {},
             "review_gate": {"summary": "review required"},
@@ -618,6 +670,8 @@ def test_shell_result_renderers_include_validation_mode() -> None:
             "artifact_path": ".tel/artifacts/generated/demo.sv",
             "validation_status": "passed",
             "validation_mode": "structure_only",
+            "formal_status": "not_run",
+            "validation_limitations": ["structural checks do not prove assertion semantics"],
             "explanation": "",
             "attempts": [],
             "rejected_candidate_ids": [],
@@ -633,6 +687,8 @@ def test_shell_result_renderers_include_validation_mode() -> None:
             "manifest_path": ".tel/artifacts/generated/manifest.json",
             "validation_status": "passed",
             "validation_mode": "syntax_plus_structure",
+            "executable_status": "skipped",
+            "validation_limitations": ["built-in validation does not run a simulator"],
             "explanation": "",
             "attempts": [],
             "rejected_candidate_ids": [],
@@ -642,8 +698,171 @@ def test_shell_result_renderers_include_validation_mode() -> None:
 
     assert "validation mode: adapter_replay" in repair
     assert "validation mode: adapter_replay" in agent
+    assert "adapter replay does not prove behavior" in agent
     assert "validation mode: structure_only" in sva
+    assert "formal status: not_run" in sva
+    assert "did not prove:" in sva
+    assert "assertion semantics" in sva
     assert "validation mode: syntax_plus_structure" in cocotb
+    assert "executable status: skipped" in cocotb
+    assert "does not run a simulator" in cocotb
+
+
+def test_shell_generation_renderers_skip_empty_artifact_rows() -> None:
+    rendered = render_sva_payload(
+        {
+            "provider": "heuristic",
+            "status": "no_generation",
+            "artifact_path": None,
+            "validation_status": None,
+            "validation_mode": None,
+            "formal_status": None,
+            "validation_limitations": [],
+            "explanation": None,
+            "attempts": [],
+            "rejected_candidate_ids": [],
+            "property_summaries": [],
+        }
+    )
+
+    assert "status: no_generation" in rendered
+    assert "artifact: None" not in rendered
+    assert "validation: None" not in rendered
+
+
+def _assert_limitation_rendering(rendered: str, limitations: list[str]) -> None:
+    assert "None" not in rendered
+    if limitations:
+        assert "did not prove:" in rendered
+        for item in limitations[:3]:
+            assert f"- {item}" in rendered
+        for item in limitations[3:]:
+            assert f"- {item}" not in rendered
+    else:
+        assert "did not prove:" not in rendered
+
+
+@settings(max_examples=50)
+@given(validation_status=OPTIONAL_STATUS, validation_mode=OPTIONAL_STATUS, formal_status=OPTIONAL_STATUS, limitations=LIMITATION_LIST)
+def test_sva_renderer_property_handles_optional_validation_fields(
+    validation_status: str | None,
+    validation_mode: str | None,
+    formal_status: str | None,
+    limitations: list[str],
+) -> None:
+    rendered = render_sva_payload(
+        {
+            "provider": "heuristic",
+            "status": "validated",
+            "artifact_path": ".tel/artifacts/generated/demo.sv",
+            "validation_status": validation_status,
+            "validation_mode": validation_mode,
+            "formal_status": formal_status,
+            "validation_limitations": limitations,
+            "explanation": "",
+            "attempts": [],
+            "rejected_candidate_ids": [],
+            "property_summaries": [],
+        }
+    )
+
+    _assert_limitation_rendering(rendered, limitations)
+    assert ("formal status:" in rendered) is bool(formal_status)
+    rendered.encode("cp1252", errors="strict")
+
+
+@settings(max_examples=50)
+@given(validation_status=OPTIONAL_STATUS, validation_mode=OPTIONAL_STATUS, executable_status=OPTIONAL_STATUS, limitations=LIMITATION_LIST)
+def test_cocotb_renderer_property_handles_optional_validation_fields(
+    validation_status: str | None,
+    validation_mode: str | None,
+    executable_status: str | None,
+    limitations: list[str],
+) -> None:
+    rendered = render_cocotb_payload(
+        {
+            "provider": "heuristic",
+            "status": "validated",
+            "top_module": "uart_rx",
+            "artifact_path": ".tel/artifacts/generated/cocotb/test_uart_rx.py",
+            "manifest_path": ".tel/artifacts/generated/cocotb/manifest.json",
+            "validation_status": validation_status,
+            "validation_mode": validation_mode,
+            "executable_status": executable_status,
+            "validation_limitations": limitations,
+            "explanation": "",
+            "attempts": [],
+            "rejected_candidate_ids": [],
+            "assumptions": [],
+        }
+    )
+
+    _assert_limitation_rendering(rendered, limitations)
+    assert ("executable status:" in rendered) is bool(executable_status)
+    rendered.encode("cp1252", errors="strict")
+
+
+@settings(max_examples=50)
+@given(validation_status=OPTIONAL_STATUS, validation_mode=OPTIONAL_STATUS, executable_status=OPTIONAL_STATUS, limitations=LIMITATION_LIST)
+def test_agent_renderer_property_handles_nested_validation_limitations(
+    validation_status: str | None,
+    validation_mode: str | None,
+    executable_status: str | None,
+    limitations: list[str],
+) -> None:
+    rendered = render_agent_payload(
+        {
+            "task_id": "task_1",
+            "workflow_type": "dut_to_cocotb",
+            "status": "review_required",
+            "context_id": "ctx_1",
+            "result": {
+                "candidate_id": "cocotb_1",
+                "validation_status": validation_status,
+                "validation_mode": validation_mode,
+                "executable_status": executable_status,
+                "validation_limitations": limitations,
+            },
+            "evidence": {},
+            "review_gate": {"summary": "review required"},
+        }
+    )
+
+    _assert_limitation_rendering(rendered, limitations)
+    assert ("executable status:" in rendered) is bool(executable_status)
+    rendered.encode("cp1252", errors="strict")
+
+
+@settings(max_examples=50)
+@given(validation_mode=OPTIONAL_STATUS, formal_status=OPTIONAL_STATUS, executable_status=OPTIONAL_STATUS, limitations=LIMITATION_LIST)
+def test_run_show_renderer_property_handles_validation_limitations(
+    validation_mode: str | None,
+    formal_status: str | None,
+    executable_status: str | None,
+    limitations: list[str],
+) -> None:
+    rendered = render_run_show(
+        {
+            "run_id": "run_1",
+            "workflow_type": "dut_to_cocotb",
+            "status": "validated",
+            "tool": {"name": "heuristic"},
+            "summary": "Generated artifact",
+            "tool_result": {
+                "status": "validated",
+                "validation_mode": validation_mode,
+                "formal_status": formal_status,
+                "executable_status": executable_status,
+                "validation_limitations": limitations,
+            },
+            "artifacts": {},
+        }
+    )
+
+    _assert_limitation_rendering(rendered, limitations)
+    assert ("formal status:" in rendered) is bool(formal_status)
+    assert ("executable status:" in rendered) is bool(executable_status)
+    rendered.encode("cp1252", errors="strict")
 
 
 def test_render_run_show_includes_cocotb_generation_details() -> None:
@@ -656,6 +875,9 @@ def test_render_run_show_includes_cocotb_generation_details() -> None:
             "summary": "Generated cocotb scaffold",
             "tool_result": {
                 "status": "validated",
+                "validation_mode": "syntax_plus_structure",
+                "executable_status": "skipped",
+                "validation_limitations": ["simulator execution was not run"],
                 "top_module": "uart_rx",
                 "assumptions": [
                     "Inferred `clk` as the primary clock.",
@@ -669,6 +891,9 @@ def test_render_run_show_includes_cocotb_generation_details() -> None:
         }
     )
     assert "top module: uart_rx" in rendered
+    assert "validation mode: syntax_plus_structure" in rendered
+    assert "executable status: skipped" in rendered
+    assert "simulator execution was not run" in rendered
     assert "assumptions: Inferred `clk` as the primary clock." in rendered
     assert "generated_file=.tel/artifacts/generated/cocotb/test_uart_rx.py" in rendered
 

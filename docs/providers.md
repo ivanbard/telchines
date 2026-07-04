@@ -137,6 +137,32 @@ Agent-runtime repair pilot:
 
 Use `tel providers list` to inspect which providers are allowed and why any provider is blocked.
 
+Use `tel providers setup NAME` to add common HTTP provider configs without storing secret values. The command writes `api_key_env` references, model/base URL settings, and optional default-provider selections:
+
+```bash
+tel providers setup openrouter-dev \
+  --kind openai-compatible \
+  --model cohere/north-mini-code:free \
+  --base-url https://openrouter.ai/api/v1 \
+  --api-key-env OPENROUTER_API_KEY \
+  --capability repair \
+  --capability generation \
+  --select-defaults
+
+tel providers setup anthropic-dev \
+  --kind anthropic \
+  --model claude-sonnet-5 \
+  --api-key-env ANTHROPIC_API_KEY
+
+tel providers setup local-openai \
+  --kind local-openai \
+  --model qwen2.5-coder \
+  --auth none \
+  --capability generation
+```
+
+Set the referenced environment variable in your shell or an ignored local `.env` file, then run `tel providers check NAME`. Do not paste API key values into `.tel/config.json`.
+
 Use `tel providers check [NAME]` to validate one provider, or omit `NAME` to check all providers. By default this performs a live transport check for `openai_compatible` and `local_command` providers and reports `agent_runtime` routing metadata. Add `--offline` to validate only configuration and policy:
 
 ```bash

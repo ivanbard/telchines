@@ -13,7 +13,7 @@
   <img src="https://img.shields.io/badge/version-v1.0.2-0f172a?style=flat-square" alt="Version 1.0.2">
   <img src="https://img.shields.io/badge/python-3.11%2B-0b7285?style=flat-square" alt="Python 3.11+">
   <img src="https://img.shields.io/badge/license-MIT-14532d?style=flat-square" alt="MIT License">
-  <img src="https://img.shields.io/badge/benchmarks-19%20cases-7c2d12?style=flat-square" alt="19 benchmark cases">
+  <img src="https://img.shields.io/badge/benchmarks-offline%20suite-7c2d12?style=flat-square" alt="offline benchmark suite">
 </p>
 
 <p align="center">
@@ -229,7 +229,7 @@ tel eval run
 tel eval report
 ```
 
-The current default suite contains **20 cases** and is part of the `v1` credibility story, not optional polish.
+When run inside an initialized Telchines project, `tel eval run` persists the latest report under `.tel/reports`. When run outside a project, it uses a temporary scratch project and prints a non-persisted report with `project_context: "scratch"`; inspect the report's `total` field for the current default suite size.
 
 ## v1 Scope
 

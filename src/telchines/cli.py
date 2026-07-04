@@ -42,6 +42,7 @@ from telchines.operations import (
     review_artifact as review_artifact_op,
     run_eval as run_eval_op,
     select_model_provider as select_model_provider_op,
+    setup_provider as setup_provider_op,
     set_provider_model as set_provider_model_op,
     set_provider_reasoning as set_provider_reasoning_op,
     show_run as show_run_op,
@@ -577,6 +578,36 @@ def providers_set_model(name: str = typer.Argument(...), model: str = typer.Argu
 def providers_set_reasoning(name: str = typer.Argument(...), level: str = typer.Argument(...)) -> None:
     try:
         payload = set_provider_reasoning_op(None, name, level)
+    except ConfigError as exc:
+        _fail(f"config error: {exc}")
+    typer.echo(dump_json(payload))
+
+
+@providers_app.command("setup")
+def providers_setup(
+    name: str = typer.Argument(...),
+    kind: str = typer.Option(..., "--kind", help="Provider setup kind: openai-compatible, anthropic, or local-openai."),
+    capability: Optional[list[str]] = typer.Option(None, "--capability", help="Capability to enable; repeat for repair and generation."),
+    model: str = typer.Option(..., "--model", help="Model identifier to store in config."),
+    base_url: Optional[str] = typer.Option(None, "--base-url", help="Provider base URL."),
+    api_key_env: Optional[str] = typer.Option(None, "--api-key-env", help="Environment variable that holds the API key."),
+    auth: Optional[str] = typer.Option(None, "--auth", help="Auth mode for OpenAI-compatible providers: bearer or none."),
+    timeout_seconds: Optional[int] = typer.Option(None, "--timeout-seconds", help="Provider timeout in seconds."),
+    select_defaults: bool = typer.Option(False, "--select-defaults", help="Make this provider the default for its capabilities."),
+) -> None:
+    try:
+        payload = setup_provider_op(
+            None,
+            name,
+            kind=kind,
+            capabilities=capability,
+            model=model,
+            base_url=base_url,
+            api_key_env=api_key_env,
+            auth=auth,
+            timeout_seconds=timeout_seconds,
+            select_defaults=select_defaults,
+        )
     except ConfigError as exc:
         _fail(f"config error: {exc}")
     typer.echo(dump_json(payload))

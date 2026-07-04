@@ -4,13 +4,14 @@ import difflib
 import json
 import shutil
 import subprocess
+import tempfile
 from dataclasses import asdict
 from pathlib import Path
 
 from telchines.adapters.base import AdapterRunSpec
 from telchines.ci_importers import import_ci_runs
 from telchines.coverage_import import import_coverage_report
-from telchines.errors import WorkflowInputError
+from telchines.errors import ConfigError, ProjectNotInitializedError, WorkflowInputError
 from telchines.adapters.registry import AdapterRegistry
 from telchines.config import ProjectConfig
 from telchines.eval import run_default_suite
@@ -213,6 +214,14 @@ def privacy_report(root: Path | None = None) -> dict[str, object]:
             str(config.project_root / config.artifacts_dir),
             str(config.project_root / config.store_dir / "task-artifacts"),
         ],
+        "retention_guidance": [
+            "Telchines keeps generated artifacts, patch metadata, reports, waveform summaries, replay metadata, and task artifacts under the project .tel directory.",
+            "Task artifacts intentionally retain prompts, retrieved RTL/spec/log snippets, and provider responses for replay and auditability.",
+            "Run `tel artifacts purge` to preview cleanup and `tel artifacts purge --yes` to remove retained artifact payloads.",
+        ],
+        "cleanup_command": "tel artifacts purge",
+        "redaction_scope": "Dictionary fields with credential-looking keys are redacted before task artifacts are stored; proprietary RTL/spec/log content is not redacted.",
+        "remote_context_warning": "Remote HTTP providers may receive retrieved RTL/spec/log context unless blocked by model_mode=local or no_egress=true.",
         "risks": risks,
         "status": "warning" if any(item["severity"] == "warning" for item in risks) else "ok",
     }
@@ -807,6 +816,138 @@ def set_provider_reasoning(root: Path | None, provider_name: str, level: str) ->
     return set_provider_reasoning_catalog(config, provider_name, level)
 
 
+def setup_provider(
+    root: Path | None,
+    provider_name: str,
+    *,
+    kind: str,
+    capabilities: list[str] | None = None,
+    model: str,
+    base_url: str | None = None,
+    api_key_env: str | None = None,
+    auth: str | None = None,
+    timeout_seconds: int | None = None,
+    select_defaults: bool = False,
+) -> dict[str, object]:
+    config, _, _ = load_services(root)
+    provider_name = provider_name.strip()
+    if not provider_name:
+        raise ConfigError("provider name must be non-empty")
+    normalized_kind = kind.strip().lower().replace("_", "-")
+    if normalized_kind not in {"openai-compatible", "anthropic", "local-openai"}:
+        raise ConfigError("provider setup kind must be openai-compatible, anthropic, or local-openai")
+    model = model.strip()
+    if not model:
+        raise ConfigError("model must be non-empty")
+    selected_capabilities = _normalize_provider_setup_capabilities(capabilities)
+    provider_config = _provider_setup_config(
+        normalized_kind,
+        selected_capabilities,
+        model=model,
+        base_url=base_url,
+        api_key_env=api_key_env,
+        auth=auth,
+        timeout_seconds=timeout_seconds,
+    )
+    policy = config.project.model_policy
+    providers = policy.setdefault("providers", {})
+    if not isinstance(providers, dict):
+        raise ConfigError("project.model_policy.providers must be an object")
+    providers[provider_name] = provider_config
+    selected_defaults: dict[str, str] = {}
+    if select_defaults:
+        defaults = dict(config.default_provider_by_capability())
+        for capability in selected_capabilities:
+            defaults[capability] = provider_name
+            selected_defaults[capability] = provider_name
+        policy["default_provider_by_capability"] = defaults
+    config.save()
+    next_steps = []
+    if provider_config.get("auth") != "none" and provider_config.get("api_key_env"):
+        next_steps.append(f"Set {provider_config['api_key_env']} in your shell or ignored .env file.")
+    next_steps.append(f"Run `tel providers check {provider_name}`.")
+    if not select_defaults:
+        for capability in selected_capabilities:
+            next_steps.append(f"Run `tel providers select --capability {capability} --provider {provider_name}` to make it the default.")
+    return {
+        "status": "updated",
+        "provider": provider_name,
+        "kind": provider_config["kind"],
+        "setup_kind": normalized_kind,
+        "capabilities": selected_capabilities,
+        "stored_config_keys": sorted(provider_config.keys()),
+        "selected_defaults": selected_defaults,
+        "default_provider_by_capability": config.default_provider_by_capability(),
+        "next_steps": next_steps,
+    }
+
+
+def _normalize_provider_setup_capabilities(capabilities: list[str] | None) -> list[str]:
+    raw = capabilities or ["repair", "generation"]
+    normalized: list[str] = []
+    for capability in raw:
+        value = capability.strip()
+        if value not in {"repair", "generation"}:
+            raise ConfigError("capability must be repair or generation")
+        if value not in normalized:
+            normalized.append(value)
+    if not normalized:
+        raise ConfigError("at least one capability is required")
+    return normalized
+
+
+def _provider_setup_config(
+    setup_kind: str,
+    capabilities: list[str],
+    *,
+    model: str,
+    base_url: str | None,
+    api_key_env: str | None,
+    auth: str | None,
+    timeout_seconds: int | None,
+) -> dict[str, object]:
+    if timeout_seconds is not None and timeout_seconds <= 0:
+        raise ConfigError("timeout_seconds must be a positive integer")
+    if setup_kind == "anthropic":
+        resolved_base_url = (base_url or "https://api.anthropic.com/v1").strip()
+        resolved_api_key_env = (api_key_env or "").strip()
+        if not resolved_api_key_env:
+            raise ConfigError("api_key_env is required for anthropic provider setup")
+        return {
+            "kind": "anthropic",
+            "capabilities": capabilities,
+            "base_url": resolved_base_url,
+            "model": model,
+            "api_key_env": resolved_api_key_env,
+            "timeout_seconds": timeout_seconds or 90,
+        }
+    resolved_auth = (auth or ("none" if setup_kind == "local-openai" else "bearer")).strip()
+    if resolved_auth not in {"bearer", "none"}:
+        raise ConfigError("auth must be bearer or none")
+    if setup_kind == "openai-compatible":
+        resolved_base_url = (base_url or "").strip()
+        if not resolved_base_url:
+            raise ConfigError("base_url is required for openai-compatible provider setup")
+    else:
+        resolved_base_url = (base_url or "http://127.0.0.1:11434/v1").strip()
+    provider_config: dict[str, object] = {
+        "kind": "openai_compatible",
+        "capabilities": capabilities,
+        "base_url": resolved_base_url,
+        "model": model,
+        "auth": resolved_auth,
+        "timeout_seconds": timeout_seconds or 60,
+    }
+    resolved_api_key_env = (api_key_env or "").strip()
+    if resolved_auth != "none":
+        if not resolved_api_key_env:
+            raise ConfigError("api_key_env is required unless auth is none")
+        provider_config["api_key_env"] = resolved_api_key_env
+    elif resolved_api_key_env:
+        provider_config["api_key_env"] = resolved_api_key_env
+    return provider_config
+
+
 def _provider_model_details(provider_name: str, provider_configs: dict[str, object]) -> dict[str, object]:
     provider_config = provider_configs.get(provider_name)
     if not isinstance(provider_config, dict):
@@ -815,13 +956,43 @@ def _provider_model_details(provider_name: str, provider_configs: dict[str, obje
 
 
 def run_eval(root: Path | None = None) -> dict[str, object]:
-    config, store, _ = load_services(root)
-    return run_default_suite(config, store)
+    start = root or Path.cwd()
+    try:
+        config, store, _ = load_services(start)
+    except ProjectNotInitializedError:
+        return _run_eval_in_scratch(start)
+    report = run_default_suite(config, store)
+    return {**report, "project_context": "project", "report_persisted": True}
 
 
 def load_eval_report(root: Path | None = None) -> dict[str, object]:
-    _, store, _ = load_services(root)
+    try:
+        _, store, _ = load_services(root)
+    except ProjectNotInitializedError as exc:
+        raise ConfigError("eval reports are persisted only for initialized Telchines projects; run `tel project init` or run `tel eval run` for scratch output") from exc
     return store.load_report("latest_eval")
+
+
+def _run_eval_in_scratch(start: Path) -> dict[str, object]:
+    scratch_root = Path(tempfile.mkdtemp(prefix="telchines-eval-scratch-"))
+    try:
+        local_benchmarks_root = start.resolve() / "benchmarks"
+        if local_benchmarks_root.exists() and any(local_benchmarks_root.glob("*.json")):
+            shutil.copytree(local_benchmarks_root, scratch_root / "benchmarks")
+            benchmark_source = str(local_benchmarks_root)
+        else:
+            benchmark_source = "bundled"
+        config = ProjectConfig.init_project(scratch_root, name="telchines-eval-scratch")
+        report = run_default_suite(config, RunStore(config))
+        return {
+            **report,
+            "project_context": "scratch",
+            "report_persisted": False,
+            "scratch_project": str(scratch_root),
+            "benchmark_source": benchmark_source,
+        }
+    finally:
+        remove_tree(scratch_root)
 
 
 def list_waveforms(root: Path | None = None) -> dict[str, object]:

@@ -3,9 +3,29 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
+import pytest
+from hypothesis import HealthCheck, given, settings
+from hypothesis import strategies as st
+
 from telchines.config import ProjectConfig
+from telchines.errors import ConfigError
 from telchines.eval import run_default_suite
+from telchines.operations import load_eval_report, run_eval
 from telchines.run_store import RunStore
+
+
+DIR_NAME = st.from_regex(r"[A-Za-z][A-Za-z0-9_-]{0,12}", fullmatch=True)
+
+
+def _tiny_eval_report(*_args, **_kwargs) -> dict[str, object]:
+    return {
+        "suite": "default",
+        "ran_at": "2026-07-04T00:00:00+00:00",
+        "cases": [],
+        "passed": 1,
+        "total": 1,
+        "metrics": {},
+    }
 
 
 def test_eval_default_suite(work_root: Path) -> None:
@@ -49,6 +69,7 @@ def test_eval_default_suite(work_root: Path) -> None:
     assert report["metrics"]["import"]["avg_imported_count"] == 2.0
     assert report["metrics"]["coverage_import"]["cases"] == 1
     assert report["metrics"]["coverage_import"]["avg_item_count"] == 2.0
+    assert "project_context" not in report
 
 
 def test_eval_default_suite_uses_bundled_benchmarks(work_root: Path) -> None:
@@ -63,3 +84,80 @@ def test_eval_default_suite_uses_bundled_benchmarks(work_root: Path) -> None:
     assert report["passed"] == report["total"]
     assert report["total"] == 24
     assert store.load_report("latest_eval")["total"] == 24
+
+
+def test_eval_operation_uses_project_context_and_persists_report(work_root: Path) -> None:
+    project_root = work_root / "project_eval_context"
+    project_root.mkdir()
+    ProjectConfig.init_project(project_root)
+
+    report = run_eval(project_root)
+
+    assert report["passed"] == report["total"]
+    assert report["project_context"] == "project"
+    assert report["report_persisted"] is True
+    config = ProjectConfig.load(project_root)
+    assert RunStore(config).load_report("latest_eval")["total"] == report["total"]
+
+
+def test_eval_operation_uses_non_mutating_scratch_context_with_local_benchmarks(work_root: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    source_like_root = work_root / "source_like_no_project"
+    source_like_root.mkdir()
+    shutil.copytree(repo_root / "benchmarks", source_like_root / "benchmarks")
+
+    report = run_eval(source_like_root)
+
+    assert report["passed"] == report["total"]
+    assert report["project_context"] == "scratch"
+    assert report["report_persisted"] is False
+    assert report["benchmark_source"] == str(source_like_root / "benchmarks")
+    assert not (source_like_root / ".tel").exists()
+    assert not Path(str(report["scratch_project"])).exists()
+
+
+@settings(max_examples=30, suppress_health_check=[HealthCheck.function_scoped_fixture])
+@given(dirname=DIR_NAME)
+def test_eval_scratch_property_is_non_mutating_and_non_persisted(work_root: Path, monkeypatch, dirname: str) -> None:
+    monkeypatch.setattr("telchines.operations.run_default_suite", _tiny_eval_report)
+    root = work_root / dirname
+    root.mkdir(exist_ok=True)
+
+    report = run_eval(root)
+
+    assert report["project_context"] == "scratch"
+    assert report["report_persisted"] is False
+    assert report["passed"] == report["total"] == 1
+    assert not (root / ".tel").exists()
+    assert not Path(str(report["scratch_project"])).exists()
+
+
+@settings(max_examples=30, suppress_health_check=[HealthCheck.function_scoped_fixture])
+@given(dirname=DIR_NAME)
+def test_eval_project_property_persists_report_context(work_root: Path, monkeypatch, dirname: str) -> None:
+    def fake_run_default_suite(_config: ProjectConfig, store: RunStore) -> dict[str, object]:
+        report = _tiny_eval_report()
+        store.save_report("latest_eval", report)
+        return report
+
+    monkeypatch.setattr("telchines.operations.run_default_suite", fake_run_default_suite)
+    root = work_root / f"project_{dirname}"
+    root.mkdir(exist_ok=True)
+    ProjectConfig.init_project(root)
+
+    report = run_eval(root)
+
+    assert report["project_context"] == "project"
+    assert report["report_persisted"] is True
+    assert (root / ".tel").is_dir()
+    assert load_eval_report(root)["total"] == 1
+
+
+@settings(max_examples=30, suppress_health_check=[HealthCheck.function_scoped_fixture])
+@given(dirname=DIR_NAME)
+def test_eval_report_outside_project_has_clear_error(work_root: Path, dirname: str) -> None:
+    root = work_root / f"no_report_{dirname}"
+    root.mkdir(exist_ok=True)
+
+    with pytest.raises(ConfigError, match="persisted only for initialized Telchines projects"):
+        load_eval_report(root)

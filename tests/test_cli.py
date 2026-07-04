@@ -9,12 +9,17 @@ import tomllib
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import pytest
+from hypothesis import HealthCheck, given, settings
+from hypothesis import strategies as st
 from typer.testing import CliRunner
 
 from telchines.adapters.base import AdapterExecution, ToolAdapter
 from telchines.cli import app
 from telchines.config import ProjectConfig
+from telchines.errors import ConfigError
 from telchines.models import ToolReference, VerificationRun
+from telchines.operations import _normalize_provider_setup_capabilities, _provider_setup_config, privacy_report, setup_provider
 from telchines.run_store import RunStore
 from telchines.utils import read_json, write_json
 
@@ -22,6 +27,20 @@ try:
     runner = CliRunner(mix_stderr=False)
 except TypeError:
     runner = CliRunner()
+
+
+PROVIDER_NAME = st.from_regex(r"[A-Za-z][A-Za-z0-9_-]{0,12}", fullmatch=True).filter(lambda value: value != "heuristic")
+CAPABILITY_LIST = st.lists(st.sampled_from(["repair", "generation"]), min_size=1, max_size=8)
+INVALID_CAPABILITY = st.text(
+    alphabet=st.characters(min_codepoint=33, max_codepoint=126),
+    min_size=1,
+    max_size=16,
+).filter(lambda value: value.strip() not in {"repair", "generation"})
+MODEL_NAME = st.from_regex(r"[A-Za-z0-9_.:/-]{1,32}", fullmatch=True)
+ENV_NAME = st.from_regex(r"[A-Z][A-Z0-9_]{0,24}", fullmatch=True)
+HTTP_URL = st.from_regex(r"https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9_./-]+)?", fullmatch=True)
+POSITIVE_TIMEOUT = st.integers(min_value=1, max_value=300)
+NON_POSITIVE_TIMEOUT = st.integers(max_value=0)
 
 
 class FixtureAdapter(ToolAdapter):
@@ -1216,6 +1235,255 @@ def test_cli_model_selection_commands_persist_config(sample_project: Path, monke
     assert config["project"]["model_policy"]["providers"]["local-test"]["reasoning_level"] == "high"
 
 
+def test_cli_provider_setup_openai_compatible_uses_env_var_and_selects_defaults(sample_project: Path, monkeypatch) -> None:
+    monkeypatch.chdir(sample_project)
+
+    result = runner.invoke(
+        app,
+        [
+            "providers",
+            "setup",
+            "openrouter-dev",
+            "--kind",
+            "openai-compatible",
+            "--model",
+            "provider/model",
+            "--base-url",
+            "https://openrouter.ai/api/v1",
+            "--api-key-env",
+            "OPENROUTER_API_KEY",
+            "--capability",
+            "repair",
+            "--capability",
+            "generation",
+            "--select-defaults",
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "updated"
+    assert payload["selected_defaults"] == {"generation": "openrouter-dev", "repair": "openrouter-dev"}
+    assert "OPENROUTER_API_KEY" in result.stdout
+    assert "literal-secret" not in result.stdout
+    config = read_json(sample_project / ".tel" / "config.json")
+    provider = config["project"]["model_policy"]["providers"]["openrouter-dev"]
+    assert provider["kind"] == "openai_compatible"
+    assert provider["api_key_env"] == "OPENROUTER_API_KEY"
+    assert provider["model"] == "provider/model"
+    assert "literal-secret" not in json.dumps(provider)
+    assert config["project"]["model_policy"]["default_provider_by_capability"]["repair"] == "openrouter-dev"
+    assert config["project"]["model_policy"]["default_provider_by_capability"]["generation"] == "openrouter-dev"
+
+
+def test_cli_provider_setup_anthropic_and_local_openai_shapes(sample_project: Path, monkeypatch) -> None:
+    monkeypatch.chdir(sample_project)
+
+    anthropic = runner.invoke(
+        app,
+        [
+            "providers",
+            "setup",
+            "anthropic-dev",
+            "--kind",
+            "anthropic",
+            "--model",
+            "claude-sonnet-5",
+            "--api-key-env",
+            "ANTHROPIC_API_KEY",
+        ],
+    )
+    local = runner.invoke(
+        app,
+        [
+            "providers",
+            "setup",
+            "local-openai",
+            "--kind",
+            "local-openai",
+            "--model",
+            "qwen2.5-coder",
+            "--auth",
+            "none",
+            "--capability",
+            "generation",
+        ],
+    )
+
+    assert anthropic.exit_code == 0
+    assert local.exit_code == 0
+    config = read_json(sample_project / ".tel" / "config.json")
+    anthropic_provider = config["project"]["model_policy"]["providers"]["anthropic-dev"]
+    local_provider = config["project"]["model_policy"]["providers"]["local-openai"]
+    assert anthropic_provider["kind"] == "anthropic"
+    assert anthropic_provider["api_key_env"] == "ANTHROPIC_API_KEY"
+    assert anthropic_provider["timeout_seconds"] == 90
+    assert local_provider["kind"] == "openai_compatible"
+    assert local_provider["auth"] == "none"
+    assert "api_key_env" not in local_provider
+    assert local_provider["base_url"] == "http://127.0.0.1:11434/v1"
+    assert local_provider["capabilities"] == ["generation"]
+
+
+def test_cli_provider_setup_reports_required_values(sample_project: Path, monkeypatch) -> None:
+    monkeypatch.chdir(sample_project)
+
+    missing_base = runner.invoke(app, ["providers", "setup", "remote", "--kind", "openai-compatible", "--model", "m", "--api-key-env", "KEY"])
+    missing_env = runner.invoke(app, ["providers", "setup", "remote", "--kind", "openai-compatible", "--model", "m", "--base-url", "https://example.com/v1"])
+    missing_model = runner.invoke(app, ["providers", "setup", "remote", "--kind", "anthropic", "--api-key-env", "KEY"])
+
+    assert missing_base.exit_code == 2
+    assert "base_url is required" in missing_base.stderr
+    assert missing_env.exit_code == 2
+    assert "api_key_env is required" in missing_env.stderr
+    assert missing_model.exit_code != 0
+
+
+@settings(max_examples=50)
+@given(capabilities=CAPABILITY_LIST)
+def test_provider_setup_capabilities_dedupe_preserving_order(capabilities: list[str]) -> None:
+    normalized = _normalize_provider_setup_capabilities(capabilities)
+    expected = []
+    for capability in capabilities:
+        if capability not in expected:
+            expected.append(capability)
+
+    assert normalized == expected
+    assert _normalize_provider_setup_capabilities(None) == ["repair", "generation"]
+
+
+@settings(max_examples=50)
+@given(invalid=INVALID_CAPABILITY)
+def test_provider_setup_capabilities_reject_invalid_values(invalid: str) -> None:
+    with pytest.raises(ConfigError, match="capability must be repair or generation"):
+        _normalize_provider_setup_capabilities(["repair", invalid])
+
+
+@settings(max_examples=40)
+@given(model=MODEL_NAME, base_url=HTTP_URL, api_key_env=ENV_NAME, timeout=POSITIVE_TIMEOUT)
+def test_provider_setup_openai_compatible_config_shape(model: str, base_url: str, api_key_env: str, timeout: int) -> None:
+    provider = _provider_setup_config(
+        "openai-compatible",
+        ["repair", "generation"],
+        model=model,
+        base_url=base_url,
+        api_key_env=api_key_env,
+        auth="bearer",
+        timeout_seconds=timeout,
+    )
+
+    assert provider["kind"] == "openai_compatible"
+    assert provider["base_url"] == base_url
+    assert provider["model"] == model
+    assert provider["api_key_env"] == api_key_env
+    assert provider["auth"] == "bearer"
+    assert provider["timeout_seconds"] == timeout
+
+
+@settings(max_examples=40)
+@given(model=MODEL_NAME, base_url=HTTP_URL)
+def test_provider_setup_openai_compatible_auth_none_does_not_require_env(model: str, base_url: str) -> None:
+    provider = _provider_setup_config(
+        "openai-compatible",
+        ["generation"],
+        model=model,
+        base_url=base_url,
+        api_key_env=None,
+        auth="none",
+        timeout_seconds=None,
+    )
+
+    assert provider["auth"] == "none"
+    assert "api_key_env" not in provider
+    assert provider["timeout_seconds"] == 60
+
+
+@settings(max_examples=40)
+@given(model=MODEL_NAME, api_key_env=ENV_NAME, timeout=POSITIVE_TIMEOUT)
+def test_provider_setup_anthropic_config_shape(model: str, api_key_env: str, timeout: int) -> None:
+    provider = _provider_setup_config(
+        "anthropic",
+        ["repair"],
+        model=model,
+        base_url=None,
+        api_key_env=api_key_env,
+        auth=None,
+        timeout_seconds=timeout,
+    )
+
+    assert provider["kind"] == "anthropic"
+    assert provider["base_url"] == "https://api.anthropic.com/v1"
+    assert provider["model"] == model
+    assert provider["api_key_env"] == api_key_env
+    assert provider["timeout_seconds"] == timeout
+
+
+@settings(max_examples=40)
+@given(model=MODEL_NAME)
+def test_provider_setup_local_openai_defaults_to_no_auth(model: str) -> None:
+    provider = _provider_setup_config(
+        "local-openai",
+        ["generation"],
+        model=model,
+        base_url=None,
+        api_key_env=None,
+        auth=None,
+        timeout_seconds=None,
+    )
+
+    assert provider["kind"] == "openai_compatible"
+    assert provider["base_url"] == "http://127.0.0.1:11434/v1"
+    assert provider["auth"] == "none"
+    assert "api_key_env" not in provider
+    assert provider["timeout_seconds"] == 60
+
+
+@settings(max_examples=30)
+@given(timeout=NON_POSITIVE_TIMEOUT)
+def test_provider_setup_rejects_non_positive_timeouts(timeout: int) -> None:
+    with pytest.raises(ConfigError, match="timeout_seconds must be a positive integer"):
+        _provider_setup_config(
+            "local-openai",
+            ["generation"],
+            model="local-model",
+            base_url=None,
+            api_key_env=None,
+            auth=None,
+            timeout_seconds=timeout,
+        )
+
+
+@settings(max_examples=20, suppress_health_check=[HealthCheck.function_scoped_fixture])
+@given(provider_name=PROVIDER_NAME, model=MODEL_NAME, api_key_env=ENV_NAME)
+def test_provider_setup_operation_writes_valid_config_without_literal_secrets(
+    sample_project: Path,
+    provider_name: str,
+    model: str,
+    api_key_env: str,
+) -> None:
+    result = setup_provider(
+        sample_project,
+        provider_name,
+        kind="openai-compatible",
+        capabilities=["repair", "generation"],
+        model=model,
+        base_url="https://example.com/v1",
+        api_key_env=api_key_env,
+        auth="bearer",
+        timeout_seconds=30,
+        select_defaults=True,
+    )
+
+    config = ProjectConfig.load(sample_project)
+    provider = config.project.model_policy["providers"][provider_name]
+    assert result["status"] == "updated"
+    assert provider["api_key_env"] == api_key_env
+    assert provider["model"] == model
+    assert "literal-secret" not in json.dumps(config.to_dict())
+    assert config.default_provider_by_capability()["repair"] == provider_name
+    assert config.default_provider_by_capability()["generation"] == provider_name
+
+
 def test_cli_models_discovers_openai_compatible_models(sample_project: Path, monkeypatch) -> None:
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):  # noqa: N802
@@ -1574,6 +1842,64 @@ def test_cli_doctor_privacy_reports_local_command_risks(sample_project: Path, mo
     assert report["status"] == "warning"
     assert any("local_command" in item["summary"] for item in report["risks"])
     assert any("TELCHINES_API_KEY" in item["summary"] for item in report["risks"])
+    assert report["cleanup_command"] == "tel artifacts purge"
+    assert "proprietary RTL" in report["redaction_scope"]
+
+
+def test_cli_doctor_privacy_includes_retention_guidance_when_ok(sample_project: Path, monkeypatch) -> None:
+    monkeypatch.chdir(sample_project)
+
+    result = runner.invoke(app, ["doctor", "privacy"])
+
+    assert result.exit_code == 0
+    report = json.loads(result.stdout)
+    assert report["status"] == "ok"
+    assert report["retention_guidance"]
+    assert any("task artifacts" in item.lower() for item in report["retention_guidance"])
+    assert report["remote_context_warning"]
+
+
+@settings(max_examples=20, suppress_health_check=[HealthCheck.function_scoped_fixture])
+@given(provider_name=PROVIDER_NAME, api_key_env=ENV_NAME)
+def test_privacy_guidance_is_always_present_and_info_risks_do_not_warn(
+    sample_project: Path,
+    provider_name: str,
+    api_key_env: str,
+) -> None:
+    model_policy = _remote_model_policy("https://example.com/v1", api_key_env)
+    remote_config = model_policy["providers"].pop("mock-remote")
+    model_policy["providers"][provider_name] = remote_config
+    model_policy["default_provider_by_capability"] = {"repair": provider_name}
+    _set_model_policy(sample_project, model_policy)
+
+    report = privacy_report(sample_project)
+
+    assert report["status"] == "ok"
+    assert report["retention_guidance"]
+    assert report["cleanup_command"] == "tel artifacts purge"
+    assert "proprietary RTL" in report["redaction_scope"]
+    assert report["remote_context_warning"]
+    assert any(item["severity"] == "info" for item in report["risks"])
+    assert not any(item["severity"] == "warning" for item in report["risks"])
+
+
+@settings(max_examples=30, suppress_health_check=[HealthCheck.function_scoped_fixture])
+@given(
+    secret_key=st.sampled_from(["API_KEY", "auth_token", "PASSWORD", "client_secret"]),
+    secret_value=st.from_regex(r"ZZZSECRET[0-9]{4}", fullmatch=True),
+)
+def test_privacy_local_command_secret_env_reports_key_not_value(sample_project: Path, secret_key: str, secret_value: str) -> None:
+    model_policy = _local_model_policy(sys.executable)
+    model_policy["providers"]["local-test"]["env"] = {secret_key: secret_value}
+    _set_model_policy(sample_project, model_policy)
+
+    report = privacy_report(sample_project)
+    risk_summaries = "\n".join(str(item.get("summary", "")) for item in report["risks"] if isinstance(item, dict))
+
+    assert report["status"] == "warning"
+    assert secret_key in risk_summaries
+    assert secret_value not in risk_summaries
+    assert report["retention_guidance"]
 
 
 def test_cli_artifacts_purge_dry_run_and_apply(sample_project: Path, monkeypatch) -> None:
@@ -1980,6 +2306,16 @@ def test_cli_shell_supports_explicit_shell_subcommand(sample_project: Path, monk
     result = runner.invoke(app, ["shell"], input="/pwd\n/exit\n")
     assert result.exit_code == 0
     assert str(sample_project) in result.stdout
+
+
+def test_cli_plain_shell_prints_single_startup_welcome(sample_project: Path, monkeypatch) -> None:
+    monkeypatch.chdir(sample_project)
+
+    result = runner.invoke(app, ["shell", "--plain"], input="/exit\n")
+
+    assert result.exit_code == 0
+    assert result.stdout.count("Shell ready") == 1
+    assert "leaving Telchines shell" in result.stdout
 
 
 def test_cli_shell_supports_agent_command(sample_project: Path, monkeypatch) -> None:

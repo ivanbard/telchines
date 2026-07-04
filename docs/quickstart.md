@@ -178,3 +178,5 @@ tel runs replay RUN_ID --yes
 ```
 
 The purge and replay commands run as safe previews unless `--yes` is supplied. `artifacts review` compares the saved generated draft to the current workspace file so human edits stay visible.
+
+Telchines stores replayable workflow evidence under `.tel/`, including generated artifacts, patches, reports, waveform summaries, replay metadata, and task artifacts. Task artifacts keep prompts, retrieved RTL/spec/log snippets, and provider responses so runs can be audited and replayed. Credential-looking dictionary fields are redacted before task artifacts are saved, but proprietary design content is intentionally retained until you purge it. Use local providers, `model_mode=local`, or `no_egress=true` when remote context sharing is not acceptable.

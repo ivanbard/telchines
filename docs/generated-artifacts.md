@@ -7,7 +7,7 @@ tel gen-sva --spec docs/uart.md --rtl rtl/uart_rx.sv
 tel gen-cocotb --dut rtl/uart_rx.sv --spec docs/uart.md
 ```
 
-The generated files are drafts. The JSON output includes `validation_status`, `validation_mode`, `validation_summary`, `validation_limitations`, and real-tool fields such as `executable_status`, `simulator`, `formal_status`, `formal_adapter`, `command_artifacts`, and `setup_diagnostics` when applicable.
+The generated files are drafts. The JSON output includes `validation_status`, `validation_mode`, `validation_summary`, `validation_limitations`, and real-tool fields such as `executable_status`, `simulator`, `formal_status`, `formal_adapter`, `command_artifacts`, and `setup_diagnostics` when applicable. Human shell views surface these limitations under `did not prove` so a syntax/structure pass is not mistaken for behavioral signoff.
 
 If `generation.sva.max_attempts` or `generation.cocotb.max_attempts` is greater than `1`, failed validation output is fed back into the next model request. JSON output then includes `attempts` and `rejected_candidate_ids`, and each rejected candidate remains reviewable by id.
 
@@ -78,7 +78,12 @@ Templates support `{module}`, `{rtl_stem}`, and `{dut_stem}`. Template values mu
 ## Review Notes
 
 - Treat generated SVA and cocotb as reviewable starting points, not accepted verification IP.
+- Read `validation_limitations` before trusting a generated artifact; syntax, structure, parser, adapter, simulator, and formal modes prove different things.
 - Keep generated artifacts under version control only after human review.
 - Use `tel artifacts review REF` after editing a generated artifact to see what changed from the model/provider draft.
 - Inspect the saved request/response artifacts when a draft looks surprising.
 - Use `tel artifacts purge` to inspect or clean stored generated artifacts and provider payloads.
+
+## Retention And Privacy
+
+Generated files, generation candidates, validation runs, patches, reports, waveform summaries, replay metadata, and task artifacts live under `.tel/`. Task artifacts intentionally keep prompts, retrieved RTL/spec/log context, and provider responses for replayability. Telchines redacts dictionary fields with credential-looking keys before saving task artifacts, but it does not redact proprietary design content. Run `tel doctor privacy` to inspect retention guidance, `tel artifacts purge` to preview cleanup, and `tel artifacts purge --yes` to remove retained artifact payloads.

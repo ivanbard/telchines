@@ -22,7 +22,7 @@
 - build sdist and wheel
 - install the built package in a clean environment
 - verify both `tel` and `telchines` entrypoints
-- verify `tel eval run` executes 18 bundled benchmark cases from the clean install
+- verify `tel eval run` reports a nonzero bundled benchmark total from the clean install
 - confirm the CI package job's clean-wheel smoke test passed
 
 ## Docs

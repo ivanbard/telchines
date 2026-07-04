@@ -19,6 +19,8 @@ tel eval run
 tel eval report
 ```
 
+Inside an initialized Telchines project, `tel eval run` runs with that project's policy/configuration and persists `latest_eval` for `tel eval report`. Outside a project, `tel eval run` creates a temporary scratch project, uses local `benchmarks/` when present or bundled benchmarks otherwise, prints the report, and marks it with `project_context: "scratch"` and `report_persisted: false`. Scratch reports are intentionally not available through `tel eval report`.
+
 ## What The Suite Validates
 
 - end-to-end workflow execution
@@ -37,4 +39,4 @@ Before cutting a public release:
 
 ## Current Default Suite Shape
 
-The default suite currently includes 20 cases spanning all shipped `v1` workflows, including one agent-runtime repair retry case and one multi-step review-gated agent case. The automated test suite verifies that the default benchmark run completes successfully and writes a report to the run store.
+The default suite spans all shipped `v1` workflows, including agent-runtime repair, review-gated agent, retrieval, repair, SVA, cocotb, coverage, triage, import, and coverage-import cases. Use the report's `total` field as the source of truth for the installed suite size. The automated test suite verifies that the default benchmark run completes successfully and writes a report to the run store when run inside an initialized project.
