@@ -102,6 +102,72 @@ def test_config_rejects_absolute_openai_endpoint(sample_project: Path) -> None:
         ProjectConfig.load(sample_project)
 
 
+def test_config_accepts_openai_auth_none(sample_project: Path) -> None:
+    config_path = sample_project / ".tel" / "config.json"
+    payload = read_json(config_path)
+    payload["project"]["model_policy"]["providers"]["local-http"] = {
+        "kind": "openai_compatible",
+        "capabilities": ["repair"],
+        "base_url": "http://127.0.0.1:11434/v1",
+        "model": "local-model",
+        "auth": "none",
+    }
+    payload["project"]["model_policy"]["default_provider_by_capability"]["repair"] = "local-http"
+    write_json(config_path, payload)
+    assert ProjectConfig.load(sample_project).default_provider_by_capability()["repair"] == "local-http"
+
+
+def test_config_rejects_invalid_openai_auth(sample_project: Path) -> None:
+    config_path = sample_project / ".tel" / "config.json"
+    payload = read_json(config_path)
+    payload["project"]["model_policy"]["providers"]["remote"] = {
+        "kind": "openai_compatible",
+        "capabilities": ["repair"],
+        "base_url": "http://127.0.0.1:9999/v1",
+        "model": "demo-model",
+        "auth": "magic",
+    }
+    payload["project"]["model_policy"]["default_provider_by_capability"]["repair"] = "remote"
+    write_json(config_path, payload)
+    with pytest.raises(ConfigError, match="auth"):
+        ProjectConfig.load(sample_project)
+
+
+def test_config_accepts_anthropic_provider(sample_project: Path) -> None:
+    config_path = sample_project / ".tel" / "config.json"
+    payload = read_json(config_path)
+    payload["project"]["model_policy"] = {
+        "default_provider_by_capability": {"repair": "anthropic-dev", "generation": "anthropic-dev"},
+        "providers": {
+            "anthropic-dev": {
+                "kind": "anthropic",
+                "capabilities": ["repair", "generation"],
+                "model": "claude-test",
+                "api_key_env": "ANTHROPIC_API_KEY",
+                "timeout_seconds": 30,
+            }
+        },
+    }
+    write_json(config_path, payload)
+    config = ProjectConfig.load(sample_project)
+    assert config.default_provider_by_capability()["repair"] == "anthropic-dev"
+
+
+def test_config_rejects_invalid_anthropic_headers(sample_project: Path) -> None:
+    config_path = sample_project / ".tel" / "config.json"
+    payload = read_json(config_path)
+    payload["project"]["model_policy"]["providers"]["anthropic-dev"] = {
+        "kind": "anthropic",
+        "capabilities": ["repair"],
+        "model": "claude-test",
+        "headers": {"x-api-key": "hardcoded"},
+    }
+    payload["project"]["model_policy"]["default_provider_by_capability"]["repair"] = "anthropic-dev"
+    write_json(config_path, payload)
+    with pytest.raises(ConfigError, match="headers"):
+        ProjectConfig.load(sample_project)
+
+
 def test_init_project_uses_capability_defaults(sample_project: Path) -> None:
     config = ProjectConfig.load(sample_project)
     assert config.default_provider_by_capability()["repair"] == "heuristic"
@@ -171,6 +237,32 @@ def test_config_accepts_agent_runtime_repair_provider(sample_project: Path) -> N
     config = ProjectConfig.load(sample_project)
 
     assert config.default_provider_by_capability()["repair"] == "agent-repair"
+
+
+def test_config_accepts_agent_runtime_with_anthropic_base_provider(sample_project: Path) -> None:
+    config_path = sample_project / ".tel" / "config.json"
+    payload = read_json(config_path)
+    payload["project"]["model_policy"] = {
+        "default_provider_by_capability": {"repair": "agent-repair", "generation": "heuristic"},
+        "providers": {
+            "heuristic": {"kind": "heuristic", "capabilities": ["generation"]},
+            "anthropic-base": {
+                "kind": "anthropic",
+                "capabilities": ["repair"],
+                "model": "claude-test",
+                "api_key_env": "ANTHROPIC_API_KEY",
+            },
+            "agent-repair": {
+                "kind": "agent_runtime",
+                "runtime": "langgraph",
+                "base_provider": "anthropic-base",
+                "capabilities": ["repair"],
+                "timeout_seconds": 10,
+            },
+        },
+    }
+    write_json(config_path, payload)
+    assert ProjectConfig.load(sample_project).default_provider_by_capability()["repair"] == "agent-repair"
 
 
 def test_config_rejects_invalid_agent_runtime_provider(sample_project: Path) -> None:

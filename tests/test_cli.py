@@ -284,6 +284,23 @@ def _remote_model_policy(base_url: str, api_key_env: str) -> dict[str, object]:
     }
 
 
+def _anthropic_model_policy(base_url: str, api_key_env: str) -> dict[str, object]:
+    return {
+        "default_provider_by_capability": {"repair": "mock-anthropic"},
+        "providers": {
+            "heuristic": {"kind": "heuristic", "capabilities": ["repair"]},
+            "mock-anthropic": {
+                "kind": "anthropic",
+                "capabilities": ["repair"],
+                "base_url": base_url,
+                "model": "claude-test",
+                "api_key_env": api_key_env,
+                "timeout_seconds": 5,
+            },
+        },
+    }
+
+
 def _local_model_policy(command: str, *args: str) -> dict[str, object]:
     return {
         "default_provider_by_capability": {"repair": "local-test"},
@@ -847,6 +864,33 @@ def test_cli_repair_with_agent_runtime_returns_no_patch_when_budget_exhausted(sa
     assert [step["status"] for step in agent_runtime["steps"] if step["step"] == "validate_patch"] == ["failed", "failed"]
 
 
+def test_cli_agent_repair_provider_override_is_used(sample_project: Path, monkeypatch) -> None:
+    _write_agent_retry_provider(sample_project, mode="valid")
+    _set_model_policy(sample_project, _agent_runtime_model_policy(sys.executable, "tools/agent_retry_provider.py"))
+    monkeypatch.chdir(sample_project)
+    monkeypatch.setattr("telchines.operations.AdapterRegistry", FixtureRegistry)
+    runner.invoke(app, ["index"])
+
+    result = runner.invoke(
+        app,
+        [
+            "agent",
+            "fix counter",
+            "--tool",
+            "fixture",
+            "--file",
+            "rtl/broken_counter.sv",
+            "--provider",
+            "local-base",
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["result"]["provider"] == "local-base"
+    assert payload["result"]["runtime_mode"] == ""
+
+
 def test_cli_repair_with_agent_runtime_captures_malformed_provider_json(sample_project: Path, monkeypatch) -> None:
     _write_agent_retry_provider(sample_project, mode="malformed")
     _set_model_policy(sample_project, _agent_runtime_model_policy(sys.executable, "tools/agent_retry_provider.py"))
@@ -870,7 +914,7 @@ def test_cli_reports_policy_block_for_remote_provider(sample_project: Path, monk
     config_path = sample_project / ".tel" / "config.json"
     payload = read_json(config_path)
     payload["model_mode"] = "local"
-    payload["project"]["model_policy"] = _remote_model_policy("http://127.0.0.1:9", "TELCHINES_TEST_API_KEY")
+    payload["project"]["model_policy"] = _remote_model_policy("https://example.invalid/v1", "TELCHINES_TEST_API_KEY")
     write_json(config_path, payload)
     monkeypatch.chdir(sample_project)
     monkeypatch.setattr("telchines.operations.AdapterRegistry", FixtureRegistry)
@@ -884,7 +928,7 @@ def test_cli_reports_policy_block_for_no_egress(sample_project: Path, monkeypatc
     config_path = sample_project / ".tel" / "config.json"
     payload = read_json(config_path)
     payload["no_egress"] = True
-    payload["project"]["model_policy"] = _remote_model_policy("http://127.0.0.1:9", "TELCHINES_TEST_API_KEY")
+    payload["project"]["model_policy"] = _remote_model_policy("https://example.invalid/v1", "TELCHINES_TEST_API_KEY")
     write_json(config_path, payload)
     monkeypatch.chdir(sample_project)
     monkeypatch.setattr("telchines.operations.AdapterRegistry", FixtureRegistry)
@@ -945,7 +989,7 @@ def test_cli_lists_providers(sample_project: Path, monkeypatch) -> None:
             "remote-test": {
                 "kind": "openai_compatible",
                 "capabilities": ["repair"],
-                "base_url": "http://127.0.0.1:9",
+                "base_url": "https://example.invalid/v1",
                 "model": "mock-model",
                 "api_key_env": "TELCHINES_TEST_API_KEY",
                 "timeout_seconds": 5,
@@ -961,8 +1005,10 @@ def test_cli_lists_providers(sample_project: Path, monkeypatch) -> None:
     remote = next(item for item in provider_payload["providers"] if item["name"] == "remote-test")
     local = next(item for item in provider_payload["providers"] if item["name"] == "local-test")
     assert remote["allowed"] is False
+    assert remote["network_scope"] == "external_http"
     assert "blocks remote providers" in remote["blocked_reason"]
     assert local["allowed"] is True
+    assert local["network_scope"] == "local_process"
 
 
 def test_cli_checks_heuristic_provider(sample_project: Path, monkeypatch) -> None:
@@ -1039,7 +1085,90 @@ def test_cli_checks_openai_compatible_provider(sample_project: Path, monkeypatch
         result = runner.invoke(app, ["providers", "check", "mock-remote"])
         assert result.exit_code == 0
         payload = json.loads(result.stdout)
-        assert payload["providers"][0]["checks"]["transport"]["mode"] == "openai_compatible"
+        transport = payload["providers"][0]["checks"]["transport"]
+        assert transport["mode"] == "openai_compatible"
+        assert transport["auth_mode"] == "bearer"
+        assert transport["network_scope"] == "local_http"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_cli_checks_local_openai_provider_without_auth_in_local_no_egress_mode(sample_project: Path, monkeypatch) -> None:
+    seen_headers: list[dict[str, str]] = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):  # noqa: N802
+            length = int(self.headers["Content-Length"])
+            _ = self.rfile.read(length)
+            seen_headers.append({key.lower(): value for key, value in self.headers.items()})
+            response = {"choices": [{"message": {"content": "{\"status\":\"ok\"}"}}]}
+            encoded = json.dumps(response).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(encoded)))
+            self.end_headers()
+            self.wfile.write(encoded)
+
+        def log_message(self, format, *args):  # noqa: A003
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        config_path = sample_project / ".tel" / "config.json"
+        payload = read_json(config_path)
+        payload["model_mode"] = "local"
+        payload["no_egress"] = True
+        payload["project"]["model_policy"] = _remote_model_policy(f"http://127.0.0.1:{server.server_address[1]}", "TELCHINES_TEST_API_KEY")
+        payload["project"]["model_policy"]["providers"]["mock-remote"]["auth"] = "none"
+        write_json(config_path, payload)
+        monkeypatch.chdir(sample_project)
+        result = runner.invoke(app, ["providers", "check", "mock-remote"])
+        assert result.exit_code == 0
+        response = json.loads(result.stdout)
+        transport = response["providers"][0]["checks"]["transport"]
+        assert transport["network_scope"] == "local_http"
+        assert transport["auth_mode"] == "none"
+        assert "authorization" not in seen_headers[0]
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_cli_checks_anthropic_provider(sample_project: Path, monkeypatch) -> None:
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):  # noqa: N802
+            assert self.headers["x-api-key"] == "test-token"
+            assert self.headers["anthropic-version"] == "2023-06-01"
+            length = int(self.headers["Content-Length"])
+            body = json.loads(self.rfile.read(length))
+            assert body["model"] == "claude-test"
+            response = {"content": [{"type": "text", "text": "{\"status\":\"ok\"}"}]}
+            encoded = json.dumps(response).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(encoded)))
+            self.end_headers()
+            self.wfile.write(encoded)
+
+        def log_message(self, format, *args):  # noqa: A003
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        _set_model_policy(sample_project, _anthropic_model_policy(f"http://127.0.0.1:{server.server_address[1]}", "TELCHINES_TEST_API_KEY"))
+        monkeypatch.setenv("TELCHINES_TEST_API_KEY", "test-token")
+        monkeypatch.chdir(sample_project)
+        result = runner.invoke(app, ["providers", "check", "mock-anthropic"])
+        assert result.exit_code == 0
+        payload = json.loads(result.stdout)
+        transport = payload["providers"][0]["checks"]["transport"]
+        assert transport["mode"] == "anthropic"
+        assert transport["network_scope"] == "local_http"
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -1049,7 +1178,7 @@ def test_cli_checks_provider_policy_block(sample_project: Path, monkeypatch) -> 
     config_path = sample_project / ".tel" / "config.json"
     payload = read_json(config_path)
     payload["model_mode"] = "local"
-    payload["project"]["model_policy"] = _remote_model_policy("http://127.0.0.1:9", "TELCHINES_TEST_API_KEY")
+    payload["project"]["model_policy"] = _remote_model_policy("https://example.invalid/v1", "TELCHINES_TEST_API_KEY")
     write_json(config_path, payload)
     monkeypatch.chdir(sample_project)
     result = runner.invoke(app, ["providers", "check", "mock-remote"])

@@ -11,7 +11,7 @@ from telchines.utils import dataclass_to_dict, ensure_directory, read_json, stab
 
 SUPPORTED_MODEL_MODES = {"local", "hybrid", "remote"}
 SUPPORTED_ADAPTERS = {"verilator", "iverilog", "slang", "verible", "symbiyosys", "fixture"}
-SUPPORTED_PROVIDER_KINDS = {"heuristic", "openai_compatible", "local_command", "agent_runtime"}
+SUPPORTED_PROVIDER_KINDS = {"heuristic", "openai_compatible", "anthropic", "local_command", "agent_runtime"}
 
 
 def default_generation_config() -> dict[str, Any]:
@@ -289,8 +289,8 @@ class ProjectConfig:
                 base_config = providers.get(base_provider)
                 if not isinstance(base_config, dict):
                     raise ConfigError(f"provider {provider_name} base_provider must reference a configured provider")
-                if base_config.get("kind") not in {"openai_compatible", "local_command"}:
-                    raise ConfigError(f"provider {provider_name} base_provider must be openai_compatible or local_command")
+                if base_config.get("kind") not in {"openai_compatible", "anthropic", "local_command"}:
+                    raise ConfigError(f"provider {provider_name} base_provider must be openai_compatible, anthropic, or local_command")
                 base_capabilities = self.provider_capabilities(base_provider, base_config)
                 if "repair" not in base_capabilities:
                     raise ConfigError(f"provider {provider_name} base_provider must support repair")
@@ -314,6 +314,37 @@ class ProjectConfig:
                     raise ConfigError(f"provider {provider_name} headers must be an object of string pairs")
                 if any(key.lower() == "authorization" for key in headers):
                     raise ConfigError(f"provider {provider_name} custom headers cannot override Authorization")
+                auth = provider_config.get("auth", "bearer")
+                if auth not in {"bearer", "none"}:
+                    raise ConfigError(f"provider {provider_name} auth must be bearer or none")
+
+            if kind == "anthropic":
+                base_url = provider_config.get("base_url", "https://api.anthropic.com/v1")
+                if not isinstance(base_url, str) or not base_url.strip():
+                    raise ConfigError(f"provider {provider_name} base_url must be a non-empty string")
+                parsed_base_url = urlparse(base_url)
+                if parsed_base_url.scheme not in {"http", "https"} or not parsed_base_url.netloc:
+                    raise ConfigError(f"provider {provider_name} base_url must be an http(s) URL")
+                if not isinstance(provider_config.get("model"), str) or not provider_config["model"].strip():
+                    raise ConfigError(f"provider {provider_name} must define model")
+                endpoint = provider_config.get("endpoint", "messages")
+                if not isinstance(endpoint, str) or not endpoint.strip() or "://" in endpoint:
+                    raise ConfigError(f"provider {provider_name} endpoint must be a relative path")
+                version = provider_config.get("anthropic_version", "2023-06-01")
+                if not isinstance(version, str) or not version.strip():
+                    raise ConfigError(f"provider {provider_name} anthropic_version must be a non-empty string")
+                api_key_env = provider_config.get("api_key_env", "ANTHROPIC_API_KEY")
+                if not isinstance(api_key_env, str) or not api_key_env.strip():
+                    raise ConfigError(f"provider {provider_name} api_key_env must be a non-empty string")
+                max_tokens = provider_config.get("max_tokens", 4096)
+                if not isinstance(max_tokens, int) or max_tokens <= 0:
+                    raise ConfigError(f"provider {provider_name} max_tokens must be a positive integer")
+                headers = provider_config.get("headers", {})
+                if not isinstance(headers, dict) or any(not isinstance(key, str) or not isinstance(value, str) for key, value in headers.items()):
+                    raise ConfigError(f"provider {provider_name} headers must be an object of string pairs")
+                reserved = {"x-api-key", "anthropic-version", "content-type"}
+                if any(key.lower() in reserved for key in headers):
+                    raise ConfigError(f"provider {provider_name} custom headers cannot override Anthropic transport headers")
 
             if kind == "local_command":
                 command = provider_config.get("command")

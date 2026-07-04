@@ -220,7 +220,16 @@ def _execute_selected_workflow(
     intent: str,
 ) -> dict[str, object]:
     if workflow_type == "compile_repair":
-        return _execute_agent_repair(config, store, retrieval, tool=tool, files=files, extra_args=extra_args, apply_patch=apply_patch)
+        return _execute_agent_repair(
+            config,
+            store,
+            retrieval,
+            tool=tool,
+            files=files,
+            extra_args=extra_args,
+            apply_patch=apply_patch,
+            provider_name=provider_name,
+        )
     if workflow_type == "triage":
         if not logs:
             raise ValueError("agent triage requires at least one --logs path")
@@ -359,6 +368,7 @@ def _execute_agent_repair(
     files: list[str],
     extra_args: list[str],
     apply_patch: bool,
+    provider_name: str | None,
 ) -> dict[str, object]:
     if not tool:
         raise ValueError("agent repair requires --tool")
@@ -386,7 +396,7 @@ def _execute_agent_repair(
         replay_command=execution.command,
     )
     store.save_run(base_run)
-    provider = build_repair_provider(config)
+    provider = build_repair_provider(config, provider_name=provider_name)
     proposal, validation_run, context = execute_repair(config, store, retrieval, provider, base_run, apply_patch=apply_patch)
     payload = {
         "run_id": base_run.run_id,

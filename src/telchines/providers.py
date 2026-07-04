@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 from urllib import error, request
+from urllib.parse import urlparse
 
 from telchines.agent_runtime import LangGraphRepairRuntime, runtime_capability
 from telchines.config import ProjectConfig
@@ -91,6 +92,8 @@ class ProviderStatus:
     default_for: list[str]
     allowed: bool
     blocked_reason: str = ""
+    network_scope: str = ""
+    auth_mode: str = ""
 
 
 @dataclass(slots=True)
@@ -417,6 +420,84 @@ class OpenAICompatibleGenerationProvider(GenerationProvider):
         }
 
 
+class AnthropicRepairProvider(RepairProvider):
+    def __init__(self, provider_name: str, config: dict[str, Any]) -> None:
+        self.provider_name = provider_name
+        self.config = config
+        self.name = provider_name
+
+    def propose_patch(self, request_value: RepairRequest) -> RepairProviderResult:
+        request_payload = _build_repair_request_payload(request_value, self.provider_name)
+        message_payload = self._build_message_payload(request_payload)
+        response_payload = _invoke_anthropic(self.provider_name, self.config, message_payload)
+        proposal = _build_patch_from_content_payload(self.provider_name, request_value, _extract_anthropic_response_content(response_payload, self.provider_name))
+        summary = "model-backed repair proposal generated" if proposal else "model-backed provider returned no patch"
+        return RepairProviderResult(
+            provider_name=self.provider_name,
+            request_payload={"provider_request": request_payload, "transport_request": message_payload},
+            response_payload=response_payload,
+            proposal=proposal,
+            summary=summary,
+        )
+
+    def _build_message_payload(self, provider_request: dict[str, Any]) -> dict[str, Any]:
+        system_prompt = self.config.get(
+            "system_prompt",
+            "You are a hardware verification repair assistant. Return only valid JSON.",
+        )
+        return _build_anthropic_message_payload(self.config, system_prompt, provider_request)
+
+
+class AnthropicGenerationProvider(GenerationProvider):
+    def __init__(self, provider_name: str, config: dict[str, Any]) -> None:
+        self.provider_name = provider_name
+        self.config = config
+        self.name = provider_name
+
+    def generate_sva(self, request_value: GenerationRequest) -> GenerationProviderResult:
+        request_payload = _build_generation_request_payload(request_value, self.provider_name)
+        message_payload = self._build_message_payload(request_payload)
+        response_payload = _invoke_anthropic(self.provider_name, self.config, message_payload)
+        candidate = _build_sva_candidate_from_content_payload(
+            self.provider_name,
+            request_value,
+            _extract_anthropic_response_content(response_payload, self.provider_name),
+        )
+        summary = "model-backed SVA candidate generated" if candidate else "model-backed provider returned no SVA candidate"
+        return GenerationProviderResult(
+            provider_name=self.provider_name,
+            request_payload={"provider_request": request_payload, "transport_request": message_payload},
+            response_payload=response_payload,
+            candidate=candidate,
+            summary=summary,
+        )
+
+    def generate_cocotb(self, request_value: CocotbGenerationRequest) -> CocotbGenerationProviderResult:
+        request_payload = _build_cocotb_generation_request_payload(request_value, self.provider_name)
+        message_payload = self._build_message_payload(request_payload)
+        response_payload = _invoke_anthropic(self.provider_name, self.config, message_payload)
+        candidate = _build_cocotb_candidate_from_content_payload(
+            self.provider_name,
+            request_value,
+            _extract_anthropic_response_content(response_payload, self.provider_name),
+        )
+        summary = "model-backed cocotb scaffold generated" if candidate else "model-backed provider returned no cocotb scaffold"
+        return CocotbGenerationProviderResult(
+            provider_name=self.provider_name,
+            request_payload={"provider_request": request_payload, "transport_request": message_payload},
+            response_payload=response_payload,
+            candidate=candidate,
+            summary=summary,
+        )
+
+    def _build_message_payload(self, provider_request: dict[str, Any]) -> dict[str, Any]:
+        system_prompt = self.config.get(
+            "system_prompt",
+            "You are a hardware verification assertion assistant. Return only valid JSON.",
+        )
+        return _build_anthropic_message_payload(self.config, system_prompt, provider_request)
+
+
 class LocalCommandRepairProvider(RepairProvider):
     def __init__(self, provider_name: str, config: dict[str, Any]) -> None:
         self.provider_name = provider_name
@@ -496,6 +577,8 @@ class ProviderRegistry:
             return HeuristicRepairProvider()
         if kind == "openai_compatible":
             return OpenAICompatibleRepairProvider(name, provider_config)
+        if kind == "anthropic":
+            return AnthropicRepairProvider(name, provider_config)
         if kind == "local_command":
             return LocalCommandRepairProvider(name, provider_config)
         if kind == "agent_runtime":
@@ -511,6 +594,8 @@ class ProviderRegistry:
             return HeuristicGenerationProvider()
         if kind == "openai_compatible":
             return OpenAICompatibleGenerationProvider(name, provider_config)
+        if kind == "anthropic":
+            return AnthropicGenerationProvider(name, provider_config)
         if kind == "local_command":
             return LocalCommandGenerationProvider(name, provider_config)
         raise ConfigError(f"unsupported generation provider kind: {kind}")
@@ -530,6 +615,8 @@ class ProviderRegistry:
                     default_for=default_for,
                     allowed=not blocked_reason,
                     blocked_reason=blocked_reason or "",
+                    network_scope=self._network_scope(provider_config),
+                    auth_mode=self._auth_mode(provider_config),
                 )
             )
         return statuses
@@ -614,10 +701,11 @@ class ProviderRegistry:
         kind = provider_config.get("kind")
         if kind == "heuristic":
             return None
-        if kind == "openai_compatible":
-            if self.config.no_egress:
+        if kind in {"openai_compatible", "anthropic"}:
+            scope = self._network_scope(provider_config)
+            if self.config.no_egress and scope == "external_http":
                 return "no_egress=true blocks remote providers"
-            if self.config.model_mode == "local":
+            if self.config.model_mode == "local" and scope == "external_http":
                 return "model_mode=local blocks remote providers"
             return None
         if kind == "local_command":
@@ -634,6 +722,12 @@ class ProviderRegistry:
                 return f"base provider {base_provider_name} is blocked by policy: {base_blocked_reason}"
             return None
         return "unsupported provider kind"
+
+    def _network_scope(self, provider_config: dict[str, Any]) -> str:
+        return _provider_network_scope(provider_config, self.providers)
+
+    def _auth_mode(self, provider_config: dict[str, Any]) -> str:
+        return _provider_auth_mode(provider_config, self.providers)
 
 
 def build_repair_provider(config: ProjectConfig, provider_name: str | None = None) -> RepairProvider:
@@ -805,21 +899,59 @@ def _build_cocotb_generation_request_payload(request_value: CocotbGenerationRequ
 
 
 def _invoke_openai_compatible(provider_name: str, config: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
-    api_key_env = config.get("api_key_env", "OPENAI_API_KEY")
-    api_key = os.environ.get(api_key_env)
-    if not api_key:
-        raise ProviderError(f"provider {provider_name} is missing credentials: set {api_key_env}")
+    auth = str(config.get("auth", "bearer"))
     url = _openai_compatible_url(config)
     headers = {
         "Content-Type": "application/json",
-        "Authorization": f"Bearer {api_key}",
     }
+    if auth == "bearer":
+        api_key_env = config.get("api_key_env", "OPENAI_API_KEY")
+        api_key = os.environ.get(api_key_env)
+        if not api_key:
+            raise ProviderError(f"provider {provider_name} is missing credentials: set {api_key_env}")
+        headers["Authorization"] = f"Bearer {api_key}"
+    elif auth != "none":
+        raise ProviderError(f"provider {provider_name} auth must be bearer or none")
     for key, value in config.get("headers", {}).items():
         if str(key).lower() == "authorization":
             raise ProviderError(f"provider {provider_name} custom headers cannot override Authorization")
         headers[key] = value
+    return _post_json(provider_name, url, payload, headers, int(config.get("timeout_seconds", 30)))
+
+
+def _build_anthropic_message_payload(config: dict[str, Any], system_prompt: str, provider_request: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "model": config["model"],
+        "max_tokens": int(config.get("max_tokens", 4096)),
+        "temperature": config.get("temperature", 0),
+        "system": system_prompt,
+        "messages": [
+            {"role": "user", "content": json.dumps(provider_request)},
+        ],
+    }
+
+
+def _invoke_anthropic(provider_name: str, config: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    api_key_env = config.get("api_key_env", "ANTHROPIC_API_KEY")
+    api_key = os.environ.get(api_key_env)
+    if not api_key:
+        raise ProviderError(f"provider {provider_name} is missing credentials: set {api_key_env}")
+    url = _anthropic_url(config)
+    headers = {
+        "Content-Type": "application/json",
+        "x-api-key": api_key,
+        "anthropic-version": str(config.get("anthropic_version", "2023-06-01")),
+    }
+    reserved = {"x-api-key", "anthropic-version", "content-type"}
+    for key, value in config.get("headers", {}).items():
+        if str(key).lower() in reserved:
+            raise ProviderError(f"provider {provider_name} custom headers cannot override Anthropic transport headers")
+        headers[key] = value
+    return _post_json(provider_name, url, payload, headers, int(config.get("timeout_seconds", 30)))
+
+
+def _post_json(provider_name: str, url: str, payload: dict[str, Any], headers: dict[str, str], timeout: int) -> dict[str, Any]:
     http_request = request.Request(url, data=json.dumps(payload).encode("utf-8"), headers=headers, method="POST")
-    timeout = int(config.get("timeout_seconds", 30))
     try:
         with request.urlopen(http_request, timeout=timeout) as response:
             body = response.read().decode("utf-8")
@@ -904,7 +1036,8 @@ def _check_provider_transport(provider_name: str, config: dict[str, Any], projec
         }
     if kind == "openai_compatible":
         api_key_env = str(config.get("api_key_env", "OPENAI_API_KEY"))
-        if not os.environ.get(api_key_env):
+        auth = str(config.get("auth", "bearer"))
+        if auth == "bearer" and not os.environ.get(api_key_env):
             raise ProviderError(f"provider {provider_name} is missing credentials: set {api_key_env}")
         payload = {
             "model": config["model"],
@@ -922,7 +1055,27 @@ def _check_provider_transport(provider_name: str, config: dict[str, Any], projec
             "base_url": config["base_url"],
             "endpoint": config.get("endpoint", "chat/completions"),
             "model": config["model"],
+            "api_key_env": api_key_env if auth == "bearer" else None,
+            "auth_mode": auth,
+            "network_scope": _provider_network_scope(config, {}),
+            "parsed_keys": sorted(parsed.keys()),
+        }
+    if kind == "anthropic":
+        api_key_env = str(config.get("api_key_env", "ANTHROPIC_API_KEY"))
+        if not os.environ.get(api_key_env):
+            raise ProviderError(f"provider {provider_name} is missing credentials: set {api_key_env}")
+        payload = _build_anthropic_message_payload(config, "Return only valid JSON.", {"instructions": 'Return exactly {"status":"ok"} as JSON.'})
+        response = _invoke_anthropic(provider_name, config, payload)
+        parsed = _extract_anthropic_response_content(response, provider_name)
+        return {
+            "status": "passed",
+            "mode": "anthropic",
+            "base_url": config.get("base_url", "https://api.anthropic.com/v1"),
+            "endpoint": config.get("endpoint", "messages"),
+            "model": config["model"],
             "api_key_env": api_key_env,
+            "anthropic_version": config.get("anthropic_version", "2023-06-01"),
+            "network_scope": _provider_network_scope(config, {}),
             "parsed_keys": sorted(parsed.keys()),
         }
     if kind == "agent_runtime":
@@ -946,6 +1099,12 @@ def _openai_compatible_url(config: dict[str, Any]) -> str:
     return f"{base_url}/{endpoint}"
 
 
+def _anthropic_url(config: dict[str, Any]) -> str:
+    base_url = str(config.get("base_url", "https://api.anthropic.com/v1")).rstrip("/")
+    endpoint = str(config.get("endpoint", "messages")).strip().lstrip("/")
+    return f"{base_url}/{endpoint}"
+
+
 def _extract_openai_response_content(response_payload: dict[str, Any], provider_name: str) -> dict[str, Any]:
     choices = response_payload.get("choices") or []
     if not choices:
@@ -959,6 +1118,21 @@ def _extract_openai_response_content(response_payload: dict[str, Any], provider_
     if not content.strip():
         content = _extract_tool_call_arguments(message)
     return _extract_json_object(content, provider_name)
+
+
+def _extract_anthropic_response_content(response_payload: dict[str, Any], provider_name: str) -> dict[str, Any]:
+    content = response_payload.get("content")
+    if isinstance(content, str):
+        return _extract_json_object(content, provider_name)
+    if not isinstance(content, list) or not content:
+        raise ProviderError(f"provider {provider_name} returned no content")
+    text_parts: list[str] = []
+    for block in content:
+        if isinstance(block, dict) and isinstance(block.get("text"), str):
+            text_parts.append(block["text"])
+    if not text_parts:
+        raise ProviderError(f"provider {provider_name} returned no text content")
+    return _extract_json_object("\n".join(text_parts), provider_name)
 
 
 def _extract_tool_call_arguments(message: dict[str, Any]) -> str:
@@ -975,6 +1149,48 @@ def _extract_tool_call_arguments(message: dict[str, Any]) -> str:
         if isinstance(function, dict) and isinstance(function.get("arguments"), str):
             return function["arguments"]
     return ""
+
+
+def _provider_network_scope(provider_config: dict[str, Any], providers: dict[str, Any]) -> str:
+    kind = provider_config.get("kind")
+    if kind == "heuristic":
+        return "builtin"
+    if kind == "local_command":
+        return "local_process"
+    if kind == "openai_compatible":
+        return _http_network_scope(str(provider_config.get("base_url", "")))
+    if kind == "anthropic":
+        return _http_network_scope(str(provider_config.get("base_url", "https://api.anthropic.com/v1")))
+    if kind == "agent_runtime":
+        base_provider = providers.get(str(provider_config.get("base_provider")))
+        if isinstance(base_provider, dict):
+            return _provider_network_scope(base_provider, providers)
+        return "unknown"
+    return "unknown"
+
+
+def _provider_auth_mode(provider_config: dict[str, Any], providers: dict[str, Any]) -> str:
+    kind = provider_config.get("kind")
+    if kind == "openai_compatible":
+        return str(provider_config.get("auth", "bearer"))
+    if kind == "anthropic":
+        return "x-api-key"
+    if kind == "agent_runtime":
+        base_provider = providers.get(str(provider_config.get("base_provider")))
+        if isinstance(base_provider, dict):
+            return _provider_auth_mode(base_provider, providers)
+        return "delegated"
+    return "none"
+
+
+def _http_network_scope(base_url: str) -> str:
+    parsed = urlparse(base_url)
+    hostname = (parsed.hostname or "").lower()
+    if hostname in {"localhost", "127.0.0.1", "::1"}:
+        return "local_http"
+    if hostname.startswith("127."):
+        return "local_http"
+    return "external_http"
 
 
 def _build_patch_from_content_payload(provider_name: str, request_value: RepairRequest, content_payload: dict[str, Any]) -> PatchProposal | None:

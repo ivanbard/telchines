@@ -13,7 +13,7 @@ from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_SCRATCH_ROOT = REPO_ROOT / ".test-work" / "provider-capability-study"
-SUPPORTED_KINDS = {"openai_compatible", "local_command", "agent_runtime"}
+SUPPORTED_KINDS = {"openai_compatible", "anthropic", "local_command", "agent_runtime"}
 SECRET_KEY_PARTS = ("api_key", "apikey", "authorization", "bearer", "secret", "token", "password")
 
 
@@ -117,7 +117,7 @@ def _validate_matrix(payload: dict[str, Any], path: Path) -> None:
         capabilities = provider.get("capabilities", [])
         if not isinstance(capabilities, list) or any(item not in {"repair", "generation"} for item in capabilities):
             raise MatrixError(f"provider {name} capabilities must be repair and/or generation")
-        if kind in {"openai_compatible", "local_command"} and not capabilities:
+        if kind in {"openai_compatible", "anthropic", "local_command"} and not capabilities:
             raise MatrixError(f"provider {name} must declare at least one capability")
         if kind == "agent_runtime":
             if capabilities != ["repair"]:
@@ -134,7 +134,7 @@ def _reject_literal_secrets(value: Any, path: str) -> None:
     if isinstance(value, dict):
         for key, item in value.items():
             lowered = str(key).lower()
-            if any(part in lowered for part in SECRET_KEY_PARTS) and lowered not in {"api_key_env", "enabled_env", "model_env", "base_url_env"}:
+            if any(part in lowered for part in SECRET_KEY_PARTS) and lowered not in {"api_key_env", "enabled_env", "model_env", "base_url_env", "max_tokens"}:
                 raise MatrixError(f"{path}.{key} looks like a literal secret field; use an *_env field instead")
             _reject_literal_secrets(item, f"{path}.{key}")
     elif isinstance(value, list):
@@ -192,6 +192,8 @@ def _provider_commands(provider: dict[str, Any]) -> list[dict[str, Any]]:
                     "fixture",
                     "--file",
                     "rtl/broken_counter.sv",
+                    "--provider",
+                    name,
                 ],
             )
         )
@@ -232,7 +234,12 @@ def _prepare_scratch_project(scratch: Path, matrix: dict[str, Any], providers: l
     shutil.copytree(fixture, scratch)
     _ensure_generation_fixture_files(scratch)
     _write_local_fixture_provider(scratch)
-    subprocess.run([sys.executable, "-m", "telchines", "project", "init", ".", "--name", f"{matrix['name']}-provider-study"], cwd=scratch, check=True)
+    subprocess.run(
+        [sys.executable, "-m", "telchines", "project", "init", ".", "--name", f"{matrix['name']}-provider-study"],
+        cwd=scratch,
+        env=_subprocess_env(),
+        check=True,
+    )
     config_path = scratch / ".tel" / "config.json"
     payload = json.loads(config_path.read_text(encoding="utf-8"))
     provider_configs = {provider["name"]: _provider_config(provider) for provider in providers}
@@ -272,7 +279,19 @@ def _provider_config(provider: dict[str, Any]) -> dict[str, Any]:
             "timeout_seconds": int(provider.get("timeout_seconds", 30)),
             "output_limit_chars": int(provider.get("output_limit_chars", 65536)),
         }
-    return {
+    if kind == "anthropic":
+        return {
+            "kind": "anthropic",
+            "capabilities": provider.get("capabilities", []),
+            "base_url": _env_or_default(provider, "base_url"),
+            "endpoint": provider.get("endpoint", "messages"),
+            "model": _env_or_default(provider, "model"),
+            "api_key_env": provider.get("api_key_env", "ANTHROPIC_API_KEY"),
+            "anthropic_version": provider.get("anthropic_version", "2023-06-01"),
+            "max_tokens": int(provider.get("max_tokens", 4096)),
+            "timeout_seconds": int(provider.get("timeout_seconds", 60)),
+        }
+    config = {
         "kind": "openai_compatible",
         "capabilities": provider.get("capabilities", []),
         "base_url": _env_or_default(provider, "base_url"),
@@ -281,6 +300,9 @@ def _provider_config(provider: dict[str, Any]) -> dict[str, Any]:
         "api_key_env": provider.get("api_key_env", "OPENAI_API_KEY"),
         "timeout_seconds": int(provider.get("timeout_seconds", 60)),
     }
+    if provider.get("auth") == "none":
+        config["auth"] = "none"
+    return config
 
 
 def _env_or_default(provider: dict[str, Any], field: str) -> str:
@@ -430,6 +452,7 @@ def _run_commands(scratch: Path, commands: list[dict[str, Any]]) -> list[dict[st
             input=item.get("stdin"),
             capture_output=True,
             text=True,
+            env=_subprocess_env(),
             check=False,
         )
         elapsed = round(time.perf_counter() - started, 3)
@@ -500,6 +523,14 @@ def _redact_summary(value: Any) -> Any:
 def _looks_secret_key(key: str) -> bool:
     lowered = key.lower()
     return any(part in lowered for part in SECRET_KEY_PARTS)
+
+
+def _subprocess_env() -> dict[str, str]:
+    env = os.environ.copy()
+    src_path = str(REPO_ROOT / "src")
+    existing = env.get("PYTHONPATH")
+    env["PYTHONPATH"] = src_path if not existing else os.pathsep.join([src_path, existing])
+    return env
 
 
 def _bounded(value: str, limit: int = 4000) -> str:

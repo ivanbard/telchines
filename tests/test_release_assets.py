@@ -37,6 +37,7 @@ def test_release_files_exist() -> None:
         repo_root / "docs" / "providers.md",
         repo_root / "docs" / "local-llms.md",
         repo_root / "docs" / "provider-capability-study.md",
+        repo_root / "docs" / "provider-matrices" / "anthropic.json",
         repo_root / "docs" / "provider-matrices" / "openrouter.json",
         repo_root / "docs" / "provider-matrices" / "local_command.json",
         repo_root / "docs" / "generated-artifacts.md",

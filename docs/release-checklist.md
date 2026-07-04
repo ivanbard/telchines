@@ -12,6 +12,7 @@
 - run `python scripts/provider_capability_study.py --matrix docs/provider-matrices/local_command.json --dry-run`
 - optionally run `pytest tests/test_provider_integration.py` with provider matrix live env vars set
 - optionally run `python scripts/provider_capability_study.py --matrix docs/provider-matrices/openrouter.json --include-live` with `TELCHINES_LIVE_OPENROUTER=1`
+- optionally run `python scripts/provider_capability_study.py --matrix docs/provider-matrices/anthropic.json --include-live` with `TELCHINES_LIVE_ANTHROPIC=1`
 - run `tel index status` before and after `tel index`
 - run `tel doctor privacy`
 - run `tel adapters check --category simulation` or note unavailable local tools

@@ -197,15 +197,16 @@ Provider kinds in `v1`:
 
 - `heuristic`
 - `openai_compatible`
+- `anthropic`
 - `local_command`
 - `agent_runtime` (optional repair-loop pilot; install `telchines[agentic]` for LangGraph dependencies)
 
 Policy controls:
 
-- `model_mode=local` blocks remote providers
+- `model_mode=local` blocks external HTTP providers, while allowing built-in, local command, and loopback local HTTP providers
 - `model_mode=remote` blocks local command providers
 - `model_mode=hybrid` allows both
-- `no_egress=true` blocks networked providers
+- `no_egress=true` blocks external HTTP providers
 
 See [docs/adapters.md](https://github.com/ivanbard/telchines/blob/main/docs/adapters.md), [docs/providers.md](https://github.com/ivanbard/telchines/blob/main/docs/providers.md), and [docs/generated-artifacts.md](https://github.com/ivanbard/telchines/blob/main/docs/generated-artifacts.md) for the exact support contract.
 

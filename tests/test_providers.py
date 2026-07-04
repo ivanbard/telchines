@@ -11,6 +11,7 @@ from telchines.models import Observation, RetrievalContext, ToolReference, Verif
 from telchines.providers import (
     RepairRequest,
     _build_patch_from_content_payload,
+    _extract_anthropic_response_content,
     _extract_json_object,
     _extract_openai_response_content,
     _invoke_local_command,
@@ -156,6 +157,23 @@ def test_extract_openai_response_content_accepts_legacy_function_call_arguments(
         ]
     }
     assert _extract_openai_response_content(payload, "mock") == {"status": "ok", "workflow_type": "provider_check"}
+
+
+def test_extract_anthropic_response_content_accepts_text_blocks() -> None:
+    payload = {
+        "content": [
+            {
+                "type": "text",
+                "text": "notes\n```json\n{\"status\":\"ok\",\"workflow_type\":\"provider_check\"}\n```",
+            }
+        ]
+    }
+    assert _extract_anthropic_response_content(payload, "mock") == {"status": "ok", "workflow_type": "provider_check"}
+
+
+def test_extract_anthropic_response_content_rejects_missing_text() -> None:
+    with pytest.raises(ProviderError, match="no text content"):
+        _extract_anthropic_response_content({"content": [{"type": "thinking"}]}, "mock")
 
 
 def test_repair_provider_rejects_paths_outside_project(sample_project: Path) -> None:

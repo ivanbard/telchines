@@ -12,7 +12,7 @@ from telchines.config import ProjectConfig
 from telchines.eval import run_default_suite
 from telchines.import_manifest import import_regression_manifest
 from telchines.models import VerificationRun
-from telchines.providers import build_generation_provider, build_repair_provider, check_provider_statuses, list_provider_statuses
+from telchines.providers import _provider_network_scope, build_generation_provider, build_repair_provider, check_provider_statuses, list_provider_statuses
 from telchines.retrieval import RetrievalService
 from telchines.run_store import RunStore
 from telchines.utils import SECRET_KEY_RE, dataclass_to_dict, ensure_directory, read_json, remove_tree, stable_id, utc_now
@@ -172,12 +172,17 @@ def privacy_report(root: Path | None = None) -> dict[str, object]:
                             "summary": f"provider env stores secret-looking keys in config: {', '.join(secret_env_keys)}",
                         }
                     )
-        if effective_kind == "openai_compatible" and not config.no_egress and config.model_mode != "local":
+        if (
+            effective_kind in {"openai_compatible", "anthropic"}
+            and _provider_network_scope(effective_config, providers) == "external_http"
+            and not config.no_egress
+            and config.model_mode != "local"
+        ):
             risks.append(
                 {
                     "provider": name,
                     "severity": "info",
-                    "summary": "openai_compatible provider may send retrieved RTL/spec/log context to a configured HTTP endpoint",
+                    "summary": f"{effective_kind} provider may send retrieved RTL/spec/log context to a configured HTTP endpoint",
                 }
             )
     return {
@@ -590,6 +595,8 @@ def list_providers(root: Path | None = None) -> dict[str, object]:
                 "base_provider": provider_configs.get(status.name, {}).get("base_provider") if isinstance(provider_configs.get(status.name), dict) else None,
                 "runtime": provider_configs.get(status.name, {}).get("runtime") if isinstance(provider_configs.get(status.name), dict) else None,
                 "timeout_seconds": provider_configs.get(status.name, {}).get("timeout_seconds") if isinstance(provider_configs.get(status.name), dict) else None,
+                "network_scope": status.network_scope,
+                "auth_mode": status.auth_mode,
             }
             for status in list_provider_statuses(config)
         ],

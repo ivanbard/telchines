@@ -5,6 +5,8 @@ Telchines supports local models through two stable `v1` paths:
 - `openai_compatible` for local HTTP servers such as Ollama, LM Studio, llama.cpp server, vLLM, or LiteLLM
 - `local_command` for a wrapper script that reads JSON on stdin and writes JSON on stdout
 
+Loopback HTTP endpoints such as `127.0.0.1`, `localhost`, and `::1` are treated as local HTTP providers. They remain allowed under `model_mode=local` and `no_egress=true`.
+
 ## Local OpenAI-Compatible Server
 
 Example Ollama-style config:
@@ -28,7 +30,7 @@ Example Ollama-style config:
           "capabilities": ["generation"],
           "base_url": "http://127.0.0.1:11434/v1",
           "model": "qwen2.5-coder",
-          "api_key_env": "TELCHINES_LOCAL_API_KEY",
+          "auth": "none",
           "timeout_seconds": 120
         }
       }
@@ -40,7 +42,6 @@ Example Ollama-style config:
 Run a diagnostic before using it for generation:
 
 ```bash
-export TELCHINES_LOCAL_API_KEY=local
 tel providers check ollama-local
 ```
 

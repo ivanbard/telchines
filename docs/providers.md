@@ -26,6 +26,25 @@ Optional fields:
 
 - `endpoint`, a relative path such as `chat/completions`; leading slashes are tolerated, and base URL path prefixes like `/v1` are preserved
 - `headers` for extra string-valued HTTP headers; `Authorization` is reserved and always derived from `api_key_env`
+- `auth`, either `bearer` (default) or `none`; use `none` for local servers that do not require an `Authorization` header
+
+### `anthropic`
+
+Native Anthropic Messages API provider for hosted Claude models.
+
+Required fields:
+
+- `model`
+- `api_key_env`
+- `timeout_seconds`
+
+Optional fields:
+
+- `base_url`, defaulting to `https://api.anthropic.com/v1`
+- `endpoint`, defaulting to `messages`
+- `anthropic_version`, defaulting to `2023-06-01`
+- `max_tokens`, defaulting to `4096`
+- `headers` for extra string-valued HTTP headers; `x-api-key`, `anthropic-version`, and `content-type` are reserved
 
 ### `local_command`
 
@@ -49,7 +68,7 @@ Optional compile-repair pilot that runs a bounded agent loop over an existing re
 Required fields:
 
 - `runtime`, currently `langgraph`
-- `base_provider`, referencing an `openai_compatible` or `local_command` repair provider
+- `base_provider`, referencing an `openai_compatible`, `anthropic`, or `local_command` repair provider
 - `capabilities`, currently `["repair"]`
 - `timeout_seconds`
 
@@ -111,10 +130,10 @@ Agent-runtime repair pilot:
 
 ## Policy Rules
 
-- `model_mode=local` blocks remote providers
+- `model_mode=local` blocks external HTTP providers, while allowing built-in, local command, and loopback local HTTP providers
 - `model_mode=remote` blocks local command providers
 - `model_mode=hybrid` allows both local and remote providers
-- `no_egress=true` blocks networked providers even in hybrid mode
+- `no_egress=true` blocks external HTTP providers even in hybrid mode
 
 Use `tel providers list` to inspect which providers are allowed and why any provider is blocked.
 
@@ -191,6 +210,33 @@ Hosted OpenAI-compatible endpoint:
 }
 ```
 
+Native Anthropic endpoint:
+
+```json
+{
+  "model_mode": "hybrid",
+  "no_egress": false,
+  "project": {
+    "model_policy": {
+      "default_provider_by_capability": {
+        "repair": "anthropic-dev",
+        "generation": "anthropic-dev"
+      },
+      "providers": {
+        "anthropic-dev": {
+          "kind": "anthropic",
+          "capabilities": ["repair", "generation"],
+          "model": "claude-3-5-sonnet-latest",
+          "api_key_env": "ANTHROPIC_API_KEY",
+          "max_tokens": 4096,
+          "timeout_seconds": 90
+        }
+      }
+    }
+  }
+}
+```
+
 OpenRouter is also OpenAI-compatible. Set `OPENROUTER_API_KEY` in your shell or project-local ignored `.env`, choose a model ID from OpenRouter's model list, and point the provider at `/api/v1`:
 
 ```json
@@ -243,7 +289,7 @@ Local OpenAI-compatible server such as Ollama, LM Studio, llama.cpp server, vLLM
           "capabilities": ["generation"],
           "base_url": "http://127.0.0.1:11434/v1",
           "model": "qwen2.5-coder",
-          "api_key_env": "TELCHINES_LOCAL_API_KEY",
+          "auth": "none",
           "timeout_seconds": 120
         }
       }
@@ -252,7 +298,7 @@ Local OpenAI-compatible server such as Ollama, LM Studio, llama.cpp server, vLLM
 }
 ```
 
-Some local servers do not require authentication but still expect a bearer value. Set a harmless local-only value:
+Some local servers do not require authentication. Set `auth` to `none` to avoid sending an `Authorization` header. If a server still expects a bearer value, keep the default auth mode and set a harmless local-only value:
 
 ```bash
 export TELCHINES_LOCAL_API_KEY=local

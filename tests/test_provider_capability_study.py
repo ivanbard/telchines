@@ -65,3 +65,15 @@ def test_provider_capability_matrix_expands_agent_base_dependency() -> None:
     matrix = provider_capability_study.load_matrix(REPO_ROOT / "docs" / "provider-matrices" / "agent_runtime.json")
     selected = provider_capability_study._selected_providers(matrix, "matrix-agent")
     assert [provider["name"] for provider in selected] == ["matrix-local-base", "matrix-agent"]
+
+
+def test_provider_capability_matrix_accepts_anthropic_preset() -> None:
+    matrix = provider_capability_study.load_matrix(REPO_ROOT / "docs" / "provider-matrices" / "anthropic.json")
+    assert matrix["providers"][0]["kind"] == "anthropic"
+
+
+def test_provider_capability_repair_commands_select_provider(work_root: Path) -> None:
+    matrix = provider_capability_study.load_matrix(REPO_ROOT / "docs" / "provider-matrices" / "local_command.json")
+    plan = provider_capability_study.build_plan(matrix, matrix["providers"], work_root, include_live=False, dry_run=True)
+    repair_command = next(command for command in plan["commands"] if command["label"] == "agent_repair")
+    assert repair_command["command"][-2:] == ["--provider", "matrix-local"]

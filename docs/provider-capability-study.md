@@ -1,6 +1,6 @@
 # Provider Capability Study
 
-Telchines can certify LLM provider integrations with a matrix-backed scratch-project harness. The harness covers `openai_compatible`, `local_command`, and `agent_runtime` providers without committing raw `.tel` artifacts.
+Telchines can certify LLM provider integrations with a matrix-backed scratch-project harness. The harness covers `openai_compatible`, `anthropic`, `local_command`, and `agent_runtime` providers without committing raw `.tel` artifacts.
 
 Preview a matrix without calling providers:
 
@@ -81,6 +81,7 @@ Checked-in presets live in `docs/provider-matrices/`:
 
 - `openrouter.json`
 - `openai.json`
+- `anthropic.json`
 - `ollama.json`
 - `lmstudio.json`
 - `llama_cpp.json`
