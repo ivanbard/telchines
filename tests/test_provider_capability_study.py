@@ -77,3 +77,28 @@ def test_provider_capability_repair_commands_select_provider(work_root: Path) ->
     plan = provider_capability_study.build_plan(matrix, matrix["providers"], work_root, include_live=False, dry_run=True)
     repair_command = next(command for command in plan["commands"] if command["label"] == "agent_repair")
     assert repair_command["command"][-2:] == ["--provider", "matrix-local"]
+
+
+def test_provider_capability_scorer_rejects_false_green_agent_repair() -> None:
+    status, reason = provider_capability_study._score_command_result(
+        {"label": "agent_repair"},
+        0,
+        {"status": "failed", "result": {"patch_id": None, "validation_status": None}},
+    )
+
+    assert status == "failed"
+    assert reason == "agent_repair_missing_validated_patch"
+
+
+def test_provider_capability_skips_missing_openai_model_before_scratch(work_root: Path, monkeypatch) -> None:
+    monkeypatch.setenv("TELCHINES_LIVE_OPENAI", "1")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.delenv("TELCHINES_OPENAI_MODEL", raising=False)
+    matrix = provider_capability_study.load_matrix(REPO_ROOT / "docs" / "provider-matrices" / "openai.json")
+
+    plan = provider_capability_study.build_plan(matrix, matrix["providers"], work_root, include_live=True)
+
+    assert all(command["status"] == "skipped" for command in plan["commands"])
+    assert any(command["reason"] == "missing_env:TELCHINES_OPENAI_MODEL" for command in plan["commands"])
+    assert any(str(command["reason"]).startswith("base_provider_skipped:openai:") for command in plan["commands"])
+    assert provider_capability_study._active_providers(matrix["providers"], plan["commands"]) == []

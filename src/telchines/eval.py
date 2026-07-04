@@ -323,6 +323,8 @@ def _run_sva_case(config: ProjectConfig, case: BenchmarkCase) -> dict[str, objec
         generated_candidate = candidate is not None
         artifact_exists = bool(candidate and (temp_root / candidate.file_path).exists())
         validation_status = validation_run.status if validation_run else "not_run"
+        validation_mode = str(validation_run.tool_result.get("validation_mode", "")) if validation_run else "not_run"
+        formal_status = str(validation_run.tool_result.get("formal_status", "not_run")) if validation_run else "not_run"
         passed = (
             generated_candidate
             and artifact_exists
@@ -341,6 +343,8 @@ def _run_sva_case(config: ProjectConfig, case: BenchmarkCase) -> dict[str, objec
             "candidate_id": candidate.candidate_id if candidate else None,
             "validation_run_id": validation_run.run_id if validation_run else None,
             "validation_status": validation_status,
+            "validation_mode": validation_mode,
+            "formal_status": formal_status,
             "artifact_generated": artifact_exists,
             "artifact_path": candidate.file_path if candidate else None,
             "property_count": property_count,
@@ -385,6 +389,8 @@ def _run_cocotb_case(config: ProjectConfig, case: BenchmarkCase) -> dict[str, ob
         identifier_match_rate = len(matched_identifiers) / max(len(expected_identifiers), 1)
         assumption_count = len(candidate.assumptions) if candidate else 0
         validation_status = validation_run.status if validation_run else "not_run"
+        validation_mode = str(validation_run.tool_result.get("validation_mode", "")) if validation_run else "not_run"
+        executable_status = str(validation_run.tool_result.get("executable_status", "not_run")) if validation_run else "not_run"
         artifact_exists = bool(candidate and (temp_root / candidate.file_path).exists())
         manifest_exists = bool(candidate and (temp_root / candidate.manifest_path).exists())
         passed = (
@@ -406,6 +412,8 @@ def _run_cocotb_case(config: ProjectConfig, case: BenchmarkCase) -> dict[str, ob
             "candidate_id": candidate.candidate_id if candidate else None,
             "validation_run_id": validation_run.run_id if validation_run else None,
             "validation_status": validation_status,
+            "validation_mode": validation_mode,
+            "executable_status": executable_status,
             "artifact_generated": artifact_exists,
             "manifest_generated": manifest_exists,
             "artifact_path": candidate.file_path if candidate else None,
@@ -528,6 +536,8 @@ def _aggregate_metrics(results: list[dict[str, object]]) -> dict[str, object]:
                 sum(1 for result in sva_results if result["validation_status"] == "passed") / len(sva_results),
                 3,
             ),
+            "validation_modes": _count_values(sva_results, "validation_mode"),
+            "formal_statuses": _count_values(sva_results, "formal_status"),
             "artifact_generation_rate": round(
                 sum(1 for result in sva_results if bool(result["artifact_generated"])) / len(sva_results),
                 3,
@@ -556,6 +566,8 @@ def _aggregate_metrics(results: list[dict[str, object]]) -> dict[str, object]:
                 sum(1 for result in cocotb_results if result["validation_status"] == "passed") / len(cocotb_results),
                 3,
             ),
+            "validation_modes": _count_values(cocotb_results, "validation_mode"),
+            "executable_statuses": _count_values(cocotb_results, "executable_status"),
             "manifest_generation_rate": round(
                 sum(1 for result in cocotb_results if bool(result["manifest_generated"])) / len(cocotb_results),
                 3,
@@ -592,6 +604,14 @@ def _aggregate_metrics(results: list[dict[str, object]]) -> dict[str, object]:
             "avg_evidence_hits": round(sum(int(result["evidence_hits"]) for result in triage_results) / len(triage_results), 3),
         }
     return metrics
+
+
+def _count_values(results: list[dict[str, object]], key: str) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for result in results:
+        value = str(result.get(key, "unknown") or "unknown")
+        counts[value] = counts.get(value, 0) + 1
+    return counts
 
 
 def _resolve_runtime_placeholders(value: Any) -> Any:

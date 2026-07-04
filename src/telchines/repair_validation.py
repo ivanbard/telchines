@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import subprocess
 
+from telchines.adapters.base import AdapterRunSpec
 from telchines.adapters.parsing import parse_common_output
 from telchines.adapters.registry import AdapterRegistry
 from telchines.config import ProjectConfig
@@ -53,7 +54,12 @@ def _run_validation_execution(base_run: VerificationRun, temp_root, artifacts_di
     if adapter is not None:
         files = list(base_run.inputs.get("files", []))
         extra_args = list(base_run.inputs.get("extra_args", []))
-        execution = adapter.run(run_id, temp_root, files, artifacts_dir, extra_args=extra_args)
+        raw_spec = base_run.inputs.get("run_spec")
+        run_spec = AdapterRunSpec.from_mapping(raw_spec) if isinstance(raw_spec, dict) else AdapterRunSpec.from_legacy(files, extra_args)
+        try:
+            execution = adapter.run(run_id, temp_root, files, artifacts_dir, extra_args=extra_args, spec=run_spec)
+        except TypeError:
+            execution = adapter.run(run_id, temp_root, files, artifacts_dir, extra_args=extra_args)
         return {
             "exit_code": execution.exit_code,
             "artifacts": execution.artifacts,
@@ -69,7 +75,7 @@ def _run_validation_execution(base_run: VerificationRun, temp_root, artifacts_di
     return {
         "exit_code": result.returncode,
         "artifacts": {"log_path": str(log_path)},
-        "tool_result": {"status": "passed" if result.returncode == 0 else "failed", "validation_mode": "legacy_replay"},
+        "tool_result": {"status": "passed" if result.returncode == 0 else "failed", "validation_mode": "adapter_replay"},
         "observations": observations,
     }
 

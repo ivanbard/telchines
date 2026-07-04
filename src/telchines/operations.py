@@ -7,6 +7,8 @@ import subprocess
 from dataclasses import asdict
 from pathlib import Path
 
+from telchines.adapters.base import AdapterRunSpec
+from telchines.errors import WorkflowInputError
 from telchines.adapters.registry import AdapterRegistry
 from telchines.config import ProjectConfig
 from telchines.eval import run_default_suite
@@ -278,6 +280,11 @@ def check_adapters(root: Path | None = None, adapter_name: str | None = None, ca
     for adapter in adapters:
         descriptor = adapter.describe(enabled=adapter.name in config.adapters)
         missing = [binary for binary in descriptor.required_binaries if not _binary_available(binary)]
+        preview_spec = AdapterRunSpec(files=["rtl/example.sv"], top_module="example_top")
+        try:
+            command_preview = adapter.build_command_from_spec(config.project_root, preview_spec)
+        except Exception:
+            command_preview = adapter.build_command(config.project_root, ["rtl/example.sv"], [])
         checks.append(
             {
                 "name": descriptor.name,
@@ -290,6 +297,9 @@ def check_adapters(root: Path | None = None, adapter_name: str | None = None, ca
                 "missing_binaries": missing,
                 "status": "passed" if descriptor.available else "missing",
                 "summary": "adapter is available" if descriptor.available else f"missing required binaries: {', '.join(missing)}",
+                "command_preview": command_preview,
+                "timeout_default_seconds": None,
+                "setup_diagnostics": [] if descriptor.available else [_adapter_setup_hint(descriptor.name, missing)],
             }
         )
     return {"adapters": checks}
@@ -297,6 +307,11 @@ def check_adapters(root: Path | None = None, adapter_name: str | None = None, ca
 
 def _binary_available(binary: str) -> bool:
     return shutil.which(binary) is not None
+
+
+def _adapter_setup_hint(adapter_name: str, missing: list[str]) -> str:
+    missing_text = ", ".join(missing) if missing else adapter_name
+    return f"install/configure {adapter_name} and ensure these binaries are on PATH: {missing_text}"
 
 
 def list_runs(root: Path | None = None) -> list[dict[str, object]]:
@@ -351,12 +366,34 @@ def import_runs(root: Path | None, manifest: Path, *, dry_run: bool = False) -> 
     return import_regression_manifest(config, store, manifest, dry_run=dry_run)
 
 
-def repair(root: Path | None, tool: str, files: list[str], extra_arg: list[str] | None = None, apply_patch: bool = False) -> dict[str, object]:
+def repair(
+    root: Path | None,
+    tool: str,
+    files: list[str],
+    extra_arg: list[str] | None = None,
+    apply_patch: bool = False,
+    *,
+    filelists: list[str] | None = None,
+    include_dirs: list[str] | None = None,
+    defines: list[str] | None = None,
+    top_module: str | None = None,
+    work_library: str | None = None,
+    adapter_args: list[str] | None = None,
+) -> dict[str, object]:
     config, store, retrieval = load_services(root)
     adapter = AdapterRegistry().get(tool)
-    extra_arg = extra_arg or []
-    run_id = stable_id("run", config.project.project_id, tool, utc_now(), ",".join(files))
-    execution = adapter.run(run_id, config.project_root, files, config.project_root / config.artifacts_dir, extra_args=extra_arg)
+    extra_arg = [*(extra_arg or []), *(adapter_args or [])]
+    run_spec = _adapter_run_spec(
+        files=files,
+        filelists=filelists,
+        include_dirs=include_dirs,
+        defines=defines,
+        top_module=top_module,
+        work_library=work_library,
+        extra_args=extra_arg,
+    )
+    run_id = stable_id("run", config.project.project_id, tool, utc_now(), ",".join(files or filelists or []))
+    execution = adapter.run(run_id, config.project_root, files, config.project_root / config.artifacts_dir, extra_args=extra_arg, spec=run_spec)
     store.save_observations(execution.observations)
     base_run = VerificationRun(
         run_id=run_id,
@@ -364,7 +401,13 @@ def repair(root: Path | None, tool: str, files: list[str], extra_arg: list[str] 
         commit_sha="workspace",
         workflow_type="compile_repair",
         tool=adapter.tool_reference,
-        inputs={"files": files, "project_root": str(config.project_root), "extra_args": extra_arg, "tool_name": tool},
+        inputs={
+            "files": run_spec.expanded(config.project_root).files,
+            "project_root": str(config.project_root),
+            "extra_args": extra_arg,
+            "tool_name": tool,
+            "run_spec": run_spec.summary(config.project_root),
+        },
         status="passed" if execution.exit_code == 0 else "failed",
         started_at=execution.started_at,
         finished_at=execution.finished_at,
@@ -378,9 +421,16 @@ def repair(root: Path | None, tool: str, files: list[str], extra_arg: list[str] 
     store.save_run(base_run)
     provider = build_repair_provider(config)
     proposal, validation_run, context = execute_repair(config, store, retrieval, provider, base_run, apply_patch=apply_patch)
+    workflow_status = _repair_workflow_status(proposal.status if proposal else "no_patch", validation_run.status if validation_run else None, apply_patch=apply_patch)
+    review_status = _repair_review_status(workflow_status)
+    validation_mode = _validation_mode(validation_run)
     return {
         "run_id": base_run.run_id,
-        "status": base_run.status,
+        "status": workflow_status,
+        "workflow_status": workflow_status,
+        "initial_tool_status": base_run.status,
+        "candidate_status": proposal.status if proposal else "no_patch",
+        "review_status": review_status,
         "context_id": context.context_id,
         "patch_id": proposal.patch_id if proposal else None,
         "provider": proposal.provider if proposal else getattr(provider, "name", ""),
@@ -393,6 +443,8 @@ def repair(root: Path | None, tool: str, files: list[str], extra_arg: list[str] 
         "validation_run_id": validation_run.run_id if validation_run else None,
         "validation_status": validation_run.status if validation_run else None,
         "validation_summary": validation_run.summary if validation_run else None,
+        "validation_mode": validation_mode,
+        "validation_scope": validation_mode,
     }
 
 
@@ -416,8 +468,15 @@ def agent(
     output_dir: Path | None = None,
     provider_name: str | None = None,
     intent: str = "",
+    filelists: list[str] | None = None,
+    include_dirs: list[str] | None = None,
+    defines: list[str] | None = None,
+    top_module: str | None = None,
+    work_library: str | None = None,
+    adapter_args: list[str] | None = None,
 ) -> dict[str, object]:
     config, store, retrieval = load_services(root)
+    _validate_agent_inputs(config, logs=logs, waveforms=waveforms, report=report, exclusions=exclusions, rtl=rtl, spec=spec, dut=dut)
     return execute_agent(
         config,
         store,
@@ -439,6 +498,12 @@ def agent(
         output_dir=output_dir,
         provider_name=provider_name,
         intent=intent,
+        filelists=filelists,
+        include_dirs=include_dirs,
+        defines=defines,
+        top_module=top_module,
+        work_library=work_library,
+        adapter_args=adapter_args,
     )
 
 
@@ -448,18 +513,41 @@ def gen_sva(
     rtl: Path,
     output: Path | None = None,
     provider_name: str | None = None,
+    *,
+    filelists: list[str] | None = None,
+    include_dirs: list[str] | None = None,
+    defines: list[str] | None = None,
+    top_module: str | None = None,
+    work_library: str | None = None,
+    adapter_args: list[str] | None = None,
 ) -> dict[str, object]:
     config, store, retrieval = load_services(root)
     spec_path = spec if spec.is_absolute() else (config.project_root / spec).resolve()
     rtl_path = rtl if rtl.is_absolute() else (config.project_root / rtl).resolve()
+    _require_file(spec_path, f"spec file does not exist: {relative_to_project(config, spec_path)}")
+    _require_file(rtl_path, f"rtl file does not exist: {relative_to_project(config, rtl_path)}")
     output_path = None if output is None else (output if output.is_absolute() else (config.project_root / output).resolve())
     provider = build_generation_provider(config, provider_name=provider_name)
-    candidate, validation_run, context = execute_generation(config, store, retrieval, provider, spec_path, rtl_path, output_path=output_path)
+    run_spec = _adapter_run_spec(
+        files=[relative_to_project(config, rtl_path)],
+        filelists=filelists,
+        include_dirs=include_dirs,
+        defines=defines,
+        top_module=top_module,
+        work_library=work_library,
+        extra_args=adapter_args,
+    )
+    candidate, validation_run, context = execute_generation(config, store, retrieval, provider, spec_path, rtl_path, output_path=output_path, run_spec=run_spec)
+    validation_mode = _validation_mode(validation_run)
     return {
         "context_id": context.context_id,
         "candidate_id": candidate.candidate_id if candidate else None,
         "provider": candidate.provider if candidate else getattr(provider, "name", ""),
         "status": candidate.status if candidate else "no_generation",
+        "workflow_status": candidate.status if candidate else "no_generation",
+        "initial_tool_status": None,
+        "candidate_status": candidate.status if candidate else "no_generation",
+        "review_status": "pending_review" if candidate and candidate.status == "validated" else "not_available",
         "artifact_path": candidate.file_path if candidate else None,
         "spec_path": candidate.spec_path if candidate else str(spec_path.relative_to(config.project_root)).replace("\\", "/"),
         "rtl_path": candidate.rtl_path if candidate else str(rtl_path.relative_to(config.project_root)).replace("\\", "/"),
@@ -472,8 +560,13 @@ def gen_sva(
         "validation_run_id": validation_run.run_id if validation_run else None,
         "validation_status": validation_run.status if validation_run else None,
         "validation_summary": validation_run.summary if validation_run else None,
-        "validation_mode": validation_run.tool_result.get("validation_mode") if validation_run else None,
+        "validation_mode": validation_mode,
+        "validation_scope": validation_mode,
         "validation_limitations": validation_run.tool_result.get("limitations", []) if validation_run else [],
+        "formal_status": validation_run.tool_result.get("formal_status") if validation_run else None,
+        "formal_adapter": validation_run.tool_result.get("formal_adapter") if validation_run else None,
+        "command_artifacts": validation_run.tool_result.get("command_artifacts", {}) if validation_run else {},
+        "setup_diagnostics": validation_run.tool_result.get("setup_diagnostics", []) if validation_run else [],
     }
 
 
@@ -484,12 +577,31 @@ def gen_cocotb(
     output_dir: Path | None = None,
     intent: str = "",
     provider_name: str | None = None,
+    *,
+    filelists: list[str] | None = None,
+    include_dirs: list[str] | None = None,
+    defines: list[str] | None = None,
+    top_module: str | None = None,
+    work_library: str | None = None,
+    adapter_args: list[str] | None = None,
 ) -> dict[str, object]:
     config, store, retrieval = load_services(root)
     dut_path = dut if dut.is_absolute() else (config.project_root / dut).resolve()
     spec_path = None if spec is None else (spec if spec.is_absolute() else (config.project_root / spec).resolve())
+    _require_file(dut_path, f"dut file does not exist: {relative_to_project(config, dut_path)}")
+    if spec_path is not None:
+        _require_file(spec_path, f"spec file does not exist: {relative_to_project(config, spec_path)}")
     target_output_dir = None if output_dir is None else (output_dir if output_dir.is_absolute() else (config.project_root / output_dir).resolve())
     provider = build_generation_provider(config, provider_name=provider_name)
+    run_spec = _adapter_run_spec(
+        files=[relative_to_project(config, dut_path)],
+        filelists=filelists,
+        include_dirs=include_dirs,
+        defines=defines,
+        top_module=top_module,
+        work_library=work_library,
+        extra_args=adapter_args,
+    )
     candidate, run, validation_run, context = execute_cocotb_generation(
         config,
         store,
@@ -499,13 +611,19 @@ def gen_cocotb(
         spec_path=spec_path,
         output_dir=target_output_dir,
         intent=intent,
+        run_spec=run_spec,
     )
+    validation_mode = _validation_mode(validation_run)
     return {
         "context_id": context.context_id,
         "run_id": run.run_id if run else None,
         "candidate_id": candidate.candidate_id if candidate else None,
         "provider": candidate.provider if candidate else getattr(provider, "name", ""),
         "status": candidate.status if candidate else "no_generation",
+        "workflow_status": candidate.status if candidate else "no_generation",
+        "initial_tool_status": None,
+        "candidate_status": candidate.status if candidate else "no_generation",
+        "review_status": "pending_review" if candidate and candidate.status == "validated" else "not_available",
         "artifact_path": candidate.file_path if candidate else None,
         "manifest_path": candidate.manifest_path if candidate else None,
         "dut_path": candidate.dut_path if candidate else str(dut_path.relative_to(config.project_root)).replace("\\", "/"),
@@ -522,8 +640,13 @@ def gen_cocotb(
         "validation_run_id": validation_run.run_id if validation_run else None,
         "validation_status": validation_run.status if validation_run else None,
         "validation_summary": validation_run.summary if validation_run else None,
-        "validation_mode": validation_run.tool_result.get("validation_mode") if validation_run else None,
+        "validation_mode": validation_mode,
+        "validation_scope": validation_mode,
         "validation_limitations": validation_run.tool_result.get("limitations", []) if validation_run else [],
+        "executable_status": validation_run.tool_result.get("executable_status") if validation_run else None,
+        "simulator": validation_run.tool_result.get("simulator") if validation_run else None,
+        "command_artifacts": validation_run.tool_result.get("command_artifacts", {}) if validation_run else {},
+        "setup_diagnostics": validation_run.tool_result.get("setup_diagnostics", []) if validation_run else [],
     }
 
 
@@ -541,6 +664,13 @@ def coverage_plan(
     exclusions_path = None if exclusions is None else (exclusions if exclusions.is_absolute() else (config.project_root / exclusions).resolve())
     rtl_paths = [(path if path.is_absolute() else (config.project_root / path).resolve()) for path in (rtl or [])]
     spec_paths = [(path if path.is_absolute() else (config.project_root / path).resolve()) for path in (spec or [])]
+    _require_file(report_path, f"coverage report does not exist: {relative_to_project(config, report_path)}")
+    if exclusions_path is not None:
+        _require_file(exclusions_path, f"coverage exclusions file does not exist: {relative_to_project(config, exclusions_path)}")
+    for path in rtl_paths:
+        _require_file(path, f"rtl file does not exist: {relative_to_project(config, path)}")
+    for path in spec_paths:
+        _require_file(path, f"spec file does not exist: {relative_to_project(config, path)}")
     plan, run, context = execute_coverage_plan(
         config,
         store,
@@ -568,6 +698,12 @@ def coverage_plan(
 
 def triage(root: Path | None, logs: list[Path], waveforms: list[Path] | None = None) -> dict[str, object]:
     config, store, retrieval = load_services(root)
+    for path in logs:
+        resolved = path if path.is_absolute() else (config.project_root / path).resolve()
+        _require_existing_path(resolved, f"log path does not exist: {relative_to_project(config, resolved)}")
+    for path in waveforms or []:
+        resolved = path if path.is_absolute() else (config.project_root / path).resolve()
+        _require_file(resolved, f"waveform file does not exist: {relative_to_project(config, resolved)}")
     run, clusters, context = triage_logs(config, store, retrieval, logs, waveform_paths=waveforms)
     return {
         "run_id": run.run_id,
@@ -739,6 +875,105 @@ def format_triage_human(payload: dict[str, object]) -> str:
 
 def dump_json(value: object) -> str:
     return json.dumps(value, indent=2)
+
+
+def relative_to_project(config: ProjectConfig, path: Path) -> str:
+    try:
+        return path.resolve().relative_to(config.project_root.resolve()).as_posix()
+    except ValueError:
+        return str(path)
+
+
+def _require_file(path: Path, message: str) -> None:
+    if not path.exists() or not path.is_file():
+        raise WorkflowInputError(message)
+
+
+def _require_existing_path(path: Path, message: str) -> None:
+    if not path.exists():
+        raise WorkflowInputError(message)
+
+
+def _validate_agent_inputs(
+    config: ProjectConfig,
+    *,
+    logs: list[Path] | None,
+    waveforms: list[Path] | None,
+    report: Path | None,
+    exclusions: Path | None,
+    rtl: list[Path] | None,
+    spec: list[Path] | None,
+    dut: Path | None,
+) -> None:
+    for path in logs or []:
+        resolved = path if path.is_absolute() else (config.project_root / path).resolve()
+        _require_existing_path(resolved, f"log path does not exist: {relative_to_project(config, resolved)}")
+    for path in waveforms or []:
+        resolved = path if path.is_absolute() else (config.project_root / path).resolve()
+        _require_file(resolved, f"waveform file does not exist: {relative_to_project(config, resolved)}")
+    if report is not None:
+        resolved = report if report.is_absolute() else (config.project_root / report).resolve()
+        _require_file(resolved, f"coverage report does not exist: {relative_to_project(config, resolved)}")
+    if exclusions is not None:
+        resolved = exclusions if exclusions.is_absolute() else (config.project_root / exclusions).resolve()
+        _require_file(resolved, f"coverage exclusions file does not exist: {relative_to_project(config, resolved)}")
+    for path in rtl or []:
+        resolved = path if path.is_absolute() else (config.project_root / path).resolve()
+        _require_file(resolved, f"rtl file does not exist: {relative_to_project(config, resolved)}")
+    for path in spec or []:
+        resolved = path if path.is_absolute() else (config.project_root / path).resolve()
+        _require_file(resolved, f"spec file does not exist: {relative_to_project(config, resolved)}")
+    if dut is not None:
+        resolved = dut if dut.is_absolute() else (config.project_root / dut).resolve()
+        _require_file(resolved, f"dut file does not exist: {relative_to_project(config, resolved)}")
+
+
+def _validation_mode(validation_run: VerificationRun | None) -> str | None:
+    if validation_run is None:
+        return None
+    mode = str(validation_run.tool_result.get("validation_mode", "")).strip()
+    return mode or None
+
+
+def _adapter_run_spec(
+    *,
+    files: list[str] | None = None,
+    filelists: list[str] | None = None,
+    include_dirs: list[str] | None = None,
+    defines: list[str] | None = None,
+    top_module: str | None = None,
+    work_library: str | None = None,
+    extra_args: list[str] | None = None,
+    timeout_seconds: int | None = None,
+) -> AdapterRunSpec:
+    return AdapterRunSpec(
+        files=[str(item) for item in files or []],
+        filelists=[str(item) for item in filelists or []],
+        include_dirs=[str(item) for item in include_dirs or []],
+        defines=[str(item) for item in defines or []],
+        top_module=top_module,
+        work_library=work_library,
+        timeout_seconds=timeout_seconds,
+        extra_args=[str(item) for item in extra_args or []],
+    )
+
+
+def _repair_workflow_status(candidate_status: str, validation_status: str | None, *, apply_patch: bool) -> str:
+    if candidate_status == "no_patch":
+        return "no_patch"
+    if validation_status == "passed":
+        return "applied" if apply_patch else "review_required"
+    if validation_status == "failed" or candidate_status == "rejected":
+        return "rejected"
+    return candidate_status or "failed"
+
+
+def _repair_review_status(workflow_status: str) -> str:
+    if workflow_status == "review_required":
+        return "pending_review"
+    if workflow_status == "applied":
+        return "applied"
+    return "not_available"
 
 
 def _resolve_waveform_summary(config: ProjectConfig, store: RunStore, working_root: Path, target: str):

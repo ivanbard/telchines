@@ -43,6 +43,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+  "hypothesis>=6",
   "pytest>=9.0",
 ]
 cocotb-smoke = [

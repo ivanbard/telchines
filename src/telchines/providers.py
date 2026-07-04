@@ -15,7 +15,7 @@ from urllib.parse import urlparse
 
 from telchines.agent_runtime import LangGraphRepairRuntime, runtime_capability
 from telchines.config import ProjectConfig
-from telchines.errors import ConfigError, ProviderError
+from telchines.errors import ConfigError, ProviderError, WorkflowInputError
 from telchines.models import CocotbCandidate, CocotbPort, Observation, PatchProposal, RetrievalContext, SvaCandidate, SvaProperty, VerificationRun
 from telchines.utils import stable_id
 
@@ -656,21 +656,58 @@ class ProviderRegistry:
                 default_for=default_for,
                 checks=checks,
             )
-        try:
-            transport = _check_provider_transport(provider_name, provider_config, self.config.project_root)
-        except ProviderError as exc:
-            checks["transport"] = {"status": "failed", "error": str(exc)}
-            return ProviderCheck(
-                name=provider_name,
-                kind=kind,
-                status="failed",
-                allowed=True,
-                summary=str(exc),
-                capabilities=capabilities,
-                default_for=default_for,
-                checks=checks,
-            )
-        checks["transport"] = transport
+        if kind == "agent_runtime":
+            transport = _agent_runtime_transport(provider_config)
+            checks["transport"] = transport
+            base_provider_name = str(provider_config.get("base_provider"))
+            base_provider_config = self.providers.get(base_provider_name)
+            if not isinstance(base_provider_config, dict):
+                checks["base_provider_transport"] = {
+                    "status": "failed",
+                    "provider": base_provider_name,
+                    "error": f"agent_runtime base provider is not configured: {base_provider_name}",
+                }
+                return ProviderCheck(
+                    name=provider_name,
+                    kind=kind,
+                    status="failed",
+                    allowed=True,
+                    summary=str(checks["base_provider_transport"]["error"]),
+                    capabilities=capabilities,
+                    default_for=default_for,
+                    checks=checks,
+                )
+            try:
+                base_transport = _check_provider_transport(base_provider_name, base_provider_config, self.config.project_root)
+            except ProviderError as exc:
+                checks["base_provider_transport"] = {"status": "failed", "provider": base_provider_name, "error": str(exc)}
+                return ProviderCheck(
+                    name=provider_name,
+                    kind=kind,
+                    status="failed",
+                    allowed=True,
+                    summary=f"base provider {base_provider_name} check failed: {exc}",
+                    capabilities=capabilities,
+                    default_for=default_for,
+                    checks=checks,
+                )
+            checks["base_provider_transport"] = {"provider": base_provider_name, **base_transport}
+        else:
+            try:
+                transport = _check_provider_transport(provider_name, provider_config, self.config.project_root)
+            except ProviderError as exc:
+                checks["transport"] = {"status": "failed", "error": str(exc)}
+                return ProviderCheck(
+                    name=provider_name,
+                    kind=kind,
+                    status="failed",
+                    allowed=True,
+                    summary=str(exc),
+                    capabilities=capabilities,
+                    default_for=default_for,
+                    checks=checks,
+                )
+            checks["transport"] = transport
         return ProviderCheck(
             name=provider_name,
             kind=kind,
@@ -792,9 +829,9 @@ def _build_generation_request_payload(request_value: GenerationRequest, provider
     spec = request_value.project_root / request_value.spec_path
     rtl = request_value.project_root / request_value.rtl_path
     if not spec.exists():
-        raise ProviderError(f"spec file does not exist: {request_value.spec_path}")
+        raise WorkflowInputError(f"spec file does not exist: {request_value.spec_path}")
     if not rtl.exists():
-        raise ProviderError(f"rtl file does not exist: {request_value.rtl_path}")
+        raise WorkflowInputError(f"rtl file does not exist: {request_value.rtl_path}")
     payload: dict[str, Any] = {
         "provider": provider_name,
         "task_id": request_value.task_id,
@@ -1079,18 +1116,22 @@ def _check_provider_transport(provider_name: str, config: dict[str, Any], projec
             "parsed_keys": sorted(parsed.keys()),
         }
     if kind == "agent_runtime":
-        runtime_info = runtime_capability()
-        return {
-            "status": "passed",
-            "mode": "agent_runtime",
-            "runtime": config.get("runtime", "langgraph"),
-            "runtime_mode": runtime_info["runtime_mode"],
-            "runtime_available": runtime_info["runtime_available"],
-            "runtime_reason": runtime_info["runtime_reason"],
-            "base_provider": config.get("base_provider"),
-            "max_iterations": int(config.get("max_iterations", 3)),
-        }
+        return _agent_runtime_transport(config)
     raise ProviderError(f"provider {provider_name} has unsupported kind: {kind}")
+
+
+def _agent_runtime_transport(config: dict[str, Any]) -> dict[str, Any]:
+    runtime_info = runtime_capability()
+    return {
+        "status": "passed",
+        "mode": "agent_runtime",
+        "runtime": config.get("runtime", "langgraph"),
+        "runtime_mode": runtime_info["runtime_mode"],
+        "runtime_available": runtime_info["runtime_available"],
+        "runtime_reason": runtime_info["runtime_reason"],
+        "base_provider": config.get("base_provider"),
+        "max_iterations": int(config.get("max_iterations", 3)),
+    }
 
 
 def _openai_compatible_url(config: dict[str, Any]) -> str:
@@ -1439,13 +1480,13 @@ def _normalize_project_relative_path(project_root: Path, value: str, provider_na
 def _load_cocotb_generation_inputs(request_value: CocotbGenerationRequest) -> dict[str, Any]:
     dut = request_value.project_root / request_value.dut_path
     if not dut.exists():
-        raise ProviderError(f"dut file does not exist: {request_value.dut_path}")
+        raise WorkflowInputError(f"dut file does not exist: {request_value.dut_path}")
     dut_content = dut.read_text(encoding="utf-8")
     spec_content: str | None = None
     if request_value.spec_path:
         spec = request_value.project_root / request_value.spec_path
         if not spec.exists():
-            raise ProviderError(f"spec file does not exist: {request_value.spec_path}")
+            raise WorkflowInputError(f"spec file does not exist: {request_value.spec_path}")
         spec_content = spec.read_text(encoding="utf-8")
     module_name = _extract_module_name(dut_content) or dut.stem
     conventions = _cocotb_conventions(request_value)

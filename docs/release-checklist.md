@@ -51,7 +51,7 @@
 - `tel runs doctor`
 - `tel runs replay RUN_ID` and confirm it previews without execution
 - one generation command such as `tel gen-cocotb --dut rtl/uart_rx.sv` and inspect `validation_mode`
-- one SVA generation command and confirm `validation_mode` is `adapter_backed` when Slang or Verilator is installed, otherwise `builtin_structural` with fallback reasons
+- one SVA generation command and confirm `validation_mode` is `adapter_backed` when Slang or Verilator is installed, otherwise `structure_only` with fallback reasons
 - `tel artifacts review CANDIDATE_OR_VALIDATION_RUN_ID` for a generated artifact
 - optionally run `python -m pip install -e ".[cocotb-smoke]"` plus `pytest tests/test_cocotb_smoke.py` on a machine with cocotb, `make`, Icarus, and `vvp`
 - `tel artifacts purge` as a dry run

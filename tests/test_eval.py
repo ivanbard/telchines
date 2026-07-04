@@ -32,10 +32,15 @@ def test_eval_default_suite(work_root: Path) -> None:
     assert report["metrics"]["sva"]["avg_property_count"] == 1.0
     assert report["metrics"]["sva"]["avg_property_name_match_rate"] == 1.0
     assert report["metrics"]["sva"]["avg_citation_match_rate"] == 1.0
+    assert report["metrics"]["sva"]["validation_modes"]
+    assert sum(report["metrics"]["sva"]["validation_modes"].values()) == report["metrics"]["sva"]["cases"]
+    assert sum(report["metrics"]["sva"]["formal_statuses"].values()) == report["metrics"]["sva"]["cases"]
     assert report["metrics"]["cocotb"]["cases"] == 3
     assert report["metrics"]["cocotb"]["generation_rate"] == 1.0
     assert report["metrics"]["cocotb"]["validation_pass_rate"] == 1.0
     assert report["metrics"]["cocotb"]["manifest_generation_rate"] == 1.0
+    assert sum(report["metrics"]["cocotb"]["validation_modes"].values()) == report["metrics"]["cocotb"]["cases"]
+    assert sum(report["metrics"]["cocotb"]["executable_statuses"].values()) == report["metrics"]["cocotb"]["cases"]
     assert report["metrics"]["coverage"]["cases"] == 3
     assert report["metrics"]["coverage"]["avg_recommendation_count"] >= 1.0
     assert report["metrics"]["coverage"]["avg_evidence_count"] >= 1.0

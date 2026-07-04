@@ -47,7 +47,8 @@ def main() -> int:
         _apply_command_budget(plan["commands"], args.max_live_commands)
 
     scratch = Path(plan["scratch_root"])
-    _prepare_scratch_project(scratch, matrix, selected)
+    active_providers = _active_providers(selected, plan["commands"])
+    _prepare_scratch_project(scratch, matrix, active_providers)
     results = _run_commands(scratch, plan["commands"])
     summary = _summary(matrix, scratch, plan, results)
     summary = _redact_summary(summary)
@@ -68,8 +69,17 @@ def load_matrix(path: Path) -> dict[str, Any]:
 def build_plan(matrix: dict[str, Any], providers: list[dict[str, Any]], scratch_root: Path, *, include_live: bool, dry_run: bool = False) -> dict[str, Any]:
     commands: list[dict[str, Any]] = []
     provider_summaries: list[dict[str, Any]] = []
+    skip_reasons: dict[str, str] = {}
     for provider in providers:
-        reason = "" if dry_run else _provider_skip_reason(provider, include_live)
+        skip_reasons[provider["name"]] = "" if dry_run else _provider_skip_reason(provider, include_live)
+    for provider in providers:
+        if provider.get("kind") == "agent_runtime":
+            base_provider = str(provider.get("base_provider"))
+            base_reason = skip_reasons.get(base_provider, "")
+            if base_reason:
+                skip_reasons[provider["name"]] = f"base_provider_skipped:{base_provider}:{base_reason}"
+    for provider in providers:
+        reason = skip_reasons[provider["name"]]
         provider_summaries.append(
             {
                 "name": provider["name"],
@@ -208,6 +218,11 @@ def _provider_commands(provider: dict[str, Any]) -> list[dict[str, Any]]:
             }
         )
     return commands
+
+
+def _active_providers(providers: list[dict[str, Any]], commands: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    active_names = {str(command.get("provider")) for command in commands if command.get("status") == "planned"}
+    return [provider for provider in providers if provider["name"] in active_names]
 
 
 def _apply_command_budget(commands: list[dict[str, Any]], max_commands: int) -> None:
@@ -457,6 +472,8 @@ def _run_commands(scratch: Path, commands: list[dict[str, Any]]) -> list[dict[st
         )
         elapsed = round(time.perf_counter() - started, 3)
         parsed = _parse_last_json(process.stdout)
+        status, status_reason = _score_command_result(item, process.returncode, parsed)
+        validation_status = _payload_validation_status(parsed)
         results.append(
             {
                 **item,
@@ -465,13 +482,76 @@ def _run_commands(scratch: Path, commands: list[dict[str, Any]]) -> list[dict[st
                 "stdout": _bounded(process.stdout),
                 "stderr": _bounded(process.stderr),
                 "parsed": parsed,
-                "status": "passed" if process.returncode == 0 else "failed",
-                "validation_status": parsed.get("validation_status") if isinstance(parsed, dict) else None,
-                "candidate_id": parsed.get("candidate_id") if isinstance(parsed, dict) else None,
+                "status": status,
+                "status_reason": status_reason,
+                "validation_status": validation_status,
+                "candidate_id": _payload_candidate_id(parsed),
+                "patch_id": _payload_patch_id(parsed),
                 "attempt_count": len(parsed.get("attempts", [])) if isinstance(parsed, dict) and isinstance(parsed.get("attempts"), list) else None,
             }
         )
     return results
+
+
+def _score_command_result(command: dict[str, Any], returncode: int, parsed: dict[str, Any]) -> tuple[str, str]:
+    label = str(command.get("label", ""))
+    if returncode != 0:
+        return "failed", f"process_exit:{returncode}"
+    if label in {"provider_check", "provider_check_offline"}:
+        return ("passed", "") if parsed.get("status") == "passed" else ("failed", "provider_check_status_not_passed")
+    if label == "agent_repair":
+        workflow_status = str(parsed.get("status", ""))
+        validation_status = _payload_validation_status(parsed)
+        patch_id = _payload_patch_id(parsed)
+        if workflow_status in {"review_required", "applied"} and validation_status == "passed" and patch_id:
+            return "passed", ""
+        return "failed", "agent_repair_missing_validated_patch"
+    if label in {"gen_sva", "gen_cocotb"}:
+        workflow_status = str(parsed.get("status", ""))
+        validation_status = _payload_validation_status(parsed)
+        candidate_id = _payload_candidate_id(parsed)
+        if workflow_status == "no_generation" and command.get("expected") == "no_generation":
+            return "passed", ""
+        if candidate_id and validation_status == "passed":
+            return "passed", ""
+        return "failed", f"{label}_missing_validated_candidate"
+    return "passed", ""
+
+
+def _payload_validation_status(parsed: dict[str, Any]) -> Any:
+    if not isinstance(parsed, dict):
+        return None
+    if parsed.get("validation_status") is not None:
+        return parsed.get("validation_status")
+    result = parsed.get("result")
+    if isinstance(result, dict):
+        return result.get("validation_status")
+    return None
+
+
+def _payload_candidate_id(parsed: dict[str, Any]) -> Any:
+    if not isinstance(parsed, dict):
+        return None
+    if parsed.get("candidate_id"):
+        return parsed.get("candidate_id")
+    result = parsed.get("result")
+    if isinstance(result, dict):
+        return result.get("candidate_id")
+    return None
+
+
+def _payload_patch_id(parsed: dict[str, Any]) -> Any:
+    if not isinstance(parsed, dict):
+        return None
+    if parsed.get("patch_id"):
+        return parsed.get("patch_id")
+    result = parsed.get("result")
+    if isinstance(result, dict) and result.get("patch_id"):
+        return result.get("patch_id")
+    evidence = parsed.get("evidence")
+    if isinstance(evidence, dict):
+        return evidence.get("patch_id")
+    return None
 
 
 def _parse_last_json(stdout: str) -> dict[str, Any]:

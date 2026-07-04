@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from hypothesis import given
+from hypothesis import strategies as st
 
 from telchines.config import ProjectConfig
 from prompt_toolkit.document import Document
@@ -23,14 +25,23 @@ from telchines.shell import (
     _parse_repair_args,
     _parse_repeated_option,
     render_artifact_review_payload,
+    render_agent_payload,
+    render_cocotb_payload,
     render_command_progress,
     render_help,
     render_provider_check_payload,
+    render_repair_payload,
     render_replay_payload,
     render_runs_doctor_payload,
     render_run_show,
+    render_sva_payload,
     render_welcome,
 )
+
+
+PATH_TEXT = st.from_regex(r"[A-Za-z0-9_/.-]{1,24}", fullmatch=True).filter(lambda value: not value.startswith("-"))
+OPTION_VALUE = st.from_regex(r"[A-Za-z0-9_=./-]{1,24}", fullmatch=True).filter(lambda value: not value.startswith("--"))
+IDENT = st.from_regex(r"[A-Za-z_][A-Za-z0-9_]{0,12}", fullmatch=True)
 
 
 class NarrowOutput(DummyOutput):
@@ -81,13 +92,35 @@ def test_shell_parser_reports_missing_option_values(sample_project: Path) -> Non
 
 
 def test_shell_parser_accepts_repeated_workflow_options() -> None:
-    tool, files, extra_args, apply_patch = _parse_repair_args(
-        ["--tool", "iverilog", "--file", "rtl/a.sv", "--file", "rtl/b.sv", "--extra-arg", "-Wall", "--apply"]
+    tool, files, extra_args, apply_patch, context = _parse_repair_args(
+        [
+            "--tool",
+            "iverilog",
+            "--file",
+            "rtl/a.sv",
+            "--file",
+            "rtl/b.sv",
+            "--extra-arg",
+            "-Wall",
+            "--filelist",
+            "rtl/files.f",
+            "--include-dir",
+            "rtl/include",
+            "--define",
+            "SIM=1",
+            "--top",
+            "tb",
+            "--apply",
+        ]
     )
     assert tool == "iverilog"
     assert files == ["rtl/a.sv", "rtl/b.sv"]
     assert extra_args == ["-Wall"]
     assert apply_patch is True
+    assert context["filelists"] == ["rtl/files.f"]
+    assert context["include_dirs"] == ["rtl/include"]
+    assert context["defines"] == ["SIM=1"]
+    assert context["top_module"] == "tb"
 
     report, exclusions, formal_run, rtl_paths, spec_paths = _parse_coverage_plan_args(
         [
@@ -131,12 +164,95 @@ def test_shell_parser_accepts_repeated_workflow_options() -> None:
             "rtl/b.sv",
             "--extra-arg",
             "-Wall",
+            "--adapter-arg",
+            "-sv",
+            "--worklib",
+            "work",
         ]
     )
     assert agent_args["task"] == "fix broken counter"
     assert agent_args["tool"] == "fixture"
     assert agent_args["files"] == ["rtl/a.sv", "rtl/b.sv"]
     assert agent_args["extra_args"] == ["-Wall"]
+    assert agent_args["adapter_args"] == ["-sv"]
+    assert agent_args["work_library"] == "work"
+
+
+@given(
+    files=st.lists(PATH_TEXT, max_size=4),
+    filelists=st.lists(PATH_TEXT, max_size=4),
+    include_dirs=st.lists(PATH_TEXT, max_size=4),
+    defines=st.lists(OPTION_VALUE, max_size=4),
+    adapter_args=st.lists(OPTION_VALUE, max_size=4),
+    top=IDENT,
+    worklib=IDENT,
+)
+def test_shell_repair_parser_preserves_compile_context_options(
+    files: list[str],
+    filelists: list[str],
+    include_dirs: list[str],
+    defines: list[str],
+    adapter_args: list[str],
+    top: str,
+    worklib: str,
+) -> None:
+    parts = ["--tool", "iverilog", "--top", top, "--worklib", worklib]
+    for value in files:
+        parts.extend(["--file", value])
+    for value in filelists or ["fallback.f"]:
+        parts.extend(["--filelist", value])
+    for value in include_dirs:
+        parts.extend(["--include-dir", value])
+    for value in defines:
+        parts.extend(["--define", value])
+    for value in adapter_args:
+        parts.extend(["--adapter-arg", value])
+
+    tool, parsed_files, _, _, context = _parse_repair_args(parts)
+
+    assert tool == "iverilog"
+    assert parsed_files == files
+    assert context["filelists"] == (filelists or ["fallback.f"])
+    assert context["include_dirs"] == include_dirs
+    assert context["defines"] == defines
+    assert context["adapter_args"] == adapter_args
+    assert context["top_module"] == top
+    assert context["work_library"] == worklib
+
+
+@given(
+    adapter_args=st.lists(OPTION_VALUE, max_size=3),
+    filelists=st.lists(PATH_TEXT, max_size=3),
+    include_dirs=st.lists(PATH_TEXT, max_size=3),
+    defines=st.lists(OPTION_VALUE, max_size=3),
+    top=IDENT,
+)
+def test_shell_generation_parsers_share_compile_context(
+    adapter_args: list[str],
+    filelists: list[str],
+    include_dirs: list[str],
+    defines: list[str],
+    top: str,
+) -> None:
+    context_parts: list[str] = ["--top", top]
+    for option, values in (
+        ("--adapter-arg", adapter_args),
+        ("--filelist", filelists),
+        ("--include-dir", include_dirs),
+        ("--define", defines),
+    ):
+        for value in values:
+            context_parts.extend([option, value])
+
+    _, _, _, _, sva_context = _parse_gen_sva_args(["--spec", "docs/spec.md", "--rtl", "rtl/dut.sv", *context_parts])
+    _, _, _, _, _, cocotb_context = _parse_gen_cocotb_args(["--dut", "rtl/dut.sv", *context_parts])
+
+    for context in (sva_context, cocotb_context):
+        assert context["adapter_args"] == adapter_args
+        assert context["filelists"] == filelists
+        assert context["include_dirs"] == include_dirs
+        assert context["defines"] == defines
+        assert context["top_module"] == top
 
 
 @pytest.mark.parametrize(
@@ -359,6 +475,70 @@ def test_render_run_show_includes_formal_and_validation_details() -> None:
     assert "validation mode: compile_and_run" in rendered
     assert "properties: uart_prop" in rendered
     assert "counterexamples: formal/trace.vcd" in rendered
+
+
+def test_shell_result_renderers_include_validation_mode() -> None:
+    repair = render_repair_payload(
+        {
+            "run_id": "run_1",
+            "provider": "heuristic",
+            "status": "review_required",
+            "patch_id": "patch_1",
+            "proposal_explanation": "fix",
+            "validation_status": "passed",
+            "validation_mode": "adapter_replay",
+            "validation_summary": "validation passed",
+        }
+    )
+    agent = render_agent_payload(
+        {
+            "task_id": "task_1",
+            "workflow_type": "compile_repair",
+            "status": "review_required",
+            "context_id": "ctx_1",
+            "result": {
+                "patch_id": "patch_1",
+                "validation_run_id": "run_2",
+                "validation_status": "passed",
+                "validation_mode": "adapter_replay",
+            },
+            "evidence": {},
+            "review_gate": {"summary": "review required"},
+        }
+    )
+    sva = render_sva_payload(
+        {
+            "provider": "heuristic",
+            "status": "validated",
+            "artifact_path": ".tel/artifacts/generated/demo.sv",
+            "validation_status": "passed",
+            "validation_mode": "structure_only",
+            "explanation": "",
+            "attempts": [],
+            "rejected_candidate_ids": [],
+            "property_summaries": [],
+        }
+    )
+    cocotb = render_cocotb_payload(
+        {
+            "provider": "heuristic",
+            "status": "validated",
+            "top_module": "uart_rx",
+            "artifact_path": ".tel/artifacts/generated/test_uart_rx.py",
+            "manifest_path": ".tel/artifacts/generated/manifest.json",
+            "validation_status": "passed",
+            "validation_mode": "syntax_plus_structure",
+            "explanation": "",
+            "attempts": [],
+            "rejected_candidate_ids": [],
+            "assumptions": [],
+        }
+    )
+
+    assert "validation mode: adapter_replay" in repair
+    assert "validation mode: adapter_replay" in agent
+    assert "validation mode: structure_only" in sva
+    assert "validation mode: syntax_plus_structure" in cocotb
 
 
 def test_render_run_show_includes_cocotb_generation_details() -> None:

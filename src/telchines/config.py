@@ -23,6 +23,7 @@ def default_generation_config() -> dict[str, Any]:
             "reset_names": ["rst_n", "reset_n", "rst", "reset"],
             "active_low_reset_names": ["rst_n", "reset_n"],
             "validation_adapters": ["slang", "verilator"],
+            "formal": {"mode": "auto", "adapter": "symbiyosys"},
             "max_attempts": 1,
         },
         "cocotb": {
@@ -32,6 +33,8 @@ def default_generation_config() -> dict[str, Any]:
             "clock_names": ["clk", "clock"],
             "reset_names": ["rst_n", "reset_n", "rst", "reset"],
             "active_low_reset_names": ["rst_n", "reset_n"],
+            "executable_smoke": "auto",
+            "simulator": "auto",
             "max_attempts": 1,
         },
     }
@@ -44,7 +47,11 @@ def merge_generation_config(value: dict[str, Any] | None) -> dict[str, Any]:
     for section_name in ("sva", "cocotb"):
         section = value.get(section_name)
         if isinstance(section, dict):
-            merged[section_name].update(section)
+            for key, inner in section.items():
+                if isinstance(inner, dict) and isinstance(merged[section_name].get(key), dict):
+                    merged[section_name][key].update(inner)
+                else:
+                    merged[section_name][key] = inner
     return merged
 
 
@@ -392,6 +399,22 @@ class ProjectConfig:
             adapters = section.get("validation_adapters", [])
             if not isinstance(adapters, list) or any(not isinstance(item, str) or not item.strip() for item in adapters):
                 raise ConfigError("generation.sva.validation_adapters must be a list of non-empty strings")
+            formal = section.get("formal", {})
+            if not isinstance(formal, dict):
+                raise ConfigError("generation.sva.formal must be an object")
+            mode = formal.get("mode", "auto")
+            if mode not in {"auto", "off", "required"}:
+                raise ConfigError("generation.sva.formal.mode must be auto, off, or required")
+            adapter = formal.get("adapter", "symbiyosys")
+            if not isinstance(adapter, str) or not adapter.strip():
+                raise ConfigError("generation.sva.formal.adapter must be a non-empty string")
+        if section_name == "cocotb":
+            executable_smoke = section.get("executable_smoke", "auto")
+            if executable_smoke not in {"auto", "off", "required"}:
+                raise ConfigError("generation.cocotb.executable_smoke must be auto, off, or required")
+            simulator = section.get("simulator", "auto")
+            if simulator not in {"auto", "icarus", "verilator"}:
+                raise ConfigError("generation.cocotb.simulator must be auto, icarus, or verilator")
 
     def save(self) -> None:
         self.validate()

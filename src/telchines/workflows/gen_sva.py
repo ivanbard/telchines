@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from telchines.adapters.base import AdapterRunSpec
 from telchines.adapters.registry import AdapterRegistry
 from telchines.adapters.parsing import parse_common_output
 from telchines.config import ProjectConfig
@@ -22,6 +23,7 @@ def execute_generation(
     spec_path: Path,
     rtl_path: Path,
     output_path: Path | None = None,
+    run_spec: AdapterRunSpec | None = None,
 ) -> tuple[SvaCandidate | None, VerificationRun | None, RetrievalContext]:
     spec_rel = relative_to(spec_path, config.project_root)
     rtl_rel = relative_to(rtl_path, config.project_root)
@@ -111,7 +113,7 @@ def execute_generation(
         ensure_directory(generated_path.parent)
         generated_path.write_text(candidate.candidate_content, encoding="utf-8")
 
-        validation_run = validate_sva_candidate(config, store, candidate)
+        validation_run = validate_sva_candidate(config, store, candidate, run_spec=run_spec)
         candidate.status = "validated" if validation_run.status == "passed" else "rejected"
         candidate.validation_attempts.append(
             ValidationAttempt(attempt=attempt, result=validation_run.status, run_id=validation_run.run_id, notes=validation_run.summary)
@@ -176,7 +178,7 @@ def execute_generation(
     return final_candidate, final_validation, context
 
 
-def validate_sva_candidate(config: ProjectConfig, store: RunStore, candidate: SvaCandidate) -> VerificationRun:
+def validate_sva_candidate(config: ProjectConfig, store: RunStore, candidate: SvaCandidate, run_spec: AdapterRunSpec | None = None) -> VerificationRun:
     run_id = stable_id("run", candidate.candidate_id, "validation", utc_now())
     temp_root = copy_tree_to_temp(config.project_root)
     try:
@@ -184,7 +186,7 @@ def validate_sva_candidate(config: ProjectConfig, store: RunStore, candidate: Sv
         ensure_directory(target.parent)
         target.write_text(candidate.candidate_content, encoding="utf-8")
 
-        validator_name, command, returncode, combined, tool_result = _run_validation(config, temp_root, candidate)
+        validator_name, command, returncode, combined, tool_result = _run_validation(config, temp_root, candidate, run_spec=run_spec)
         artifacts_dir = config.project_root / config.artifacts_dir
         ensure_directory(artifacts_dir)
         log_path = artifacts_dir / f"{run_id}.log"
@@ -259,22 +261,47 @@ def _validation_feedback(attempt: int, validation_run: VerificationRun, candidat
     }
 
 
-def _run_validation(config: ProjectConfig, project_root: Path, candidate: SvaCandidate) -> tuple[str, list[str], int, str, dict[str, object]]:
+def _run_validation(
+    config: ProjectConfig,
+    project_root: Path,
+    candidate: SvaCandidate,
+    run_spec: AdapterRunSpec | None = None,
+) -> tuple[str, list[str], int, str, dict[str, object]]:
     errors, checks, limitations = _builtin_sva_errors(project_root, candidate)
     command = ["builtin_sva_syntax", candidate.file_path]
     tool_result = {
         "status": "failed" if errors else "passed",
-        "validation_mode": "builtin_structural",
+        "validation_mode": "structure_only",
         "validator": "builtin_sva_syntax",
         "checks": checks,
         "limitations": limitations,
+        "formal_status": "not_run",
+        "formal_adapter": None,
+        "command_artifacts": {},
+        "setup_diagnostics": [],
     }
     if errors:
         return "builtin_sva_syntax", command, 1, "\n".join(errors), tool_result
-    adapter_result = _run_adapter_validation(config, project_root, candidate, checks)
-    if adapter_result is not None:
-        return adapter_result
-    return "builtin_sva_syntax", command, 0, "builtin_sva_syntax: validation passed\n" + "\n".join(f"NOTE: {item}" for item in limitations), tool_result
+    adapter_result = _run_adapter_validation(config, project_root, candidate, checks, run_spec=run_spec)
+    base_result = adapter_result or (
+        "builtin_sva_syntax",
+        command,
+        0,
+        "builtin_sva_syntax: validation passed\n" + "\n".join(f"NOTE: {item}" for item in limitations),
+        tool_result,
+    )
+    if base_result[2] != 0:
+        return base_result
+    formal_result = _run_formal_validation(config, project_root, candidate, checks, run_spec=run_spec)
+    if formal_result is None:
+        return base_result
+    if formal_result[2] == 0 or formal_result[4].get("formal_status") == "failed":
+        return formal_result
+    merged_result = dict(base_result[4])
+    merged_result["formal_status"] = formal_result[4].get("formal_status")
+    merged_result["formal_adapter"] = formal_result[4].get("formal_adapter")
+    merged_result["setup_diagnostics"] = formal_result[4].get("setup_diagnostics", [])
+    return base_result[0], base_result[1], base_result[2], base_result[3], merged_result
 
 
 def _run_adapter_validation(
@@ -282,6 +309,7 @@ def _run_adapter_validation(
     project_root: Path,
     candidate: SvaCandidate,
     builtin_checks: dict[str, object],
+    run_spec: AdapterRunSpec | None = None,
 ) -> tuple[str, list[str], int, str, dict[str, object]] | None:
     section = config.generation.get("sva", {}) if isinstance(config.generation, dict) else {}
     adapter_names = section.get("validation_adapters", ["slang", "verilator"])
@@ -305,12 +333,24 @@ def _run_adapter_validation(
             fallback_reasons.append(f"{adapter_name} is not available on PATH")
             continue
         try:
-            execution = adapter.run(
-                stable_id("run", candidate.candidate_id, adapter_name, "sva_adapter_validation"),
-                project_root,
-                [candidate.rtl_path, candidate.file_path],
-                project_root / ".tel" / "adapter-artifacts",
-            )
+            adapter_spec = (run_spec or AdapterRunSpec(files=[candidate.rtl_path])).expanded(project_root)
+            adapter_spec.files = [*adapter_spec.files, candidate.file_path]
+            adapter_run_id = stable_id("run", candidate.candidate_id, adapter_name, "sva_adapter_validation")
+            try:
+                execution = adapter.run(
+                    adapter_run_id,
+                    project_root,
+                    adapter_spec.files,
+                    project_root / ".tel" / "adapter-artifacts",
+                    spec=adapter_spec,
+                )
+            except TypeError:
+                execution = adapter.run(
+                    adapter_run_id,
+                    project_root,
+                    adapter_spec.files,
+                    project_root / ".tel" / "adapter-artifacts",
+                )
         except AdapterExecutionError as exc:
             fallback_reasons.append(f"{adapter_name} failed to execute: {exc}")
             continue
@@ -330,11 +370,136 @@ def _run_adapter_validation(
                 "formal/simulation proof is still required for protocol confidence",
             ],
             "adapter_result": execution.result,
+            "formal_status": "not_run",
+            "formal_adapter": None,
+            "command_artifacts": {},
+            "setup_diagnostics": [],
         }
         return adapter_name, execution.command, execution.exit_code, combined, tool_result
     if fallback_reasons:
         builtin_checks["adapter_fallback_reasons"] = fallback_reasons
     return None
+
+
+def _run_formal_validation(
+    config: ProjectConfig,
+    project_root: Path,
+    candidate: SvaCandidate,
+    builtin_checks: dict[str, object],
+    run_spec: AdapterRunSpec | None = None,
+) -> tuple[str, list[str], int, str, dict[str, object]] | None:
+    section = config.generation.get("sva", {}) if isinstance(config.generation, dict) else {}
+    formal = section.get("formal", {}) if isinstance(section.get("formal", {}), dict) else {}
+    mode = str(formal.get("mode", "auto"))
+    if mode == "off":
+        return None
+    adapter_name = str(formal.get("adapter", "symbiyosys"))
+    registry = AdapterRegistry()
+    diagnostics: list[str] = []
+    try:
+        adapter = registry.get(adapter_name)
+    except Exception:
+        diagnostics.append(f"{adapter_name} is not a registered adapter")
+        return _formal_setup_result(adapter_name, diagnostics, required=mode == "required")
+    if adapter.name not in config.adapters:
+        diagnostics.append(f"{adapter.name} is not enabled in project adapters")
+    if "formal_validation" not in adapter.supported_workflows:
+        diagnostics.append(f"{adapter.name} does not support formal_validation")
+    if not adapter.is_available():
+        diagnostics.append(f"{adapter.name} is not available on PATH")
+    if diagnostics:
+        return _formal_setup_result(adapter.name, diagnostics, required=mode == "required")
+
+    formal_dir = ensure_directory(project_root / ".tel" / "formal")
+    sby_path = formal_dir / f"{candidate.candidate_id}.sby"
+    spec = (run_spec or AdapterRunSpec(files=[candidate.rtl_path])).expanded(project_root)
+    files = [*spec.files, candidate.file_path]
+    top = spec.top_module or str(builtin_checks.get("dut_module") or _extract_module_name((project_root / candidate.rtl_path).read_text(encoding="utf-8")) or Path(candidate.rtl_path).stem)
+    sby_path.write_text(
+        "\n".join(
+            [
+                "[options]",
+                "mode bmc",
+                "depth 4",
+                "",
+                "[engines]",
+                "smtbmc",
+                "",
+                "[script]",
+                *(f"read -formal {path}" for path in files),
+                f"prep -top {top}",
+                "",
+                "[files]",
+                *files,
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    formal_spec = AdapterRunSpec(files=[str(sby_path.relative_to(project_root)).replace("\\", "/")], extra_args=spec.extra_args, timeout_seconds=spec.timeout_seconds)
+    try:
+        execution = adapter.run(
+            stable_id("run", candidate.candidate_id, adapter.name, "formal_validation"),
+            project_root,
+            formal_spec.files,
+            project_root / ".tel" / "adapter-artifacts",
+            spec=formal_spec,
+        )
+    except AdapterExecutionError as exc:
+        return _formal_setup_result(adapter.name, [f"{adapter.name} failed to execute: {exc}"], required=mode == "required")
+    combined = execution.stdout + execution.stderr
+    if not combined.strip() and Path(execution.log_path).exists():
+        combined = Path(execution.log_path).read_text(encoding="utf-8")
+    tool_result = {
+        "status": "passed" if execution.exit_code == 0 else "failed",
+        "validation_mode": "formal_run",
+        "validator": adapter.name,
+        "formal_status": "passed" if execution.exit_code == 0 else "failed",
+        "formal_adapter": adapter.name,
+        "checks": {**builtin_checks, "formal_adapter": adapter.name},
+        "limitations": ["bounded formal smoke depth is not a complete protocol proof"],
+        "adapter_result": execution.result,
+        "command_artifacts": {"sby_file": str(sby_path), **execution.artifacts},
+        "setup_diagnostics": [],
+    }
+    return adapter.name, execution.command, execution.exit_code, combined or f"{adapter.name}: formal validation passed\n", tool_result
+
+
+def _formal_setup_result(adapter_name: str, diagnostics: list[str], *, required: bool) -> tuple[str, list[str], int, str, dict[str, object]] | None:
+    if not required:
+        return (
+            adapter_name,
+            [],
+            2,
+            "",
+            {
+                "status": "skipped",
+                "validation_mode": "formal_run",
+                "formal_status": "skipped",
+                "formal_adapter": adapter_name,
+                "checks": {},
+                "limitations": ["formal execution skipped because required tooling is unavailable"],
+                "command_artifacts": {},
+                "setup_diagnostics": diagnostics,
+            },
+        )
+    combined = "\n".join(f"ERROR: {item}" for item in diagnostics)
+    return (
+        adapter_name,
+        [],
+        1,
+        combined,
+        {
+            "status": "failed",
+            "validation_mode": "formal_run",
+            "formal_status": "failed",
+            "formal_adapter": adapter_name,
+            "checks": {},
+            "limitations": [],
+            "command_artifacts": {},
+            "setup_diagnostics": diagnostics,
+        },
+    )
 
 
 def _builtin_sva_errors(project_root: Path, candidate: SvaCandidate) -> tuple[list[str], dict[str, object], list[str]]:

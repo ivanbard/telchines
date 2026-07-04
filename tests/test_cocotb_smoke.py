@@ -1,14 +1,16 @@
 from __future__ import annotations
 
-import os
 import shutil
-import subprocess
 from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
 
 from telchines.cli import app
+from telchines.config import ProjectConfig
+from telchines.models import CocotbCandidate
+from telchines.run_store import RunStore
+from telchines.workflows.gen_cocotb import validate_cocotb_candidate
 
 try:
     runner = CliRunner(mix_stderr=False)
@@ -35,33 +37,33 @@ def test_generated_cocotb_scaffold_runs_with_icarus_when_tools_are_available(sam
     assert index_result.exit_code == 0
     generation_result = runner.invoke(app, ["gen-cocotb", "--dut", "rtl/uart_rx.sv", "--spec", "docs/uart.md"])
     assert generation_result.exit_code == 0
+    generated_payload = generation_result.stdout
+    assert '"executable_status": "passed"' in generated_payload
+    assert '"validation_mode": "compile_and_run"' in generated_payload
 
-    generated_dir = sample_project / ".tel" / "artifacts" / "generated" / "cocotb"
-    makefile = sample_project / "Makefile.cocotb-smoke"
-    makefile.write_text(
-        "\n".join(
-            [
-                "SIM ?= icarus",
-                "TOPLEVEL_LANG = verilog",
-                f"VERILOG_SOURCES = {sample_project / 'rtl' / 'uart_rx.sv'}",
-                "TOPLEVEL = uart_rx",
-                "MODULE = test_uart_rx",
-                "include $(shell cocotb-config --makefiles)/Makefile.sim",
-                "",
-            ]
-        ),
-        encoding="utf-8",
-    )
 
-    env = os.environ.copy()
-    env["PYTHONPATH"] = str(generated_dir) + os.pathsep + env.get("PYTHONPATH", "")
-    result = subprocess.run(
-        ["make", "-f", str(makefile), "SIM=icarus"],
-        cwd=sample_project,
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=90,
+def test_cocotb_required_executable_smoke_fails_when_tools_missing(sample_project: Path, monkeypatch) -> None:
+    config = ProjectConfig.load(sample_project)
+    config.generation["cocotb"]["executable_smoke"] = "required"
+    config.save()
+    store = RunStore(config)
+    candidate = CocotbCandidate(
+        candidate_id="cocotb_required",
+        task_id="task_required",
+        dut_path="rtl/uart_rx.sv",
+        spec_path=None,
+        top_module="uart_rx",
+        file_path=".tel/artifacts/generated/cocotb/test_uart_rx.py",
+        manifest_path=".tel/artifacts/generated/cocotb/uart_rx_cocotb_manifest.json",
+        candidate_content="import cocotb\n\n@cocotb.test()\nasync def test_uart_rx(dut):\n    pass\n",
+        explanation="test",
+        status="proposed",
     )
-    assert result.returncode == 0, result.stdout + result.stderr
+    monkeypatch.setattr("telchines.workflows.gen_cocotb._select_cocotb_simulator", lambda preferred: (None, ["no simulator"]))
+    monkeypatch.setattr("telchines.workflows.gen_cocotb._cocotb_common_missing", lambda: [])
+
+    validation_run = validate_cocotb_candidate(config, store, candidate)
+
+    assert validation_run.status == "failed"
+    assert validation_run.tool_result["executable_status"] == "failed"
+    assert validation_run.tool_result["setup_diagnostics"] == ["no simulator"]

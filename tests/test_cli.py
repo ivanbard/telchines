@@ -92,6 +92,9 @@ import sys
 from pathlib import Path
 
 payload = json.loads(sys.stdin.read())
+if payload.get("workflow_type") == "provider_check":
+    sys.stdout.write(json.dumps({"status": "ok", "workflow_type": "provider_check"}))
+    raise SystemExit(0)
 target_file = payload["files"][0]
 target_path = Path(target_file)
 original = target_path.read_text(encoding="utf-8")
@@ -118,6 +121,9 @@ import sys
 from pathlib import Path
 
 payload = json.loads(sys.stdin.read())
+if payload.get("workflow_type") == "provider_check":
+    sys.stdout.write(json.dumps({{"status": "ok", "workflow_type": "provider_check"}}))
+    raise SystemExit(0)
 target_file = payload["files"][0]
 target_path = Path(target_file)
 original = target_path.read_text(encoding="utf-8")
@@ -399,8 +405,14 @@ def test_cli_index_retrieve_and_repair(sample_project: Path, monkeypatch) -> Non
     repair_result = runner.invoke(app, ["repair", "--tool", "fixture", "--file", "rtl/broken_counter.sv", "--apply"])
     assert repair_result.exit_code == 0
     payload = json.loads(repair_result.stdout)
+    assert payload["status"] == "applied"
+    assert payload["workflow_status"] == "applied"
+    assert payload["initial_tool_status"] == "failed"
+    assert payload["candidate_status"] == "validated"
+    assert payload["review_status"] == "applied"
     assert payload["patch_id"] is not None
     assert payload["validation_status"] == "passed"
+    assert payload["validation_mode"] == "adapter_replay"
     assert payload["replay_artifacts"]["request_artifact"]
     fixed_text = (sample_project / "rtl" / "broken_counter.sv").read_text(encoding="utf-8")
     assert "count <= 4'd0;" in fixed_text
@@ -410,6 +422,26 @@ def test_cli_index_retrieve_and_repair(sample_project: Path, monkeypatch) -> Non
     assert task_payload["metadata"]["request_artifact"]
     assert task_payload["metadata"]["response_artifact"]
     assert task_payload["metadata"]["replay_artifact"]
+
+
+def test_cli_repair_without_apply_is_review_required(sample_project: Path, monkeypatch) -> None:
+    monkeypatch.chdir(sample_project)
+    monkeypatch.setattr("telchines.operations.AdapterRegistry", FixtureRegistry)
+    original_text = (sample_project / "rtl" / "broken_counter.sv").read_text(encoding="utf-8")
+    runner.invoke(app, ["index"])
+
+    repair_result = runner.invoke(app, ["repair", "--tool", "fixture", "--file", "rtl/broken_counter.sv"])
+
+    assert repair_result.exit_code == 0
+    payload = json.loads(repair_result.stdout)
+    assert payload["status"] == "review_required"
+    assert payload["workflow_status"] == "review_required"
+    assert payload["initial_tool_status"] == "failed"
+    assert payload["candidate_status"] == "validated"
+    assert payload["review_status"] == "pending_review"
+    assert payload["validation_status"] == "passed"
+    assert payload["validation_mode"] == "adapter_replay"
+    assert (sample_project / "rtl" / "broken_counter.sv").read_text(encoding="utf-8") == original_text
 
 
 def test_cli_index_status_and_clean(sample_project: Path, monkeypatch) -> None:
@@ -825,8 +857,14 @@ def test_cli_agent_repair_is_review_gated_and_records_evidence(sample_project: P
     payload = json.loads(result.stdout)
     assert payload["workflow_type"] == "compile_repair"
     assert payload["status"] == "review_required"
+    assert payload["result"]["status"] == "review_required"
+    assert payload["result"]["workflow_status"] == "review_required"
+    assert payload["result"]["initial_tool_status"] == "failed"
+    assert payload["result"]["candidate_status"] == "validated"
+    assert payload["result"]["review_status"] == "pending_review"
     assert payload["review_gate"]["required"] is True
     assert payload["result"]["validation_status"] == "passed"
+    assert payload["result"]["validation_mode"] == "adapter_replay"
     assert payload["evidence"]["patch_id"]
     assert payload["evidence"]["validation_run_id"]
     assert payload["replay_artifacts"]["replay_artifact"]
@@ -855,6 +893,10 @@ def test_cli_repair_with_agent_runtime_returns_no_patch_when_budget_exhausted(sa
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert payload["provider"] == "agent-repair"
+    assert payload["status"] == "no_patch"
+    assert payload["workflow_status"] == "no_patch"
+    assert payload["candidate_status"] == "no_patch"
+    assert payload["review_status"] == "not_available"
     assert payload["patch_id"] is None
     assert payload["validation_run_id"] is None
     task_payload = read_json(sorted((sample_project / ".tel" / "tasks").glob("*.json"))[-1])
@@ -889,6 +931,102 @@ def test_cli_agent_repair_provider_override_is_used(sample_project: Path, monkey
     payload = json.loads(result.stdout)
     assert payload["result"]["provider"] == "local-base"
     assert payload["result"]["runtime_mode"] == ""
+
+
+def test_cli_repair_forwards_compile_context_options(sample_project: Path, monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_repair(project_root, **kwargs):  # noqa: ANN001
+        captured["project_root"] = project_root
+        captured.update(kwargs)
+        return {"status": "captured"}
+
+    monkeypatch.chdir(sample_project)
+    monkeypatch.setattr("telchines.cli.repair_op", fake_repair)
+
+    result = runner.invoke(
+        app,
+        [
+            "repair",
+            "--tool",
+            "fixture",
+            "--filelist",
+            "design.f",
+            "--include-dir",
+            "rtl/include",
+            "--define",
+            "SIM=1",
+            "--top",
+            "tb_top",
+            "--worklib",
+            "work",
+            "--adapter-arg",
+            "-Wall",
+            "--extra-arg",
+            "--legacy",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert json.loads(result.stdout) == {"status": "captured"}
+    assert captured["tool"] == "fixture"
+    assert captured["files"] == []
+    assert captured["filelists"] == ["design.f"]
+    assert captured["include_dirs"] == ["rtl/include"]
+    assert captured["defines"] == ["SIM=1"]
+    assert captured["top_module"] == "tb_top"
+    assert captured["work_library"] == "work"
+    assert captured["adapter_args"] == ["-Wall"]
+    assert captured["extra_arg"] == ["--legacy"]
+
+
+def test_cli_agent_forwards_compile_context_options(sample_project: Path, monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_agent(project_root, task, **kwargs):  # noqa: ANN001
+        captured["project_root"] = project_root
+        captured["task"] = task
+        captured.update(kwargs)
+        return {"workflow_type": "compile_repair", "status": "captured"}
+
+    monkeypatch.chdir(sample_project)
+    monkeypatch.setattr("telchines.cli.agent_op", fake_agent)
+
+    result = runner.invoke(
+        app,
+        [
+            "agent",
+            "fix counter",
+            "--tool",
+            "fixture",
+            "--file",
+            "rtl/broken_counter.sv",
+            "--filelist",
+            "design.f",
+            "--include-dir",
+            "rtl/include",
+            "--define",
+            "SIM=1",
+            "--top",
+            "tb_top",
+            "--worklib",
+            "work",
+            "--adapter-arg",
+            "-Wall",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert json.loads(result.stdout)["status"] == "captured"
+    assert captured["task"] == "fix counter"
+    assert captured["tool"] == "fixture"
+    assert captured["files"] == ["rtl/broken_counter.sv"]
+    assert captured["filelists"] == ["design.f"]
+    assert captured["include_dirs"] == ["rtl/include"]
+    assert captured["defines"] == ["SIM=1"]
+    assert captured["top_module"] == "tb_top"
+    assert captured["work_library"] == "work"
+    assert captured["adapter_args"] == ["-Wall"]
 
 
 def test_cli_repair_with_agent_runtime_captures_malformed_provider_json(sample_project: Path, monkeypatch) -> None:
@@ -1046,6 +1184,36 @@ def test_cli_checks_agent_runtime_provider(sample_project: Path, monkeypatch) ->
     assert isinstance(transport["runtime_available"], bool)
     assert transport["runtime_reason"]
     assert transport["base_provider"] == "local-base"
+    assert payload["providers"][0]["checks"]["base_provider_transport"]["status"] == "passed"
+
+
+def test_cli_checks_agent_runtime_provider_offline_skips_base_transport(sample_project: Path, monkeypatch) -> None:
+    _write_agent_retry_provider(sample_project)
+    _set_model_policy(sample_project, _agent_runtime_model_policy(sys.executable, "tools/agent_retry_provider.py"))
+    monkeypatch.chdir(sample_project)
+
+    result = runner.invoke(app, ["providers", "check", "agent-repair", "--offline"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    checks = payload["providers"][0]["checks"]
+    assert checks["transport"]["status"] == "skipped"
+    assert "base_provider_transport" not in checks
+
+
+def test_cli_checks_agent_runtime_provider_fails_when_base_transport_fails(sample_project: Path, monkeypatch) -> None:
+    _write_local_check_provider(sample_project, exit_code=3)
+    _set_model_policy(sample_project, _agent_runtime_model_policy(sys.executable, "tools/local_check_provider.py"))
+    monkeypatch.chdir(sample_project)
+
+    result = runner.invoke(app, ["providers", "check", "agent-repair"])
+
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "failed"
+    assert payload["providers"][0]["checks"]["transport"]["status"] == "passed"
+    assert payload["providers"][0]["checks"]["base_provider_transport"]["status"] == "failed"
+    assert "base provider local-base check failed" in payload["providers"][0]["summary"]
 
 
 def test_cli_checks_local_command_provider_failure(sample_project: Path, monkeypatch) -> None:
@@ -1272,13 +1440,59 @@ def test_cli_gen_sva_with_local_command_provider(sample_project: Path, monkeypat
     assert payload["provider"] == "sva-local"
     assert payload["status"] == "validated"
     assert payload["validation_status"] == "passed"
-    assert payload["validation_mode"] == "builtin_structural"
+    assert payload["validation_mode"] == "structure_only"
     assert payload["validation_limitations"]
     assert payload["artifact_path"].endswith("uart_rx_assertions.sv")
     assert payload["property_summaries"][0]["name"] == "p_start_seen_after_start_bit"
     artifact_path = sample_project / payload["artifact_path"]
     assert artifact_path.exists()
     assert "assert property" in artifact_path.read_text(encoding="utf-8")
+
+
+def test_cli_gen_sva_forwards_compile_context_options(sample_project: Path, monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_gen_sva(project_root, **kwargs):  # noqa: ANN001
+        captured["project_root"] = project_root
+        captured.update(kwargs)
+        return {"status": "captured"}
+
+    monkeypatch.chdir(sample_project)
+    monkeypatch.setattr("telchines.cli.gen_sva_op", fake_gen_sva)
+
+    result = runner.invoke(
+        app,
+        [
+            "gen-sva",
+            "--spec",
+            "docs/uart.md",
+            "--rtl",
+            "rtl/uart_rx.sv",
+            "--filelist",
+            "design.f",
+            "--include-dir",
+            "rtl/include",
+            "--define",
+            "SIM=1",
+            "--top",
+            "formal_top",
+            "--worklib",
+            "work",
+            "--adapter-arg",
+            "--append",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert json.loads(result.stdout) == {"status": "captured"}
+    assert captured["spec"] == Path("docs/uart.md")
+    assert captured["rtl"] == Path("rtl/uart_rx.sv")
+    assert captured["filelists"] == ["design.f"]
+    assert captured["include_dirs"] == ["rtl/include"]
+    assert captured["defines"] == ["SIM=1"]
+    assert captured["top_module"] == "formal_top"
+    assert captured["work_library"] == "work"
+    assert captured["adapter_args"] == ["--append"]
 
 
 def test_cli_gen_sva_reports_validation_failure(sample_project: Path, monkeypatch) -> None:
@@ -1371,7 +1585,7 @@ def test_cli_gen_cocotb_with_heuristic_provider(sample_project: Path, monkeypatc
     assert payload["provider"] == "heuristic"
     assert payload["status"] == "validated"
     assert payload["validation_status"] == "passed"
-    assert payload["validation_mode"] == "python_syntax_plus_structure"
+    assert payload["validation_mode"] == "syntax_plus_structure"
     assert payload["validation_limitations"]
     assert payload["top_module"] == "uart_rx"
     assert payload["artifact_path"].endswith("test_uart_rx.py")
@@ -1385,7 +1599,7 @@ def test_cli_gen_cocotb_with_heuristic_provider(sample_project: Path, monkeypatc
     assert manifest_path.exists()
     assert "@cocotb.test()" in artifact_path.read_text(encoding="utf-8")
     manifest = read_json(manifest_path)
-    assert manifest["validation"]["mode"] == "python_syntax_plus_structure"
+    assert manifest["validation"]["mode"] == "syntax_plus_structure"
 
     unchanged = runner.invoke(app, ["artifacts", "review", payload["candidate_id"]])
     assert unchanged.exit_code == 0
@@ -1399,6 +1613,84 @@ def test_cli_gen_cocotb_with_heuristic_provider(sample_project: Path, monkeypatc
     modified_payload = json.loads(modified.stdout)
     assert modified_payload["status"] == "modified"
     assert "+# human review note" in modified_payload["diff"]
+
+
+def test_cli_gen_cocotb_forwards_compile_context_options(sample_project: Path, monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_gen_cocotb(project_root, **kwargs):  # noqa: ANN001
+        captured["project_root"] = project_root
+        captured.update(kwargs)
+        return {"status": "captured"}
+
+    monkeypatch.chdir(sample_project)
+    monkeypatch.setattr("telchines.cli.gen_cocotb_op", fake_gen_cocotb)
+
+    result = runner.invoke(
+        app,
+        [
+            "gen-cocotb",
+            "--dut",
+            "rtl/uart_rx.sv",
+            "--spec",
+            "docs/uart.md",
+            "--filelist",
+            "design.f",
+            "--include-dir",
+            "rtl/include",
+            "--define",
+            "SIM=1",
+            "--top",
+            "uart_rx",
+            "--worklib",
+            "work",
+            "--adapter-arg",
+            "-Wall",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert json.loads(result.stdout) == {"status": "captured"}
+    assert captured["dut"] == Path("rtl/uart_rx.sv")
+    assert captured["spec"] == Path("docs/uart.md")
+    assert captured["filelists"] == ["design.f"]
+    assert captured["include_dirs"] == ["rtl/include"]
+    assert captured["defines"] == ["SIM=1"]
+    assert captured["top_module"] == "uart_rx"
+    assert captured["work_library"] == "work"
+    assert captured["adapter_args"] == ["-Wall"]
+
+
+def test_cli_gen_cocotb_missing_dut_reports_input_error(sample_project: Path, monkeypatch) -> None:
+    monkeypatch.chdir(sample_project)
+    runner.invoke(app, ["index"])
+
+    result = runner.invoke(app, ["gen-cocotb", "--dut", "rtl/does_not_exist.sv"])
+
+    assert result.exit_code == 2
+    assert "input error: dut file does not exist: rtl/does_not_exist.sv" in result.stderr
+    assert "provider error" not in result.stderr
+
+
+def test_cli_missing_workflow_inputs_report_input_errors(sample_project: Path, monkeypatch) -> None:
+    monkeypatch.chdir(sample_project)
+    runner.invoke(app, ["index"])
+
+    cases = [
+        (["gen-sva", "--spec", "docs/does_not_exist.md", "--rtl", "rtl/uart_rx.sv"], "input error: spec file does not exist: docs/does_not_exist.md"),
+        (["gen-sva", "--spec", "docs/uart.md", "--rtl", "rtl/does_not_exist.sv"], "input error: rtl file does not exist: rtl/does_not_exist.sv"),
+        (["coverage-plan", "--report", "cov/does_not_exist.json"], "input error: coverage report does not exist: cov/does_not_exist.json"),
+        (["triage", "--logs", "logs/does_not_exist"], "input error: log path does not exist: logs/does_not_exist"),
+        (
+            ["triage", "--logs", "logs/regressions", "--waveform", "logs/regressions/does_not_exist.vcd"],
+            "input error: waveform file does not exist: logs/regressions/does_not_exist.vcd",
+        ),
+    ]
+    for command, message in cases:
+        result = runner.invoke(app, command)
+        assert result.exit_code == 2
+        assert message in result.stderr
+        assert "provider error" not in result.stderr
 
 
 def test_cli_gen_cocotb_retries_with_validation_feedback(sample_project: Path, monkeypatch) -> None:

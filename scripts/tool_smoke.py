@@ -11,6 +11,7 @@ SRC_ROOT = REPO_ROOT / "src"
 if SRC_ROOT.exists():
     sys.path.insert(0, str(SRC_ROOT))
 
+from telchines.adapters.base import AdapterRunSpec  # noqa: E402
 from telchines.adapters.open_tools import IcarusAdapter, SlangAdapter, SymbiYosysAdapter, VerilatorAdapter  # noqa: E402
 
 
@@ -71,6 +72,23 @@ endmodule
 """,
             encoding="utf-8",
         )
+        include_dir = root / "rtl" / "include"
+        include_dir.mkdir()
+        (include_dir / "smoke_defs.svh").write_text("`define TELCHINES_SMOKE 1\n", encoding="utf-8")
+        filelist = root / "smoke_files.f"
+        filelist.write_text(
+            "\n".join(
+                [
+                    "# Telchines real-tool smoke filelist",
+                    "+incdir+rtl/include",
+                    "+define+TELCHINES_TOOL_SMOKE=1",
+                    "rtl/smoke_counter.sv",
+                    "rtl/smoke_counter_tb.sv",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
 
         for adapter_name in args.adapters:
             adapter = ADAPTERS[adapter_name]()
@@ -85,8 +103,10 @@ endmodule
                 continue
 
             files = ["rtl/smoke_counter.sv"]
+            spec = AdapterRunSpec(files=files, include_dirs=["rtl/include"], defines=["TELCHINES_TOOL_SMOKE=1"], top_module="smoke_counter")
             if adapter_name == "iverilog":
-                files.append("rtl/smoke_counter_tb.sv")
+                files = ["rtl/smoke_counter.sv", "rtl/smoke_counter_tb.sv"]
+                spec = AdapterRunSpec(filelists=[filelist.name], top_module="smoke_counter_tb")
             if adapter_name == "symbiyosys":
                 sby_file = root / "smoke_counter.sby"
                 sby_file.write_text(
@@ -107,7 +127,8 @@ rtl/smoke_counter.sv
                     encoding="utf-8",
                 )
                 files = [sby_file.name]
-            execution = adapter.run(f"smoke_{adapter_name}", root, files, artifacts_dir)
+                spec = AdapterRunSpec(files=files)
+            execution = adapter.run(f"smoke_{adapter_name}", root, files, artifacts_dir, spec=spec)
             status = "PASS" if execution.exit_code == 0 else "FAIL"
             print(f"{status} {adapter_name}: {execution.summary}")
             if execution.exit_code != 0:

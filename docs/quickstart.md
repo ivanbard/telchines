@@ -75,7 +75,7 @@ Generate assertions:
 tel gen-sva --spec docs/uart.md --rtl rtl/uart_rx.sv
 ```
 
-The JSON result includes `validation_mode`, `validation_status`, and `validation_limitations`. Built-in SVA validation checks structure and obvious bind references; when Slang or Verilator is enabled and available, Telchines also runs adapter-backed parser/lint validation.
+The JSON result includes `validation_mode`, `validation_status`, `validation_limitations`, `formal_status`, `command_artifacts`, and `setup_diagnostics`. Built-in SVA validation checks structure and obvious bind references; when Slang or Verilator is enabled and available, Telchines also runs adapter-backed parser/lint validation. SymbiYosys formal execution is attempted when configured and available.
 
 Generate a cocotb scaffold:
 
@@ -83,7 +83,7 @@ Generate a cocotb scaffold:
 tel gen-cocotb --dut rtl/uart_rx.sv --spec docs/uart.md --intent "smoke the start-bit path"
 ```
 
-The default cocotb validation mode is `python_syntax_plus_structure`, which runs `py_compile` and confirms basic cocotb test shape. Naming and output directories can be configured in `.tel/config.json` under `generation.sva` and `generation.cocotb`; see `docs/generated-artifacts.md`.
+The default cocotb path always runs `syntax_plus_structure`, which uses `py_compile` and confirms basic cocotb test shape. When cocotb, make, and an enabled simulator are available, Telchines also attempts an executable smoke and reports `compile_and_run`. Naming, output directories, and real-tool modes can be configured in `.tel/config.json` under `generation.sva` and `generation.cocotb`; see `docs/generated-artifacts.md`.
 
 Plan coverage closure:
 

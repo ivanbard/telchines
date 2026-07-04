@@ -5,7 +5,7 @@ from typing import Optional
 
 import typer
 
-from telchines.errors import AdapterExecutionError, ConfigError, ProviderError
+from telchines.errors import AdapterExecutionError, ConfigError, ProviderError, WorkflowInputError
 from telchines import __version__
 from telchines.operations import (
     agent as agent_op,
@@ -214,16 +214,38 @@ def import_runs(
 @app.command("repair")
 def repair(
     tool: str = typer.Option(..., "--tool"),
-    files: list[str] = typer.Option(..., "--file"),
+    files: list[str] = typer.Option([], "--file"),
     extra_arg: list[str] = typer.Option([], "--extra-arg"),
+    adapter_arg: list[str] = typer.Option([], "--adapter-arg"),
+    filelists: list[str] = typer.Option([], "--filelist"),
+    include_dirs: list[str] = typer.Option([], "--include-dir"),
+    defines: list[str] = typer.Option([], "--define"),
+    top_module: str | None = typer.Option(None, "--top"),
+    work_library: str | None = typer.Option(None, "--worklib"),
     apply_patch: bool = typer.Option(False, "--apply"),
 ) -> None:
     try:
-        payload = repair_op(None, tool=tool, files=files, extra_arg=extra_arg, apply_patch=apply_patch)
+        payload = repair_op(
+            None,
+            tool=tool,
+            files=files,
+            extra_arg=extra_arg,
+            apply_patch=apply_patch,
+            adapter_args=adapter_arg,
+            filelists=filelists,
+            include_dirs=include_dirs,
+            defines=defines,
+            top_module=top_module,
+            work_library=work_library,
+        )
     except KeyError:
         _fail(f"unknown adapter: {tool}")
     except ConfigError as exc:
         _fail(f"config error: {exc}")
+    except AdapterExecutionError as exc:
+        _fail(f"adapter error: {exc}")
+    except WorkflowInputError as exc:
+        _fail(f"input error: {exc}")
     except AdapterExecutionError as exc:
         _fail(f"adapter error: {exc}")
     except ProviderError as exc:
@@ -237,6 +259,12 @@ def agent_command(
     tool: str | None = typer.Option(None, "--tool", help="Adapter to run for repair tasks."),
     files: list[str] = typer.Option([], "--file", help="RTL/source file for adapter-backed repair."),
     extra_arg: list[str] = typer.Option([], "--extra-arg", help="Extra argument forwarded to the adapter."),
+    adapter_arg: list[str] = typer.Option([], "--adapter-arg", help="Extra argument forwarded to the adapter."),
+    filelists: list[str] = typer.Option([], "--filelist", help="Tool filelist for adapter-backed execution."),
+    include_dirs: list[str] = typer.Option([], "--include-dir", help="Include directory for adapter-backed execution."),
+    defines: list[str] = typer.Option([], "--define", help="Preprocessor define for adapter-backed execution."),
+    top_module: str | None = typer.Option(None, "--top", help="Top module for adapter-backed execution."),
+    work_library: str | None = typer.Option(None, "--worklib", help="Work library for adapter-backed execution."),
     apply_patch: bool = typer.Option(False, "--apply", help="Apply a validated repair patch instead of leaving it review-gated."),
     logs: list[Path] = typer.Option([], "--logs", help="Log path for triage tasks."),
     waveforms: list[Path] = typer.Option([], "--waveform", help="Waveform path for triage/evidence tasks."),
@@ -271,11 +299,21 @@ def agent_command(
             output_dir=output_dir,
             provider_name=provider,
             intent=intent,
+            adapter_args=adapter_arg,
+            filelists=filelists,
+            include_dirs=include_dirs,
+            defines=defines,
+            top_module=top_module,
+            work_library=work_library,
         )
     except KeyError as exc:
         _fail(f"unknown adapter: {exc.args[0]}")
     except ConfigError as exc:
         _fail(f"config error: {exc}")
+    except AdapterExecutionError as exc:
+        _fail(f"adapter error: {exc}")
+    except WorkflowInputError as exc:
+        _fail(f"input error: {exc}")
     except AdapterExecutionError as exc:
         _fail(f"adapter error: {exc}")
     except ProviderError as exc:
@@ -295,6 +333,8 @@ def triage(
         payload = triage_op(None, logs, waveforms=waveforms or None)
     except ConfigError as exc:
         _fail(f"config error: {exc}")
+    except WorkflowInputError as exc:
+        _fail(f"input error: {exc}")
     except ValueError as exc:
         _fail(str(exc))
     if output_format == "human":
@@ -319,6 +359,8 @@ def coverage_plan(
         payload = coverage_plan_op(None, report=report, exclusions=exclusions, formal_run_id=formal_run, rtl=rtl, spec=spec)
     except ConfigError as exc:
         _fail(f"config error: {exc}")
+    except WorkflowInputError as exc:
+        _fail(f"input error: {exc}")
     except ValueError as exc:
         _fail(str(exc))
     if output_format == "human":
@@ -333,11 +375,31 @@ def gen_sva(
     rtl: Path = typer.Option(..., "--rtl"),
     output: Path | None = typer.Option(None, "--output"),
     provider: str | None = typer.Option(None, "--provider"),
+    adapter_arg: list[str] = typer.Option([], "--adapter-arg"),
+    filelists: list[str] = typer.Option([], "--filelist"),
+    include_dirs: list[str] = typer.Option([], "--include-dir"),
+    defines: list[str] = typer.Option([], "--define"),
+    top_module: str | None = typer.Option(None, "--top"),
+    work_library: str | None = typer.Option(None, "--worklib"),
 ) -> None:
     try:
-        payload = gen_sva_op(None, spec=spec, rtl=rtl, output=output, provider_name=provider)
+        payload = gen_sva_op(
+            None,
+            spec=spec,
+            rtl=rtl,
+            output=output,
+            provider_name=provider,
+            adapter_args=adapter_arg,
+            filelists=filelists,
+            include_dirs=include_dirs,
+            defines=defines,
+            top_module=top_module,
+            work_library=work_library,
+        )
     except ConfigError as exc:
         _fail(f"config error: {exc}")
+    except WorkflowInputError as exc:
+        _fail(f"input error: {exc}")
     except ProviderError as exc:
         _fail(f"provider error: {exc}")
     typer.echo(dump_json(payload))
@@ -350,11 +412,32 @@ def gen_cocotb(
     output_dir: Path | None = typer.Option(None, "--output-dir"),
     intent: str = typer.Option("", "--intent"),
     provider: str | None = typer.Option(None, "--provider"),
+    adapter_arg: list[str] = typer.Option([], "--adapter-arg"),
+    filelists: list[str] = typer.Option([], "--filelist"),
+    include_dirs: list[str] = typer.Option([], "--include-dir"),
+    defines: list[str] = typer.Option([], "--define"),
+    top_module: str | None = typer.Option(None, "--top"),
+    work_library: str | None = typer.Option(None, "--worklib"),
 ) -> None:
     try:
-        payload = gen_cocotb_op(None, dut=dut, spec=spec, output_dir=output_dir, intent=intent, provider_name=provider)
+        payload = gen_cocotb_op(
+            None,
+            dut=dut,
+            spec=spec,
+            output_dir=output_dir,
+            intent=intent,
+            provider_name=provider,
+            adapter_args=adapter_arg,
+            filelists=filelists,
+            include_dirs=include_dirs,
+            defines=defines,
+            top_module=top_module,
+            work_library=work_library,
+        )
     except ConfigError as exc:
         _fail(f"config error: {exc}")
+    except WorkflowInputError as exc:
+        _fail(f"input error: {exc}")
     except ProviderError as exc:
         _fail(f"provider error: {exc}")
     typer.echo(dump_json(payload))

@@ -175,7 +175,10 @@ def test_init_project_uses_capability_defaults(sample_project: Path) -> None:
     assert config.provider_capabilities("heuristic") == ["repair", "generation"]
     assert config.generation["sva"]["filename_template"] == "{module}_assertions.sv"
     assert config.generation["sva"]["validation_adapters"] == ["slang", "verilator"]
+    assert config.generation["sva"]["formal"] == {"mode": "auto", "adapter": "symbiyosys"}
     assert config.generation["cocotb"]["test_file_template"] == "test_{module}.py"
+    assert config.generation["cocotb"]["executable_smoke"] == "auto"
+    assert config.generation["cocotb"]["simulator"] == "auto"
 
 
 def test_config_rejects_invalid_local_command_provider(sample_project: Path) -> None:
@@ -390,6 +393,44 @@ def test_config_validates_generation_max_attempts(sample_project: Path) -> None:
     write_json(config_path, payload)
     with pytest.raises(ConfigError, match="generation.cocotb.max_attempts"):
         ProjectConfig.load(sample_project)
+
+
+def test_config_validates_real_tool_execution_modes(sample_project: Path) -> None:
+    config_path = sample_project / ".tel" / "config.json"
+    payload = read_json(config_path)
+    payload["generation"] = {"cocotb": {"executable_smoke": "always"}}
+    write_json(config_path, payload)
+    with pytest.raises(ConfigError, match="generation.cocotb.executable_smoke"):
+        ProjectConfig.load(sample_project)
+
+    payload = read_json(config_path)
+    payload["generation"] = {"cocotb": {"simulator": "questa"}}
+    write_json(config_path, payload)
+    with pytest.raises(ConfigError, match="generation.cocotb.simulator"):
+        ProjectConfig.load(sample_project)
+
+    payload = read_json(config_path)
+    payload["generation"] = {"sva": {"formal": {"mode": "always"}}}
+    write_json(config_path, payload)
+    with pytest.raises(ConfigError, match="generation.sva.formal.mode"):
+        ProjectConfig.load(sample_project)
+
+
+def test_config_merges_nested_real_tool_generation_defaults(sample_project: Path) -> None:
+    config_path = sample_project / ".tel" / "config.json"
+    payload = read_json(config_path)
+    payload["generation"] = {
+        "sva": {"formal": {"mode": "required"}},
+        "cocotb": {"simulator": "icarus"},
+    }
+    write_json(config_path, payload)
+
+    config = ProjectConfig.load(sample_project)
+
+    assert config.generation["sva"]["formal"] == {"mode": "required", "adapter": "symbiyosys"}
+    assert config.generation["sva"]["validation_adapters"] == ["slang", "verilator"]
+    assert config.generation["cocotb"]["simulator"] == "icarus"
+    assert config.generation["cocotb"]["executable_smoke"] == "auto"
 
 
 def test_config_loads_utf8_bom_json(sample_project: Path) -> None:

@@ -98,6 +98,8 @@ PATH_OPTIONS = {
     "--exclusions",
     "--output",
     "--output-dir",
+    "--filelist",
+    "--include-dir",
 }
 SHELL_COMMAND_OPTIONS = {
     "/project init": ("--name",),
@@ -106,6 +108,12 @@ SHELL_COMMAND_OPTIONS = {
         "--tool",
         "--file",
         "--extra-arg",
+        "--adapter-arg",
+        "--filelist",
+        "--include-dir",
+        "--define",
+        "--top",
+        "--worklib",
         "--apply",
         "--logs",
         "--waveform",
@@ -120,18 +128,18 @@ SHELL_COMMAND_OPTIONS = {
         "--provider",
         "--intent",
     ),
-    "/repair": ("--tool", "--file", "--extra-arg", "--apply"),
+    "/repair": ("--tool", "--file", "--extra-arg", "--adapter-arg", "--filelist", "--include-dir", "--define", "--top", "--worklib", "--apply"),
     "/triage": ("--logs", "--waveform"),
     "/coverage-plan": ("--report", "--exclusions", "--formal-run", "--rtl", "--spec"),
-    "/gen-sva": ("--spec", "--rtl", "--output", "--provider"),
-    "/gen-cocotb": ("--dut", "--spec", "--output-dir", "--intent", "--provider"),
+    "/gen-sva": ("--spec", "--rtl", "--output", "--provider", "--adapter-arg", "--filelist", "--include-dir", "--define", "--top", "--worklib"),
+    "/gen-cocotb": ("--dut", "--spec", "--output-dir", "--intent", "--provider", "--adapter-arg", "--filelist", "--include-dir", "--define", "--top", "--worklib"),
     "/runs replay": ("--yes",),
     "/runs import": ("--dry-run",),
     "/waveforms signals": ("--filter",),
     "/waveforms inspect": ("--signal", "--window"),
     "/artifacts purge": ("--yes",),
 }
-REPEATABLE_OPTIONS = {"--file", "--extra-arg", "--logs", "--waveform", "--rtl", "--spec"}
+REPEATABLE_OPTIONS = {"--file", "--extra-arg", "--adapter-arg", "--filelist", "--include-dir", "--define", "--logs", "--waveform", "--rtl", "--spec"}
 
 
 @dataclass(slots=True)
@@ -687,13 +695,31 @@ def _execute_command(session: ShellSession, parts: list[str], raw: bool) -> str 
             output_dir=None if agent_args["output_dir"] is None else _resolve_path(session.cwd, agent_args["output_dir"]),
             provider_name=agent_args["provider"],
             intent=agent_args["intent"],
+            adapter_args=agent_args["adapter_args"],
+            filelists=agent_args["filelists"],
+            include_dirs=agent_args["include_dirs"],
+            defines=agent_args["defines"],
+            top_module=agent_args["top_module"],
+            work_library=agent_args["work_library"],
         )
         session.note_context(payload)
         return dump_json(payload) if raw else render_agent_payload(payload)
 
     if command == "repair":
-        tool, files, extra_args, apply_patch = _parse_repair_args(parts[1:])
-        payload = repair(session.cwd, tool=tool, files=files, extra_arg=extra_args, apply_patch=apply_patch)
+        tool, files, extra_args, apply_patch, context = _parse_repair_args(parts[1:])
+        payload = repair(
+            session.cwd,
+            tool=tool,
+            files=files,
+            extra_arg=extra_args,
+            apply_patch=apply_patch,
+            adapter_args=context["adapter_args"],
+            filelists=context["filelists"],
+            include_dirs=context["include_dirs"],
+            defines=context["defines"],
+            top_module=context["top_module"],
+            work_library=context["work_library"],
+        )
         session.note_context(payload)
         return dump_json(payload) if raw else render_repair_payload(payload)
 
@@ -724,13 +750,25 @@ def _execute_command(session: ShellSession, parts: list[str], raw: bool) -> str 
         return dump_json(payload) if raw else render_coverage_payload(payload)
 
     if command == "gen-sva":
-        spec, rtl, output, provider = _parse_gen_sva_args(parts[1:])
-        payload = gen_sva(session.cwd, spec=_resolve_path(session.cwd, spec), rtl=_resolve_path(session.cwd, rtl), output=None if output is None else _resolve_path(session.cwd, output), provider_name=provider)
+        spec, rtl, output, provider, context = _parse_gen_sva_args(parts[1:])
+        payload = gen_sva(
+            session.cwd,
+            spec=_resolve_path(session.cwd, spec),
+            rtl=_resolve_path(session.cwd, rtl),
+            output=None if output is None else _resolve_path(session.cwd, output),
+            provider_name=provider,
+            adapter_args=context["adapter_args"],
+            filelists=context["filelists"],
+            include_dirs=context["include_dirs"],
+            defines=context["defines"],
+            top_module=context["top_module"],
+            work_library=context["work_library"],
+        )
         session.note_context(payload)
         return dump_json(payload) if raw else render_sva_payload(payload)
 
     if command == "gen-cocotb":
-        dut, spec, output_dir, intent, provider = _parse_gen_cocotb_args(parts[1:])
+        dut, spec, output_dir, intent, provider, context = _parse_gen_cocotb_args(parts[1:])
         payload = gen_cocotb(
             session.cwd,
             dut=_resolve_path(session.cwd, dut),
@@ -738,6 +776,12 @@ def _execute_command(session: ShellSession, parts: list[str], raw: bool) -> str 
             output_dir=None if output_dir is None else _resolve_path(session.cwd, output_dir),
             intent=intent,
             provider_name=provider,
+            adapter_args=context["adapter_args"],
+            filelists=context["filelists"],
+            include_dirs=context["include_dirs"],
+            defines=context["defines"],
+            top_module=context["top_module"],
+            work_library=context["work_library"],
         )
         session.note_context(payload)
         return dump_json(payload) if raw else render_cocotb_payload(payload)
@@ -991,6 +1035,8 @@ def render_repair_payload(payload: dict[str, object]) -> str:
         body.append(f"proposal: {payload['proposal_explanation']}")
     if payload["validation_status"]:
         body.append(f"validation: {payload['validation_status']}")
+        if payload.get("validation_mode"):
+            body.append(f"validation mode: {payload['validation_mode']}")
         body.append(f"summary: {payload['validation_summary']}")
     return render_action_panel("Repair Result", "\n".join(body))
 
@@ -1005,7 +1051,7 @@ def render_agent_payload(payload: dict[str, object]) -> str:
         f"context: {payload['context_id']}",
     ]
     if isinstance(result, dict):
-        for key in ("runtime_mode", "patch_id", "candidate_id", "validation_run_id", "validation_status", "artifact_path"):
+        for key in ("runtime_mode", "patch_id", "candidate_id", "validation_run_id", "validation_status", "validation_mode", "artifact_path"):
             value = result.get(key)
             if value:
                 body.append(f"{key.replace('_', ' ')}: {value}")
@@ -1050,6 +1096,7 @@ def render_sva_payload(payload: dict[str, object]) -> str:
         f"status: {payload['status']}",
         f"artifact: {payload['artifact_path']}",
         f"validation: {payload['validation_status']}",
+        f"validation mode: {payload['validation_mode']}",
     ]
     if payload["explanation"]:
         body.append(f"explanation: {payload['explanation']}")
@@ -1072,6 +1119,7 @@ def render_cocotb_payload(payload: dict[str, object]) -> str:
         f"artifact: {payload['artifact_path']}",
         f"manifest: {payload['manifest_path']}",
         f"validation: {payload['validation_status']}",
+        f"validation mode: {payload['validation_mode']}",
     ]
     if payload["explanation"]:
         body.append(f"explanation: {payload['explanation']}")
@@ -1327,6 +1375,12 @@ def _parse_agent_args(parts: list[str]) -> dict[str, Any]:
         "tool": None,
         "files": [],
         "extra_args": [],
+        "adapter_args": [],
+        "filelists": [],
+        "include_dirs": [],
+        "defines": [],
+        "top_module": None,
+        "work_library": None,
         "apply_patch": False,
         "logs": [],
         "waveforms": [],
@@ -1344,6 +1398,10 @@ def _parse_agent_args(parts: list[str]) -> dict[str, Any]:
     repeated = {
         "--file": "files",
         "--extra-arg": "extra_args",
+        "--adapter-arg": "adapter_args",
+        "--filelist": "filelists",
+        "--include-dir": "include_dirs",
+        "--define": "defines",
         "--logs": "logs",
         "--waveform": "waveforms",
         "--rtl": "rtl",
@@ -1359,6 +1417,8 @@ def _parse_agent_args(parts: list[str]) -> dict[str, Any]:
         "--output-dir": "output_dir",
         "--provider": "provider",
         "--intent": "intent",
+        "--top": "top_module",
+        "--worklib": "work_library",
     }
     task_parts: list[str] = []
     index = 0
@@ -1389,14 +1449,50 @@ def _parse_agent_args(parts: list[str]) -> dict[str, Any]:
     return values
 
 
-def _parse_repair_args(parts: list[str]) -> tuple[str, list[str], list[str], bool]:
+def _empty_compile_context() -> dict[str, Any]:
+    return {
+        "adapter_args": [],
+        "filelists": [],
+        "include_dirs": [],
+        "defines": [],
+        "top_module": None,
+        "work_library": None,
+    }
+
+
+def _parse_compile_context_option(parts: list[str], index: int, context: dict[str, Any]) -> int | None:
+    part = parts[index]
+    repeated = {
+        "--adapter-arg": "adapter_args",
+        "--filelist": "filelists",
+        "--include-dir": "include_dirs",
+        "--define": "defines",
+    }
+    single = {"--top": "top_module", "--worklib": "work_library"}
+    if part in repeated:
+        values = context[repeated[part]]
+        if isinstance(values, list):
+            values.append(_require_option_value(parts, index, part))
+        return index + 2
+    if part in single:
+        context[single[part]] = _require_option_value(parts, index, part)
+        return index + 2
+    return None
+
+
+def _parse_repair_args(parts: list[str]) -> tuple[str, list[str], list[str], bool, dict[str, Any]]:
     tool: str | None = None
     files: list[str] = []
     extra_args: list[str] = []
+    context = _empty_compile_context()
     apply_patch = False
     index = 0
     while index < len(parts):
         part = parts[index]
+        next_index = _parse_compile_context_option(parts, index, context)
+        if next_index is not None:
+            index = next_index
+            continue
         if part == "--tool":
             tool = _require_option_value(parts, index, "--tool")
             index += 2
@@ -1416,19 +1512,24 @@ def _parse_repair_args(parts: list[str]) -> tuple[str, list[str], list[str], boo
         raise ValueError(f"unrecognized repair argument: {part}")
     if not tool:
         raise ValueError("/repair requires --tool")
-    if not files:
-        raise ValueError("/repair requires at least one --file")
-    return tool, files, extra_args, apply_patch
+    if not files and not context["filelists"]:
+        raise ValueError("/repair requires at least one --file or --filelist")
+    return tool, files, extra_args, apply_patch, context
 
 
-def _parse_gen_sva_args(parts: list[str]) -> tuple[str, str, str | None, str | None]:
+def _parse_gen_sva_args(parts: list[str]) -> tuple[str, str, str | None, str | None, dict[str, Any]]:
     spec: str | None = None
     rtl: str | None = None
     output: str | None = None
     provider: str | None = None
+    context = _empty_compile_context()
     index = 0
     while index < len(parts):
         part = parts[index]
+        next_index = _parse_compile_context_option(parts, index, context)
+        if next_index is not None:
+            index = next_index
+            continue
         if part == "--spec":
             spec = _require_option_value(parts, index, "--spec")
             index += 2
@@ -1450,18 +1551,23 @@ def _parse_gen_sva_args(parts: list[str]) -> tuple[str, str, str | None, str | N
         raise ValueError("/gen-sva requires --spec")
     if not rtl:
         raise ValueError("/gen-sva requires --rtl")
-    return spec, rtl, output, provider
+    return spec, rtl, output, provider, context
 
 
-def _parse_gen_cocotb_args(parts: list[str]) -> tuple[str, str | None, str | None, str, str | None]:
+def _parse_gen_cocotb_args(parts: list[str]) -> tuple[str, str | None, str | None, str, str | None, dict[str, Any]]:
     dut: str | None = None
     spec: str | None = None
     output_dir: str | None = None
     intent = ""
     provider: str | None = None
+    context = _empty_compile_context()
     index = 0
     while index < len(parts):
         part = parts[index]
+        next_index = _parse_compile_context_option(parts, index, context)
+        if next_index is not None:
+            index = next_index
+            continue
         if part == "--dut":
             dut = _require_option_value(parts, index, "--dut")
             index += 2
@@ -1485,7 +1591,7 @@ def _parse_gen_cocotb_args(parts: list[str]) -> tuple[str, str | None, str | Non
         raise ValueError(f"unrecognized gen-cocotb argument: {part}")
     if not dut:
         raise ValueError("/gen-cocotb requires --dut")
-    return dut, spec, output_dir, intent, provider
+    return dut, spec, output_dir, intent, provider, context
 
 
 def _parse_coverage_plan_args(parts: list[str]) -> tuple[str, str | None, str | None, list[str], list[str]]:

@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from telchines.adapters.base import AdapterRunSpec
 from telchines.adapters.registry import AdapterRegistry
 from telchines.config import ProjectConfig
 from telchines.models import AgentTask, VerificationRun
@@ -39,13 +40,22 @@ def execute_agent(
     output_dir: Path | None = None,
     provider_name: str | None = None,
     intent: str = "",
+    filelists: list[str] | None = None,
+    include_dirs: list[str] | None = None,
+    defines: list[str] | None = None,
+    top_module: str | None = None,
+    work_library: str | None = None,
+    adapter_args: list[str] | None = None,
 ) -> dict[str, object]:
     task_text = task.strip()
     if not task_text:
         raise ValueError("agent task must not be empty")
 
     files = files or []
-    extra_args = extra_args or []
+    extra_args = [*(extra_args or []), *(adapter_args or [])]
+    filelists = filelists or []
+    include_dirs = include_dirs or []
+    defines = defines or []
     logs = logs or []
     waveforms = waveforms or []
     rtl = rtl or []
@@ -85,6 +95,11 @@ def execute_agent(
                 "tool": tool,
                 "files": files,
                 "extra_args": extra_args,
+                "filelists": filelists,
+                "include_dirs": include_dirs,
+                "defines": defines,
+                "top_module": top_module,
+                "work_library": work_library,
                 "apply_patch": apply_patch,
                 "logs": [relative_to(path, config.project_root) for path in logs],
                 "waveforms": [relative_to(path, config.project_root) for path in waveforms],
@@ -134,6 +149,11 @@ def execute_agent(
         output_dir=output_dir,
         provider_name=provider_name,
         intent=intent or task_text,
+        filelists=filelists,
+        include_dirs=include_dirs,
+        defines=defines,
+        top_module=top_module,
+        work_library=work_library,
     )
     steps.extend(result["steps"])
 
@@ -218,6 +238,11 @@ def _execute_selected_workflow(
     output_dir: Path | None,
     provider_name: str | None,
     intent: str,
+    filelists: list[str],
+    include_dirs: list[str],
+    defines: list[str],
+    top_module: str | None,
+    work_library: str | None,
 ) -> dict[str, object]:
     if workflow_type == "compile_repair":
         return _execute_agent_repair(
@@ -227,6 +252,11 @@ def _execute_selected_workflow(
             tool=tool,
             files=files,
             extra_args=extra_args,
+            filelists=filelists,
+            include_dirs=include_dirs,
+            defines=defines,
+            top_module=top_module,
+            work_library=work_library,
             apply_patch=apply_patch,
             provider_name=provider_name,
         )
@@ -280,18 +310,37 @@ def _execute_selected_workflow(
         if not spec or not rtl:
             raise ValueError("agent SVA generation requires --spec and --rtl")
         provider = build_generation_provider(config, provider_name=provider_name)
-        candidate, validation_run, context = execute_generation(config, store, retrieval, provider, spec[0], rtl[0], output_path=output)
+        run_spec = _adapter_run_spec(
+            files=[relative_to(rtl[0], config.project_root)],
+            filelists=filelists,
+            include_dirs=include_dirs,
+            defines=defines,
+            top_module=top_module,
+            work_library=work_library,
+            extra_args=extra_args,
+        )
+        candidate, validation_run, context = execute_generation(config, store, retrieval, provider, spec[0], rtl[0], output_path=output, run_spec=run_spec)
         payload = {
             "context_id": context.context_id,
             "candidate_id": candidate.candidate_id if candidate else None,
             "provider": candidate.provider if candidate else getattr(provider, "name", ""),
             "status": candidate.status if candidate else "no_generation",
+            "workflow_status": candidate.status if candidate else "no_generation",
+            "initial_tool_status": None,
+            "candidate_status": candidate.status if candidate else "no_generation",
+            "review_status": "pending_review" if candidate and candidate.status == "validated" else "not_available",
             "artifact_path": candidate.file_path if candidate else None,
             "attempts": candidate.attempts if candidate else [],
             "rejected_candidate_ids": candidate.rejected_candidate_ids if candidate else [],
             "validation_run_id": validation_run.run_id if validation_run else None,
             "validation_status": validation_run.status if validation_run else None,
             "validation_summary": validation_run.summary if validation_run else None,
+            "validation_mode": _validation_mode(validation_run),
+            "validation_scope": _validation_mode(validation_run),
+            "formal_status": validation_run.tool_result.get("formal_status") if validation_run else None,
+            "formal_adapter": validation_run.tool_result.get("formal_adapter") if validation_run else None,
+            "command_artifacts": validation_run.tool_result.get("command_artifacts", {}) if validation_run else {},
+            "setup_diagnostics": validation_run.tool_result.get("setup_diagnostics", []) if validation_run else [],
         }
         return {
             "payload": payload,
@@ -323,6 +372,15 @@ def _execute_selected_workflow(
             spec_path=spec_path,
             output_dir=output_dir,
             intent=intent,
+            run_spec=_adapter_run_spec(
+                files=[relative_to(dut, config.project_root)],
+                filelists=filelists,
+                include_dirs=include_dirs,
+                defines=defines,
+                top_module=top_module,
+                work_library=work_library,
+                extra_args=extra_args,
+            ),
         )
         payload = {
             "context_id": context.context_id,
@@ -330,6 +388,10 @@ def _execute_selected_workflow(
             "candidate_id": candidate.candidate_id if candidate else None,
             "provider": candidate.provider if candidate else getattr(provider, "name", ""),
             "status": candidate.status if candidate else "no_generation",
+            "workflow_status": candidate.status if candidate else "no_generation",
+            "initial_tool_status": None,
+            "candidate_status": candidate.status if candidate else "no_generation",
+            "review_status": "pending_review" if candidate and candidate.status == "validated" else "not_available",
             "artifact_path": candidate.file_path if candidate else None,
             "manifest_path": candidate.manifest_path if candidate else None,
             "attempts": candidate.attempts if candidate else [],
@@ -337,6 +399,12 @@ def _execute_selected_workflow(
             "validation_run_id": validation_run.run_id if validation_run else None,
             "validation_status": validation_run.status if validation_run else None,
             "validation_summary": validation_run.summary if validation_run else None,
+            "validation_mode": _validation_mode(validation_run),
+            "validation_scope": _validation_mode(validation_run),
+            "executable_status": validation_run.tool_result.get("executable_status") if validation_run else None,
+            "simulator": validation_run.tool_result.get("simulator") if validation_run else None,
+            "command_artifacts": validation_run.tool_result.get("command_artifacts", {}) if validation_run else {},
+            "setup_diagnostics": validation_run.tool_result.get("setup_diagnostics", []) if validation_run else [],
         }
         return {
             "payload": payload,
@@ -367,16 +435,30 @@ def _execute_agent_repair(
     tool: str | None,
     files: list[str],
     extra_args: list[str],
+    filelists: list[str],
+    include_dirs: list[str],
+    defines: list[str],
+    top_module: str | None,
+    work_library: str | None,
     apply_patch: bool,
     provider_name: str | None,
 ) -> dict[str, object]:
     if not tool:
         raise ValueError("agent repair requires --tool")
-    if not files:
-        raise ValueError("agent repair requires at least one --file")
+    if not files and not filelists:
+        raise ValueError("agent repair requires at least one --file or --filelist")
     adapter = AdapterRegistry().get(tool)
-    run_id = stable_id("run", config.project.project_id, "agent", tool, utc_now(), ",".join(files))
-    execution = adapter.run(run_id, config.project_root, files, config.project_root / config.artifacts_dir, extra_args=extra_args)
+    run_id = stable_id("run", config.project.project_id, "agent", tool, utc_now(), ",".join(files or filelists))
+    run_spec = _adapter_run_spec(
+        files=files,
+        filelists=filelists,
+        include_dirs=include_dirs,
+        defines=defines,
+        top_module=top_module,
+        work_library=work_library,
+        extra_args=extra_args,
+    )
+    execution = adapter.run(run_id, config.project_root, files, config.project_root / config.artifacts_dir, extra_args=extra_args, spec=run_spec)
     store.save_observations(execution.observations)
     base_run = VerificationRun(
         run_id=run_id,
@@ -384,7 +466,13 @@ def _execute_agent_repair(
         commit_sha="workspace",
         workflow_type="compile_repair",
         tool=adapter.tool_reference,
-        inputs={"files": files, "project_root": str(config.project_root), "extra_args": extra_args, "tool_name": tool},
+        inputs={
+            "files": run_spec.expanded(config.project_root).files,
+            "project_root": str(config.project_root),
+            "extra_args": extra_args,
+            "tool_name": tool,
+            "run_spec": run_spec.summary(config.project_root),
+        },
         status="passed" if execution.exit_code == 0 else "failed",
         started_at=execution.started_at,
         finished_at=execution.finished_at,
@@ -398,9 +486,15 @@ def _execute_agent_repair(
     store.save_run(base_run)
     provider = build_repair_provider(config, provider_name=provider_name)
     proposal, validation_run, context = execute_repair(config, store, retrieval, provider, base_run, apply_patch=apply_patch)
+    workflow_status = _repair_workflow_status(proposal.status if proposal else "no_patch", validation_run.status if validation_run else None, apply_patch=apply_patch)
+    validation_mode = _validation_mode(validation_run)
     payload = {
         "run_id": base_run.run_id,
-        "status": base_run.status,
+        "status": workflow_status,
+        "workflow_status": workflow_status,
+        "initial_tool_status": base_run.status,
+        "candidate_status": proposal.status if proposal else "no_patch",
+        "review_status": _repair_review_status(workflow_status),
         "context_id": context.context_id,
         "patch_id": proposal.patch_id if proposal else None,
         "provider": proposal.provider if proposal else getattr(provider, "name", ""),
@@ -413,6 +507,8 @@ def _execute_agent_repair(
         "validation_run_id": validation_run.run_id if validation_run else None,
         "validation_status": validation_run.status if validation_run else None,
         "validation_summary": validation_run.summary if validation_run else None,
+        "validation_mode": validation_mode,
+        "validation_scope": validation_mode,
     }
     return {
         "payload": payload,
@@ -538,6 +634,8 @@ def _agent_status(result: dict[str, object], *, apply_patch: bool) -> str:
         return str(status)
     if status in {"triaged", "reported"}:
         return str(status)
+    if status in {"no_patch", "no_generation"}:
+        return str(status)
     if status in {"failed", "rejected"} or validation_status == "failed":
         return "failed"
     if payload.get("patch_id") is None and payload.get("candidate_id") is None and validation_status is None:
@@ -566,3 +664,49 @@ def _agent_task_ids(result: dict[str, object]) -> dict[str, object]:
         "candidate_id": evidence.get("candidate_id"),
         "validation_run_id": evidence.get("validation_run_id"),
     }
+
+
+def _validation_mode(validation_run: VerificationRun | None) -> str | None:
+    if validation_run is None:
+        return None
+    mode = str(validation_run.tool_result.get("validation_mode", "")).strip()
+    return mode or None
+
+
+def _adapter_run_spec(
+    *,
+    files: list[str] | None = None,
+    filelists: list[str] | None = None,
+    include_dirs: list[str] | None = None,
+    defines: list[str] | None = None,
+    top_module: str | None = None,
+    work_library: str | None = None,
+    extra_args: list[str] | None = None,
+) -> AdapterRunSpec:
+    return AdapterRunSpec(
+        files=[str(item) for item in files or []],
+        filelists=[str(item) for item in filelists or []],
+        include_dirs=[str(item) for item in include_dirs or []],
+        defines=[str(item) for item in defines or []],
+        top_module=top_module,
+        work_library=work_library,
+        extra_args=[str(item) for item in extra_args or []],
+    )
+
+
+def _repair_workflow_status(candidate_status: str, validation_status: str | None, *, apply_patch: bool) -> str:
+    if candidate_status == "no_patch":
+        return "no_patch"
+    if validation_status == "passed":
+        return "applied" if apply_patch else "review_required"
+    if validation_status == "failed" or candidate_status == "rejected":
+        return "rejected"
+    return candidate_status or "failed"
+
+
+def _repair_review_status(workflow_status: str) -> str:
+    if workflow_status == "review_required":
+        return "pending_review"
+    if workflow_status == "applied":
+        return "applied"
+    return "not_available"

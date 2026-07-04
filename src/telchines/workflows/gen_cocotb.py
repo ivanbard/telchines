@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import importlib.util
+import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
 
+from telchines.adapters.base import AdapterRunSpec
+from telchines.adapters.open_tools import IcarusAdapter, VerilatorAdapter
 from telchines.adapters.parsing import parse_common_output
 from telchines.config import ProjectConfig
 from telchines.models import AgentTask, CocotbCandidate, ToolReference, ValidationAttempt, VerificationRun
@@ -22,6 +27,7 @@ def execute_cocotb_generation(
     spec_path: Path | None = None,
     output_dir: Path | None = None,
     intent: str = "",
+    run_spec: AdapterRunSpec | None = None,
 ) -> tuple[CocotbCandidate | None, VerificationRun | None, VerificationRun | None, object]:
     dut_rel = relative_to(dut_path, config.project_root)
     spec_rel = relative_to(spec_path, config.project_root) if spec_path else None
@@ -124,7 +130,7 @@ def execute_cocotb_generation(
         manifest_path = config.project_root / candidate.manifest_path
         write_json(manifest_path, manifest_payload)
 
-        validation_run = validate_cocotb_candidate(config, store, candidate)
+        validation_run = validate_cocotb_candidate(config, store, candidate, run_spec=run_spec)
         candidate.status = "validated" if validation_run.status == "passed" else "rejected"
         candidate.validation_attempts.append(
             ValidationAttempt(attempt=attempt, result=validation_run.status, run_id=validation_run.run_id, notes=validation_run.summary)
@@ -219,7 +225,7 @@ def execute_cocotb_generation(
     return candidate, run, validation_run, context
 
 
-def validate_cocotb_candidate(config: ProjectConfig, store: RunStore, candidate: CocotbCandidate) -> VerificationRun:
+def validate_cocotb_candidate(config: ProjectConfig, store: RunStore, candidate: CocotbCandidate, run_spec: AdapterRunSpec | None = None) -> VerificationRun:
     run_id = stable_id("run", candidate.candidate_id, "validation", utc_now())
     temp_root = copy_tree_to_temp(config.project_root)
     try:
@@ -237,6 +243,11 @@ def validate_cocotb_candidate(config: ProjectConfig, store: RunStore, candidate:
 
         artifacts_dir = config.project_root / config.artifacts_dir
         ensure_directory(artifacts_dir)
+        smoke = _run_executable_smoke(config, temp_root, artifacts_dir, candidate, run_spec) if returncode == 0 else _smoke_not_attempted()
+        if smoke["combined"]:
+            combined = (combined + "\n" if combined else "") + str(smoke["combined"])
+        if smoke["exit_code"] not in (None, 0):
+            returncode = int(smoke["exit_code"])
         log_path = artifacts_dir / f"{run_id}.log"
         log_path.write_text(combined or "py_compile: validation passed\n", encoding="utf-8")
         observations = parse_common_output(run_id, combined)
@@ -260,16 +271,21 @@ def validate_cocotb_candidate(config: ProjectConfig, store: RunStore, candidate:
             artifacts={"log_path": str(log_path), "generated_file": candidate.file_path, "manifest_path": candidate.manifest_path},
             tool_result={
                 "status": "passed" if returncode == 0 else "failed",
-                "validation_mode": "python_syntax_plus_structure",
+                "validation_mode": "compile_and_run" if smoke["executable_status"] == "passed" else "syntax_plus_structure",
                 "validators": ["py_compile", "builtin_cocotb_structure"],
                 "checks": {
                     "python_syntax": "passed" if process.returncode == 0 else "failed",
                     "cocotb_import": "passed" if "import cocotb" in candidate.candidate_content else "failed",
                     "cocotb_test": "passed" if "@cocotb.test" in candidate.candidate_content else "failed",
                 },
+                "executable_status": smoke["executable_status"],
+                "simulator": smoke["simulator"],
+                "command": smoke["command"],
+                "command_artifacts": smoke["command_artifacts"],
+                "setup_diagnostics": smoke["setup_diagnostics"],
                 "limitations": [
-                    "built-in validation does not run a simulator",
-                    "executable cocotb smoke requires optional cocotb and simulator tooling",
+                    *([] if smoke["executable_status"] == "passed" else ["built-in validation did not complete a simulator run"]),
+                    "executable cocotb smoke requires optional cocotb, make, and simulator tooling",
                 ],
             },
             observation_ids=[observation.observation_id for observation in observations],
@@ -304,7 +320,7 @@ def _build_manifest_payload(candidate: CocotbCandidate) -> dict[str, object]:
             "Connect simulator and cocotb runner configuration for executable validation.",
         ],
         "validation": {
-            "mode": "python_syntax_plus_structure",
+            "mode": "syntax_plus_structure",
             "limitations": [
                 "py_compile confirms Python syntax only.",
                 "Built-in cocotb structure checks confirm import and test-decorator shape.",
@@ -328,6 +344,106 @@ def _validation_summary(exit_code: int, combined: str) -> str:
     if first_line:
         return f"py_compile validation failed: {first_line}"
     return f"py_compile validation failed with exit code {exit_code}"
+
+
+def _run_executable_smoke(
+    config: ProjectConfig,
+    temp_root: Path,
+    artifacts_dir: Path,
+    candidate: CocotbCandidate,
+    run_spec: AdapterRunSpec | None,
+) -> dict[str, object]:
+    section = config.generation.get("cocotb", {}) if isinstance(config.generation, dict) else {}
+    mode = str(section.get("executable_smoke", "auto"))
+    if mode == "off":
+        return _smoke_skipped(["generation.cocotb.executable_smoke is off"])
+    simulator, diagnostics = _select_cocotb_simulator(str(section.get("simulator", "auto")))
+    diagnostics.extend(_cocotb_common_missing())
+    if diagnostics:
+        status = "failed" if mode == "required" else "skipped"
+        return {
+            **_smoke_skipped(diagnostics),
+            "executable_status": status,
+            "exit_code": 1 if status == "failed" else None,
+        }
+    smoke_dir = ensure_directory(temp_root / ".tel" / "cocotb-smoke")
+    makefile = smoke_dir / "Makefile"
+    module_name = Path(candidate.file_path).stem
+    spec = (run_spec or AdapterRunSpec(files=[candidate.dut_path])).expanded(temp_root)
+    verilog_sources = spec.files or [candidate.dut_path]
+    source_paths = [str((temp_root / path).resolve()) for path in verilog_sources]
+    compile_args = [*(f"-I{path}" for path in spec.include_dirs), *(f"-D{define}" for define in spec.defines), *spec.extra_args]
+    makefile.write_text(
+        "\n".join(
+            [
+                f"SIM ?= {simulator}",
+                "TOPLEVEL_LANG = verilog",
+                f"VERILOG_SOURCES = {' '.join(source_paths)}",
+                f"TOPLEVEL = {candidate.top_module}",
+                f"MODULE = {module_name}",
+                f"COMPILE_ARGS += {' '.join(compile_args)}" if compile_args else "",
+                "include $(shell cocotb-config --makefiles)/Makefile.sim",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    command = ["make", "-f", str(makefile), f"SIM={simulator}"]
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str((temp_root / candidate.file_path).parent.resolve()) + os.pathsep + env.get("PYTHONPATH", "")
+    try:
+        result = subprocess.run(command, cwd=temp_root, env=env, capture_output=True, text=True, check=False, timeout=120)
+    except subprocess.TimeoutExpired:
+        result = subprocess.CompletedProcess(command, 124, "", "cocotb smoke timed out after 120 seconds\n")
+    smoke_log = artifacts_dir / f"{candidate.candidate_id}_cocotb_smoke.log"
+    smoke_makefile = artifacts_dir / f"{candidate.candidate_id}_cocotb_smoke.mk"
+    smoke_log.write_text(result.stdout + result.stderr, encoding="utf-8")
+    smoke_makefile.write_text(makefile.read_text(encoding="utf-8"), encoding="utf-8")
+    return {
+        "executable_status": "passed" if result.returncode == 0 else "failed",
+        "simulator": simulator,
+        "exit_code": result.returncode,
+        "combined": result.stdout + result.stderr,
+        "command": command,
+        "command_artifacts": {"cocotb_smoke_log": str(smoke_log), "cocotb_smoke_makefile": str(smoke_makefile)},
+        "setup_diagnostics": [],
+    }
+
+
+def _select_cocotb_simulator(preferred: str) -> tuple[str | None, list[str]]:
+    candidates = ["icarus", "verilator"] if preferred == "auto" else [preferred]
+    for candidate in candidates:
+        if candidate == "icarus" and IcarusAdapter().is_available():
+            return "icarus", []
+        if candidate == "verilator" and VerilatorAdapter().is_available():
+            return "verilator", []
+    return None, [f"no configured cocotb simulator is available: {preferred}"]
+
+
+def _cocotb_common_missing() -> list[str]:
+    missing: list[str] = []
+    if importlib.util.find_spec("cocotb") is None:
+        missing.append("python package cocotb is not installed")
+    for binary in ("cocotb-config", "make"):
+        if shutil.which(binary) is None:
+            missing.append(f"{binary} is not available on PATH")
+    return missing
+
+
+def _smoke_not_attempted() -> dict[str, object]:
+    return _smoke_skipped(["syntax/structure validation failed before executable smoke"])
+
+
+def _smoke_skipped(diagnostics: list[str]) -> dict[str, object]:
+    return {
+        "executable_status": "skipped",
+        "simulator": None,
+        "exit_code": None,
+        "combined": "",
+        "command": [],
+        "command_artifacts": {},
+        "setup_diagnostics": diagnostics,
+    }
 
 
 def _default_cocotb_output_dir(config: ProjectConfig) -> str:
