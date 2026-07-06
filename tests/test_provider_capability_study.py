@@ -70,6 +70,7 @@ def test_provider_capability_matrix_expands_agent_base_dependency() -> None:
 def test_provider_capability_matrix_accepts_anthropic_preset() -> None:
     matrix = provider_capability_study.load_matrix(REPO_ROOT / "docs" / "provider-matrices" / "anthropic.json")
     assert matrix["providers"][0]["kind"] == "anthropic"
+    assert matrix["providers"][0]["model_default"] == "claude-sonnet-5"
 
 
 def test_provider_capability_repair_commands_select_provider(work_root: Path) -> None:
@@ -148,6 +149,8 @@ def test_provider_capability_markdown_report_includes_model_stability_fields(wor
                 "validation_status": None,
                 "candidate_id": None,
                 "attempt_count": None,
+                "retry_count": None,
+                "json_repair_attempt_count": 0,
                 "semantic_fingerprint": "abc123",
             }
         ],
@@ -162,6 +165,10 @@ def test_provider_capability_markdown_report_includes_model_stability_fields(wor
                     "stable": True,
                     "statuses": ["passed"],
                     "fingerprints": ["abc123"],
+                    "retry_count_min": None,
+                    "retry_count_max": None,
+                    "json_repair_attempt_count_max": 0,
+                    "validation_final_statuses": [],
                 }
             ]
         },
@@ -174,6 +181,7 @@ def test_provider_capability_markdown_report_includes_model_stability_fields(wor
     assert "## Stability" in rendered
     assert "configured-model" in rendered
     assert "abc123" in rendered
+    assert "JSON repair" in rendered
 
 
 def test_provider_capability_redaction_removes_secret_env_values(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -198,7 +206,99 @@ def test_provider_capability_scorer_rejects_false_green_agent_repair() -> None:
     )
 
     assert status == "failed"
-    assert reason == "agent_repair_missing_validated_patch"
+    assert reason == "workflow_status:failed"
+
+
+def test_provider_capability_scorer_rejects_nested_no_generation_false_green() -> None:
+    status, reason = provider_capability_study._score_command_result(
+        {"label": "gen_cocotb"},
+        0,
+        {
+            "status": "review_required",
+            "result": {
+                "status": "no_generation",
+                "candidate_id": "candidate_1",
+                "validation_status": "passed",
+            },
+        },
+    )
+
+    assert status == "failed"
+    assert reason == "workflow_result.status:no_generation"
+
+
+def test_provider_capability_scorer_allows_expected_no_generation() -> None:
+    status, reason = provider_capability_study._score_command_result(
+        {"label": "gen_sva", "expected": "no_generation"},
+        0,
+        {"status": "no_generation", "validation_status": None, "candidate_id": None},
+    )
+
+    assert status == "passed"
+    assert reason == ""
+
+
+def test_provider_capability_stability_records_retries_json_repair_and_validation_delta() -> None:
+    parsed = {
+        "status": "review_required",
+        "patch_id": "patch_1",
+        "validation_status": "passed",
+        "json_repair_attempts": [{"attempt": 1}],
+        "result": {
+            "attempts": [
+                {"attempt": 1, "status": "rejected", "validation_status": "failed"},
+                {"attempt": 2, "status": "validated", "validation_status": "passed"},
+            ],
+            "rejected_candidate_ids": ["candidate_bad"],
+        },
+    }
+    result = {
+        "provider": "remote",
+        "label": "agent_repair",
+        "model": "configured-model",
+        "reasoning_level": "high",
+        "status": "passed",
+        "elapsed_seconds": 0.2,
+        "semantic_fingerprint": "abc123",
+        "retry_count": provider_capability_study._payload_retry_count(parsed),
+        "json_repair_attempt_count": provider_capability_study._payload_json_repair_attempt_count(parsed),
+        "validation_delta": provider_capability_study._payload_validation_delta(parsed),
+    }
+
+    metrics = provider_capability_study._stability_metrics([result])
+
+    assert result["retry_count"] == 1
+    assert result["json_repair_attempt_count"] == 1
+    assert result["validation_delta"]["first_validation_status"] == "failed"
+    assert result["validation_delta"]["final_validation_status"] == "passed"
+    assert metrics[0]["retry_count_min"] == 1
+    assert metrics[0]["retry_count_max"] == 1
+    assert metrics[0]["json_repair_attempt_count_max"] == 1
+    assert metrics[0]["validation_final_statuses"] == ["passed"]
+
+
+def test_provider_capability_semantic_fingerprint_ignores_volatile_ids() -> None:
+    command = {"label": "gen_sva"}
+    first = provider_capability_study._semantic_fingerprint(
+        command,
+        {
+            "status": "validated",
+            "candidate_id": "candidate_run_1",
+            "artifact_path": ".tel/artifacts/generated/demo_assertions.sv",
+            "validation_status": "passed",
+        },
+    )
+    second = provider_capability_study._semantic_fingerprint(
+        command,
+        {
+            "status": "validated",
+            "candidate_id": "candidate_run_2",
+            "artifact_path": ".tel/artifacts/generated/demo_assertions.sv",
+            "validation_status": "passed",
+        },
+    )
+
+    assert first == second
 
 
 def test_provider_capability_skips_missing_openai_model_before_scratch(work_root: Path, monkeypatch) -> None:

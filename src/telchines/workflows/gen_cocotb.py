@@ -15,7 +15,7 @@ from telchines.models import AgentTask, CocotbCandidate, ToolReference, Validati
 from telchines.providers import CocotbGenerationProviderResult, CocotbGenerationRequest, GenerationProvider
 from telchines.retrieval import RetrievalService
 from telchines.run_store import RunStore
-from telchines.utils import copy_tree_to_temp, ensure_directory, relative_to, remove_tree, stable_id, utc_now, write_json
+from telchines.utils import SECRET_KEY_RE, copy_tree_to_temp, ensure_directory, relative_to, remove_tree, stable_id, utc_now, write_json
 
 
 def execute_cocotb_generation(
@@ -282,6 +282,7 @@ def validate_cocotb_candidate(config: ProjectConfig, store: RunStore, candidate:
                 "simulator": smoke["simulator"],
                 "command": smoke["command"],
                 "command_artifacts": smoke["command_artifacts"],
+                "environment_summary": smoke["environment_summary"],
                 "setup_diagnostics": smoke["setup_diagnostics"],
                 "limitations": [
                     *([] if smoke["executable_status"] == "passed" else ["built-in validation did not complete a simulator run"]),
@@ -373,13 +374,14 @@ def _run_executable_smoke(
     verilog_sources = spec.files or [candidate.dut_path]
     source_paths = [str((temp_root / path).resolve()) for path in verilog_sources]
     compile_args = [*(f"-I{path}" for path in spec.include_dirs), *(f"-D{define}" for define in spec.defines), *spec.extra_args]
+    toplevel = spec.top_module or candidate.top_module
     makefile.write_text(
         "\n".join(
             [
                 f"SIM ?= {simulator}",
                 "TOPLEVEL_LANG = verilog",
                 f"VERILOG_SOURCES = {' '.join(source_paths)}",
-                f"TOPLEVEL = {candidate.top_module}",
+                f"TOPLEVEL = {toplevel}",
                 f"MODULE = {module_name}",
                 f"COMPILE_ARGS += {' '.join(compile_args)}" if compile_args else "",
                 "include $(shell cocotb-config --makefiles)/Makefile.sim",
@@ -390,7 +392,9 @@ def _run_executable_smoke(
     )
     command = ["make", "-f", str(makefile), f"SIM={simulator}"]
     env = os.environ.copy()
+    env.update(spec.env)
     env["PYTHONPATH"] = str((temp_root / candidate.file_path).parent.resolve()) + os.pathsep + env.get("PYTHONPATH", "")
+    environment_summary = _cocotb_environment_summary(spec.env, env["PYTHONPATH"], temp_root)
     try:
         result = subprocess.run(command, cwd=temp_root, env=env, capture_output=True, text=True, check=False, timeout=120)
     except subprocess.TimeoutExpired:
@@ -406,6 +410,7 @@ def _run_executable_smoke(
         "combined": result.stdout + result.stderr,
         "command": command,
         "command_artifacts": {"cocotb_smoke_log": str(smoke_log), "cocotb_smoke_makefile": str(smoke_makefile)},
+        "environment_summary": environment_summary,
         "setup_diagnostics": [],
     }
 
@@ -442,8 +447,26 @@ def _smoke_skipped(diagnostics: list[str]) -> dict[str, object]:
         "combined": "",
         "command": [],
         "command_artifacts": {},
+        "environment_summary": {},
         "setup_diagnostics": diagnostics,
     }
+
+
+def _cocotb_environment_summary(run_env: dict[str, str], pythonpath: str, temp_root: Path) -> dict[str, str]:
+    summary = {key: ("<redacted>" if SECRET_KEY_RE.search(str(key)) else str(value)) for key, value in run_env.items()}
+    entries = [entry for entry in pythonpath.split(os.pathsep) if entry]
+    if entries:
+        first = _summarize_path(entries[0], temp_root)
+        inherited = len(entries) - 1
+        summary["PYTHONPATH"] = first if inherited == 0 else f"{first}{os.pathsep}<inherited:{inherited}>"
+    return summary
+
+
+def _summarize_path(path: str, root: Path) -> str:
+    try:
+        return str(Path(path).resolve().relative_to(root.resolve())).replace("\\", "/")
+    except ValueError:
+        return path
 
 
 def _default_cocotb_output_dir(config: ProjectConfig) -> str:

@@ -98,7 +98,7 @@ def test_generic_parser_fallback_remains_backward_compatible() -> None:
     assert observations[0].signature == "SV_PARSE_EXPECTED_SEMICOLON"
     assert observations[0].log_family == ""
     assert observations[0].tool_name == ""
-    assert observations[0].metadata == {}
+    assert observations[0].metadata == {"raw_line": "ERROR: rtl/demo.sv:12: expected semicolon before end"}
     assert normalize_signature("unknown identifier tx_fifo_level") == "SV_UNKNOWN_IDENTIFIER"
     assert normalize_signature("expected endmodule at end of file") == "SV_EXPECTED_ENDMODULE"
     assert normalize_signature("timeout waiting for start bit") == "SIM_TIMEOUT"

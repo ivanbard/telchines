@@ -1,0 +1,7 @@
+`ifndef UART_DEFS_SVH
+`define UART_DEFS_SVH
+
+`define UART_DEFAULT_BAUD_DIVISOR 16
+`define UART_TIMEOUT_CYCLES 128
+
+`endif

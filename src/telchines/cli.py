@@ -616,11 +616,15 @@ def providers_setup(
 @artifacts_app.command("purge")
 def artifacts_purge(
     yes: bool = typer.Option(False, "--yes", help="Actually delete artifact files. Without this, only report what would be removed."),
+    scope: Optional[list[str]] = typer.Option(None, "--scope", help="Artifact scope to purge; repeat for task-artifacts, reports, waveforms, patches, generations, or generated."),
+    older_than_days: Optional[int] = typer.Option(None, "--older-than-days", help="Only purge artifact files at least this many days old."),
 ) -> None:
     try:
-        payload = purge_artifacts_op(None, dry_run=not yes)
+        payload = purge_artifacts_op(None, dry_run=not yes, scopes=scope, older_than_days=older_than_days)
     except ConfigError as exc:
         _fail(f"config error: {exc}")
+    except ValueError as exc:
+        _fail(f"input error: {exc}")
     typer.echo(dump_json(payload))
 
 

@@ -50,46 +50,74 @@ def discover_waveforms(paths: list[Path]) -> list[Path]:
     return discovered
 
 
-def summarize_for_cluster(summary: WaveformSummary, signature: str, files: list[str], messages: list[str]) -> WaveformEvidence:
-    cluster_tokens = _expanded_tokens(" ".join([signature, *files, *messages]))
+def summarize_for_cluster(
+    summary: WaveformSummary,
+    signature: str,
+    files: list[str],
+    messages: list[str],
+    metadata: list[dict[str, object]] | None = None,
+) -> WaveformEvidence:
+    metadata_text = _metadata_text(metadata or [])
+    cluster_tokens = _expanded_tokens(" ".join([signature, *files, *messages, metadata_text]))
     cluster_identifiers = cluster_tokens - LOW_VALUE_MATCH_TOKENS - GENERIC_SIGNAL_TOKENS
+    target_identifiers = _target_identifiers(files, messages, metadata or [])
     scored_samples: list[tuple[float, WaveformSample, list[str]]] = []
     for sample in summary.sampled_signals:
         signal_tokens = _expanded_tokens(sample.full_name)
-        if _is_generic_signal(sample.signal_name):
+        signal_name_tokens = _expanded_tokens(sample.signal_name)
+        if _is_generic_signal(sample.signal_name) and not (target_identifiers & signal_name_tokens):
             continue
         matched_tokens = sorted((cluster_identifiers & signal_tokens) - LOW_VALUE_MATCH_TOKENS)
         scope_tokens = _expanded_tokens(sample.full_name.rsplit(".", 1)[0] if "." in sample.full_name else "")
         scope_overlap = sorted((cluster_identifiers & scope_tokens) - LOW_VALUE_MATCH_TOKENS)
-        signal_overlap = sorted((cluster_identifiers & _expanded_tokens(sample.signal_name)) - LOW_VALUE_MATCH_TOKENS)
+        signal_overlap = sorted((cluster_identifiers & signal_name_tokens) - LOW_VALUE_MATCH_TOKENS)
+        target_overlap = sorted((target_identifiers & signal_tokens) - LOW_VALUE_MATCH_TOKENS)
+        target_signal_overlap = sorted((target_identifiers & signal_name_tokens) - LOW_VALUE_MATCH_TOKENS)
         score = 0.0
-        score += 2.0 * len(signal_overlap)
-        score += 1.0 * len(scope_overlap)
+        reasons: list[str] = []
+        if target_signal_overlap:
+            score += 4.0 * len(target_signal_overlap)
+            reasons.append(f"target signal {target_signal_overlap[0]}")
+        if target_overlap:
+            score += 2.0 * len(target_overlap)
+            reasons.append(f"target context {target_overlap[0]}")
+        if signal_overlap:
+            score += 2.0 * len(signal_overlap)
+            reasons.append(f"signal token {signal_overlap[0]}")
+        if scope_overlap:
+            score += 0.75 * len(scope_overlap)
         if {"start", "bit"} <= cluster_identifiers and ("start" in signal_tokens or "serial" in signal_tokens or "rx" in signal_tokens):
-            score += 2.0
+            score += 2.5
+            reasons.append("start-bit timeout context")
         if {"valid", "ready"} & cluster_identifiers and ({"valid", "ready"} & signal_tokens):
             score += 1.5
+            reasons.append("handshake context")
         if "timeout" in cluster_identifiers and ("start" in signal_tokens or "serial" in signal_tokens or "rx" in signal_tokens):
             score += 1.0
+            reasons.append("timeout context")
         if score > 0:
-            scored_samples.append((score, sample, signal_overlap or matched_tokens or scope_overlap))
+            scored_samples.append((score, sample, reasons or target_overlap or signal_overlap or matched_tokens or scope_overlap))
     scored_samples.sort(key=lambda item: (-item[0], item[1].full_name))
-    matched_samples = [sample for score, sample, _ in scored_samples if score >= 2.0][:3]
+    matched_samples = [sample for score, sample, _ in scored_samples if score >= 2.5][:3]
     if matched_samples:
         relevance = "matched"
+        evidence_status = "strong"
         best_score = round(scored_samples[0][0], 3)
-        reason_tokens = scored_samples[0][2]
-        reason = f"matched signal token {reason_tokens[0]}" if reason_tokens else "matched waveform scope and failure context"
+        reason_tokens = _prioritize_reason_tokens(scored_samples[0][2])
+        reason = f"matched {reason_tokens[0]}" if reason_tokens else "matched waveform signal and failure context"
     elif scored_samples:
         matched_samples = [scored_samples[0][1]]
         relevance = "weak"
+        evidence_status = "weak"
         best_score = round(scored_samples[0][0], 3)
-        reason = "only weak waveform scope/context overlap"
+        reason = "only weak waveform scope/context overlap; treat as supporting context, not root-cause evidence"
     else:
         relevance = "unrelated"
+        evidence_status = "unrelated"
         best_score = 0.0
-        reason = "no non-generic signal overlap"
+        reason = "no relevant non-generic signal overlap; generic clock/reset excerpts were not attached"
     matched_names = unique_preserve_order(sample.signal_name for sample in matched_samples)
+    candidate_names = unique_preserve_order(sample.signal_name for _, sample, _ in scored_samples[:5])
     excerpt_lines: list[str] = []
     for sample in matched_samples[:2]:
         if not sample.transitions:
@@ -102,8 +130,10 @@ def summarize_for_cluster(summary: WaveformSummary, signature: str, files: list[
         matched_signals=matched_names,
         excerpt=excerpt,
         relevance=relevance,
+        evidence_status=evidence_status,
         score=best_score,
         reason=reason,
+        candidate_signals=candidate_names,
     )
 
 
@@ -143,6 +173,40 @@ def _expanded_tokens(text: str) -> set[str]:
         pieces.append(token)
         pieces.extend(part for part in re.split(r"[_./\\:-]+", token) if part)
     return {piece.lower() for piece in pieces if piece}
+
+
+def _metadata_text(metadata: list[dict[str, object]]) -> str:
+    values: list[str] = []
+    for item in metadata:
+        for key in ("component", "code", "time", "raw_line", "module", "signal", "identifier"):
+            value = item.get(key)
+            if value:
+                values.append(str(value))
+    return " ".join(values)
+
+
+def _prioritize_reason_tokens(reasons: list[str]) -> list[str]:
+    semantic_prefixes = ("start-bit", "timeout", "handshake", "target signal", "signal token")
+    semantic = [reason for reason in reasons if reason.startswith(semantic_prefixes)]
+    fallback = [reason for reason in reasons if reason not in semantic]
+    return semantic + fallback
+
+
+def _target_identifiers(files: list[str], messages: list[str], metadata: list[dict[str, object]]) -> set[str]:
+    text = " ".join([*files, *messages, _metadata_text(metadata)])
+    identifiers: set[str] = set()
+    patterns = [
+        r"(?:unknown|undeclared)\s+(?:identifier|signal|net|wire|reg)?\s*['`\"]?(?P<name>[A-Za-z_][A-Za-z0-9_$]*)",
+        r"(?:identifier|signal|net|wire|reg)\s+['`\"](?P<name>[A-Za-z_][A-Za-z0-9_$]*)['`\"]",
+        r"\b(?P<name>[A-Za-z_][A-Za-z0-9_$]*(?:_i|_o|_n|_q|_d|_seen|_valid|_ready|_level|_fifo))\b",
+    ]
+    for pattern in patterns:
+        for match in re.finditer(pattern, text, flags=re.IGNORECASE):
+            identifiers.update(_expanded_tokens(match.group("name")))
+    for path_text in files:
+        stem = Path(path_text).stem
+        identifiers.update(_expanded_tokens(stem))
+    return identifiers - LOW_VALUE_MATCH_TOKENS
 
 
 def _is_generic_signal(signal_name: str) -> bool:

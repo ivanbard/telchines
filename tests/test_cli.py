@@ -1339,6 +1339,30 @@ def test_cli_provider_setup_reports_required_values(sample_project: Path, monkey
     assert missing_model.exit_code != 0
 
 
+def test_cli_provider_setup_rejects_literal_secret_in_api_key_env(sample_project: Path, monkeypatch) -> None:
+    monkeypatch.chdir(sample_project)
+
+    result = runner.invoke(
+        app,
+        [
+            "providers",
+            "setup",
+            "remote",
+            "--kind",
+            "openai-compatible",
+            "--model",
+            "m",
+            "--base-url",
+            "https://example.com/v1",
+            "--api-key-env",
+            "sk-test-secret",
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert "api_key_env must be an uppercase environment variable name" in result.stderr
+
+
 @settings(max_examples=50)
 @given(capabilities=CAPABILITY_LIST)
 def test_provider_setup_capabilities_dedupe_preserving_order(capabilities: list[str]) -> None:
@@ -1857,6 +1881,8 @@ def test_cli_doctor_privacy_includes_retention_guidance_when_ok(sample_project: 
     assert report["retention_guidance"]
     assert any("task artifacts" in item.lower() for item in report["retention_guidance"])
     assert report["remote_context_warning"]
+    assert "task-artifacts" in report["artifact_scopes"]
+    assert report["artifact_retention"]["purge_by_age"] == "tel artifacts purge --older-than-days 30 --yes"
 
 
 @settings(max_examples=20, suppress_health_check=[HealthCheck.function_scoped_fixture])
@@ -1926,6 +1952,47 @@ def test_cli_artifacts_purge_dry_run_and_apply(sample_project: Path, monkeypatch
     assert not task_artifact.exists()
     assert (sample_project / ".tel" / "artifacts").is_dir()
     assert (sample_project / ".tel" / "task-artifacts").is_dir()
+
+
+def test_cli_artifacts_purge_scope_and_retention_window(sample_project: Path, monkeypatch) -> None:
+    old_task = sample_project / ".tel" / "task-artifacts" / "old_request.json"
+    new_task = sample_project / ".tel" / "task-artifacts" / "new_request.json"
+    report = sample_project / ".tel" / "reports" / "summary.json"
+    generated = sample_project / ".tel" / "artifacts" / "generated.sv"
+    for path in (old_task, new_task, report, generated):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("payload", encoding="utf-8")
+    old_timestamp = 1_600_000_000
+    os.utime(old_task, (old_timestamp, old_timestamp))
+    monkeypatch.chdir(sample_project)
+
+    dry_run = runner.invoke(app, ["artifacts", "purge", "--scope", "task-artifacts", "--older-than-days", "30"])
+    assert dry_run.exit_code == 0
+    dry_payload = json.loads(dry_run.stdout)
+    assert dry_payload["dry_run"] is True
+    assert dry_payload["scopes"] == ["task-artifacts"]
+    assert dry_payload["older_than_days"] == 30
+    assert dry_payload["file_count"] == 1
+    assert str(old_task) in dry_payload["targets"][0]["files"]
+
+    purged = runner.invoke(app, ["artifacts", "purge", "--scope", "task-artifacts", "--older-than-days", "30", "--yes"])
+    assert purged.exit_code == 0
+    purge_payload = json.loads(purged.stdout)
+    assert purge_payload["status"] == "purged"
+    assert "run records under .tel/runs" in purge_payload["retained_metadata"]
+    assert not old_task.exists()
+    assert new_task.exists()
+    assert report.exists()
+    assert generated.exists()
+
+
+def test_cli_artifacts_purge_rejects_unknown_scope(sample_project: Path, monkeypatch) -> None:
+    monkeypatch.chdir(sample_project)
+
+    result = runner.invoke(app, ["artifacts", "purge", "--scope", "secrets"])
+
+    assert result.exit_code == 2
+    assert "input error: artifact purge scope must be one of" in result.stderr
 
 
 def test_cli_lists_adapters(sample_project: Path, monkeypatch) -> None:

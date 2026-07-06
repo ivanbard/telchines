@@ -10,7 +10,7 @@
       "base_url_default": "https://api.anthropic.com/v1",
       "endpoint": "messages",
       "model_env": "TELCHINES_ANTHROPIC_MODEL",
-      "model_default": "claude-3-5-sonnet-latest",
+      "model_default": "claude-sonnet-5",
       "api_key_env": "ANTHROPIC_API_KEY",
       "anthropic_version": "2023-06-01",
       "max_tokens": 4096,

@@ -34,9 +34,10 @@ Run:
 ```bash
 tel doctor privacy
 tel artifacts purge
+tel artifacts purge --scope task-artifacts --older-than-days 30
 ```
 
-`doctor privacy` reports provider and artifact-storage risks such as local command execution and remote-provider egress. `artifacts purge` is a dry run by default; add `--yes` to remove generated artifacts, task artifacts, saved patch/generation payloads, waveform summaries, and reports while preserving run metadata.
+`doctor privacy` reports provider and artifact-storage risks such as local command execution, remote-provider egress, retained task artifacts, and available purge scopes. `artifacts purge` is a dry run by default; add `--yes` to remove generated artifacts, task artifacts, saved patch/generation payloads, waveform summaries, and reports. Use `--scope` and `--older-than-days` to enforce narrower artifact-retention windows. Purge preserves run records, retrieval contexts, observations, project config, and workspace files.
 
 `runs replay` is also confirmation-gated. `tel runs replay RUN_ID` prints the stored command and exits without executing it; add `--yes` only after reviewing the command. Validation workflows copy projects to temporary directories for isolated checks and skip `.tel`, VCS/build/cache directories, and symlinks so replay artifacts, local metadata, and external symlink targets are not copied into validator workspaces.
 

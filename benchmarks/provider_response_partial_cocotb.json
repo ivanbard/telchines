@@ -1,0 +1,46 @@
+{
+  "benchmark_id": "provider_response_partial_cocotb",
+  "task_type": "provider_response",
+  "title": "Reject partial local provider output for cocotb generation",
+  "fixture_root": "benchmarks/assets/provider_response_partial_cocotb",
+  "config": {
+    "workflow": "cocotb",
+    "provider": "partial-local",
+    "dut_path": "rtl/uart_rx.sv",
+    "spec_path": "docs/uart.md",
+    "intent": "smoke UART RX start-bit handling",
+    "model_policy": {
+      "default_provider_by_capability": {
+        "repair": "heuristic",
+        "generation": "partial-local"
+      },
+      "providers": {
+        "heuristic": {
+          "kind": "heuristic",
+          "capabilities": [
+            "repair",
+            "generation"
+          ]
+        },
+        "partial-local": {
+          "kind": "local_command",
+          "capabilities": [
+            "generation"
+          ],
+          "command": "__python__",
+          "args": [
+            "tools/partial_provider.py"
+          ],
+          "timeout_seconds": 5
+        }
+      }
+    }
+  },
+  "scoring": {
+    "expected_status": "provider_error",
+    "expected_error_contains": "did not return candidate_content",
+    "benchmark_scope": "fixture_provider_response",
+    "execution_backing": "fixture_provider_response"
+  },
+  "schema_version": "0.1"
+}

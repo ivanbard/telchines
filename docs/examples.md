@@ -14,7 +14,7 @@ Expected outcome:
 - failures are clustered
 - each cluster includes likely cause and suggested next action
 - evidence citations point at logs, docs, or RTL
-- nearby waveforms are attached when present
+- nearby waveforms are attached when present; waveform evidence includes `evidence_status` (`strong`, `weak`, or `unrelated`) plus `reason`, so generic or unrelated traces are disclosed instead of treated as root-cause evidence
 
 ## Example 2: Spec To SVA
 

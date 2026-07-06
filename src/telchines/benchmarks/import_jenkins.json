@@ -1,0 +1,17 @@
+{
+  "benchmark_id": "import_jenkins",
+  "task_type": "import",
+  "title": "Normalize Jenkins regression results",
+  "fixture_root": "benchmarks/assets/import_jenkins",
+  "config": {
+    "importer": "jenkins",
+    "source_path": "jenkins_builds.json"
+  },
+  "scoring": {
+    "expected_imported_count": 2,
+    "min_observations": 1,
+    "benchmark_scope": "fixture_ci_import",
+    "execution_backing": "fixture_import"
+  },
+  "schema_version": "0.1"
+}

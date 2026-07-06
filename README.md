@@ -208,6 +208,12 @@ Policy controls:
 - `model_mode=hybrid` allows both
 - `no_egress=true` blocks external HTTP providers
 
+Artifact lifecycle controls:
+
+- `tel doctor privacy` reports provider egress, local command, and artifact-retention risks
+- `tel artifacts purge` previews artifact cleanup by default
+- `tel artifacts purge --scope task-artifacts --older-than-days 30 --yes` deletes only matching old artifact payloads while preserving run metadata
+
 See [docs/adapters.md](https://github.com/ivanbard/telchines/blob/main/docs/adapters.md), [docs/providers.md](https://github.com/ivanbard/telchines/blob/main/docs/providers.md), and [docs/generated-artifacts.md](https://github.com/ivanbard/telchines/blob/main/docs/generated-artifacts.md) for the exact support contract.
 
 ## Benchmarks And Release Validation
@@ -303,6 +309,7 @@ See [docs/compatibility.md](https://github.com/ivanbard/telchines/blob/main/docs
 - `tel providers list`
 - `tel providers check`
 - `tel artifacts purge`
+- `tel artifacts purge --scope task-artifacts --older-than-days DAYS`
 - `tel doctor privacy`
 - `tel eval run`
 - `tel eval report`

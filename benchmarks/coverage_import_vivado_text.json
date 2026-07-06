@@ -1,0 +1,21 @@
+{
+  "benchmark_id": "coverage_import_vivado_text",
+  "task_type": "coverage_import",
+  "title": "Import Vivado-style text coverage and plan missing bins",
+  "fixture_root": "benchmarks/assets/coverage_import_vivado_text",
+  "config": {
+    "source_format": "vivado",
+    "source_path": "cov/vivado_coverage.txt",
+    "output_path": "cov/imported_vivado.json"
+  },
+  "scoring": {
+    "min_items": 2,
+    "min_recommendations": 1,
+    "expected_classifications": [
+      "missing_stimulus"
+    ],
+    "benchmark_scope": "fixture_coverage_import",
+    "execution_backing": "fixture_import"
+  },
+  "schema_version": "0.1"
+}

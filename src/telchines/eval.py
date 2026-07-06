@@ -12,6 +12,7 @@ from telchines.adapters.parsing import parse_common_output
 from telchines.ci_importers import import_ci_runs
 from telchines.config import ProjectConfig
 from telchines.coverage_import import import_coverage_report
+from telchines.errors import ProviderError
 from telchines.models import BenchmarkCase, ToolReference, VerificationRun
 from telchines.providers import build_generation_provider, build_repair_provider
 from telchines.retrieval import RetrievalService
@@ -82,6 +83,8 @@ def _run_default_suite(config: ProjectConfig, store: RunStore) -> dict[str, obje
             results.append(_run_import_case(config, case))
         elif case.task_type == "coverage_import":
             results.append(_run_coverage_import_case(config, case))
+        elif case.task_type == "provider_response":
+            results.append(_run_provider_response_case(config, case))
     passed = sum(1 for result in results if result["passed"])
     report = {
         "suite": "default",
@@ -152,11 +155,17 @@ def _run_repair_case(config: ProjectConfig, store: RunStore, retrieval: Retrieva
             passed = proposal is None and validation_run is None
         else:
             passed = validation_run is not None and validation_run.status == "passed"
+        validation_status = validation_run.status if validation_run else "not_run"
+        validation_mode = str(validation_run.tool_result.get("validation_mode", "fixture_tool")) if validation_run else "not_run"
         return {
             "benchmark_id": case.benchmark_id,
             "task_type": case.task_type,
             "passed": passed,
+            "benchmark_scope": _case_scope(case),
+            "execution_backing": _case_execution_backing(case, "fixture_tool"),
             "patch_id": proposal.patch_id if proposal else None,
+            "validation_status": validation_status,
+            "validation_mode": validation_mode,
         }
     finally:
         remove_tree(temp_root)
@@ -215,6 +224,8 @@ def _run_agent_case(config: ProjectConfig, store: RunStore, retrieval: Retrieval
             "benchmark_id": case.benchmark_id,
             "task_type": case.task_type,
             "passed": passed,
+            "benchmark_scope": _case_scope(case),
+            "execution_backing": _case_execution_backing(case, "fixture_tool"),
             "workflow_type": payload.get("workflow_type"),
             "status": payload.get("status"),
             "context_id": payload.get("context_id"),
@@ -238,6 +249,8 @@ def _run_triage_case(config: ProjectConfig, store: RunStore, retrieval: Retrieva
         "benchmark_id": case.benchmark_id,
         "task_type": case.task_type,
         "passed": passed,
+        "benchmark_scope": _case_scope(case),
+        "execution_backing": _case_execution_backing(case, "fixture_logs"),
         "run_id": run.run_id,
         "cluster_count": len(clusters),
         "matched_signatures": sorted(expected_signatures & signatures),
@@ -278,6 +291,8 @@ def _run_retrieval_case(config: ProjectConfig, case: BenchmarkCase) -> dict[str,
             "benchmark_id": case.benchmark_id,
             "task_type": case.task_type,
             "passed": passed,
+            "benchmark_scope": _case_scope(case),
+            "execution_backing": _case_execution_backing(case, "fixture_retrieval"),
             "mode": context.mode,
             "query": context.query,
             "hit_count": len(context.hits),
@@ -346,6 +361,8 @@ def _run_sva_case(config: ProjectConfig, case: BenchmarkCase) -> dict[str, objec
             "benchmark_id": case.benchmark_id,
             "task_type": case.task_type,
             "passed": passed,
+            "benchmark_scope": _case_scope(case),
+            "execution_backing": _case_execution_backing(case, _validation_backing(validation_mode, formal_status=formal_status)),
             "provider": provider.name,
             "context_id": context.context_id,
             "generated_candidate": generated_candidate,
@@ -415,6 +432,8 @@ def _run_cocotb_case(config: ProjectConfig, case: BenchmarkCase) -> dict[str, ob
             "benchmark_id": case.benchmark_id,
             "task_type": case.task_type,
             "passed": passed,
+            "benchmark_scope": _case_scope(case),
+            "execution_backing": _case_execution_backing(case, _validation_backing(validation_mode, executable_status=executable_status)),
             "provider": provider.name,
             "context_id": context.context_id,
             "run_id": run.run_id if run else None,
@@ -494,6 +513,8 @@ def _run_coverage_case(config: ProjectConfig, case: BenchmarkCase) -> dict[str, 
             "benchmark_id": case.benchmark_id,
             "task_type": case.task_type,
             "passed": passed,
+            "benchmark_scope": _case_scope(case),
+            "execution_backing": _case_execution_backing(case, "fixture_structure"),
             "context_id": context.context_id,
             "run_id": run.run_id,
             "plan_id": plan.plan_id,
@@ -531,6 +552,8 @@ def _run_import_case(config: ProjectConfig, case: BenchmarkCase) -> dict[str, ob
             "benchmark_id": case.benchmark_id,
             "task_type": case.task_type,
             "passed": passed,
+            "benchmark_scope": _case_scope(case),
+            "execution_backing": _case_execution_backing(case, "fixture_import"),
             "source_format": importer,
             "imported_count": payload["imported_count"],
             "stored_count": len(runs),
@@ -567,11 +590,81 @@ def _run_coverage_import_case(config: ProjectConfig, case: BenchmarkCase) -> dic
             "benchmark_id": case.benchmark_id,
             "task_type": case.task_type,
             "passed": passed,
+            "benchmark_scope": _case_scope(case),
+            "execution_backing": _case_execution_backing(case, "fixture_import"),
             "context_id": context.context_id,
             "run_id": run.run_id,
             "item_count": import_payload["item_count"],
             "recommendation_count": len(plan.recommendations),
             "matched_classifications": sorted(expected_classifications & actual_classifications),
+        }
+    finally:
+        remove_tree(temp_root)
+
+
+def _run_provider_response_case(config: ProjectConfig, case: BenchmarkCase) -> dict[str, object]:
+    fixture_root = config.project_root / case.fixture_root
+    temp_root = copy_tree_to_temp(fixture_root)
+    workflow = str(case.config.get("workflow", "sva"))
+    try:
+        temp_config = ProjectConfig.init_project(temp_root)
+        model_policy = _resolve_runtime_placeholders(deepcopy(case.config.get("model_policy", {})))
+        if model_policy:
+            temp_config.project.model_policy = model_policy
+            temp_config.save()
+        temp_store = RunStore(temp_config)
+        retrieval = RetrievalService(temp_config)
+        retrieval.build_index()
+        provider_name = case.config.get("provider")
+        provider = build_generation_provider(temp_config, provider_name=str(provider_name) if provider_name else None)
+        error_message = ""
+        generated_candidate = False
+        validation_status = "not_run"
+        validation_mode = "not_run"
+        try:
+            if workflow == "cocotb":
+                candidate, _run, validation_run, _context = execute_cocotb_generation(
+                    temp_config,
+                    temp_store,
+                    retrieval,
+                    provider,
+                    temp_root / str(case.config["dut_path"]),
+                    spec_path=(temp_root / str(case.config["spec_path"])) if case.config.get("spec_path") else None,
+                    output_dir=(temp_root / str(case.config["output_dir"])) if case.config.get("output_dir") else None,
+                    intent=str(case.config.get("intent", "")),
+                )
+            else:
+                candidate, validation_run, _context = execute_generation(
+                    temp_config,
+                    temp_store,
+                    retrieval,
+                    provider,
+                    temp_root / str(case.config["spec_path"]),
+                    temp_root / str(case.config["rtl_path"]),
+                )
+            generated_candidate = candidate is not None
+            validation_status = validation_run.status if validation_run else "not_run"
+            validation_mode = str(validation_run.tool_result.get("validation_mode", "")) if validation_run else "not_run"
+            status = "completed"
+        except ProviderError as exc:
+            status = "provider_error"
+            error_message = str(exc)
+        expected_status = str(case.scoring.get("expected_status", "provider_error"))
+        expected_error = str(case.scoring.get("expected_error_contains", ""))
+        passed = status == expected_status and (not expected_error or expected_error in error_message)
+        return {
+            "benchmark_id": case.benchmark_id,
+            "task_type": case.task_type,
+            "passed": passed,
+            "benchmark_scope": _case_scope(case),
+            "execution_backing": _case_execution_backing(case, "fixture_provider_response"),
+            "workflow": workflow,
+            "provider": provider.name,
+            "status": status,
+            "error_message": error_message,
+            "generated_candidate": generated_candidate,
+            "validation_status": validation_status,
+            "validation_mode": validation_mode,
         }
     finally:
         remove_tree(temp_root)
@@ -699,6 +792,15 @@ def _aggregate_metrics(results: list[dict[str, object]]) -> dict[str, object]:
             "avg_cluster_count": round(sum(int(result["cluster_count"]) for result in triage_results) / len(triage_results), 3),
             "avg_evidence_hits": round(sum(int(result["evidence_hits"]) for result in triage_results) / len(triage_results), 3),
         }
+    provider_response_results = [result for result in results if result["task_type"] == "provider_response"]
+    if provider_response_results:
+        metrics["provider_response"] = {
+            "cases": len(provider_response_results),
+            "provider_error_count": sum(1 for result in provider_response_results if result.get("status") == "provider_error"),
+            "generated_candidate_count": sum(1 for result in provider_response_results if bool(result.get("generated_candidate"))),
+            "validation_statuses": _count_values(provider_response_results, "validation_status"),
+        }
+    metrics["readiness"] = _readiness_metrics(results)
     return metrics
 
 
@@ -708,6 +810,55 @@ def _count_values(results: list[dict[str, object]], key: str) -> dict[str, int]:
         value = str(result.get(key, "unknown") or "unknown")
         counts[value] = counts.get(value, 0) + 1
     return counts
+
+
+def _readiness_metrics(results: list[dict[str, object]]) -> dict[str, object]:
+    tool_backed_values = {"fixture_tool", "adapter_backed", "formal_tool", "executable_sim", "tool_backed"}
+    structure_only_values = {"fixture_structure", "structure_only", "syntax_plus_structure"}
+    return {
+        "case_scope_counts": _count_values(results, "benchmark_scope"),
+        "execution_backing_counts": _count_values(results, "execution_backing"),
+        "validation_status_counts": _count_present_values(results, "validation_status"),
+        "validation_mode_counts": _count_present_values(results, "validation_mode"),
+        "tool_backed_case_count": sum(1 for result in results if str(result.get("execution_backing")) in tool_backed_values),
+        "structure_or_fixture_only_case_count": sum(
+            1
+            for result in results
+            if (
+                str(result.get("execution_backing")) not in tool_backed_values
+                and (
+                    str(result.get("execution_backing")) in structure_only_values
+                    or str(result.get("execution_backing", "")).startswith("fixture_")
+                )
+            )
+        ),
+        "interpretation": "Default benchmarks are deterministic fixture regressions unless execution_backing names an adapter/formal/executable tool.",
+    }
+
+
+def _count_present_values(results: list[dict[str, object]], key: str) -> dict[str, int]:
+    values = [result for result in results if result.get(key) not in {None, "", "not_run"}]
+    return _count_values(values, key)
+
+
+def _case_scope(case: BenchmarkCase) -> str:
+    return str(case.scoring.get("benchmark_scope", case.config.get("benchmark_scope", "fixture")))
+
+
+def _case_execution_backing(case: BenchmarkCase, default: str) -> str:
+    return str(case.scoring.get("execution_backing", case.config.get("execution_backing", default)))
+
+
+def _validation_backing(validation_mode: str, *, formal_status: str | None = None, executable_status: str | None = None) -> str:
+    if formal_status and formal_status not in {"", "not_run", "skipped"}:
+        return "formal_tool"
+    if executable_status and executable_status not in {"", "not_run", "skipped"}:
+        return "executable_sim"
+    if validation_mode in {"adapter", "adapter_plus_structure", "adapter_backed"}:
+        return "adapter_backed"
+    if validation_mode in {"syntax_plus_structure", "structure_only", "builtin_sva_syntax"}:
+        return "structure_only"
+    return validation_mode or "not_run"
 
 
 def _resolve_runtime_placeholders(value: Any) -> Any:

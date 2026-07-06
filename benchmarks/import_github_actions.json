@@ -1,0 +1,17 @@
+{
+  "benchmark_id": "import_github_actions",
+  "task_type": "import",
+  "title": "Normalize GitHub Actions regression job results",
+  "fixture_root": "benchmarks/assets/import_github_actions",
+  "config": {
+    "importer": "github-actions",
+    "source_path": "gha_jobs.json"
+  },
+  "scoring": {
+    "expected_imported_count": 2,
+    "min_observations": 1,
+    "benchmark_scope": "fixture_ci_import",
+    "execution_backing": "fixture_import"
+  },
+  "schema_version": "0.1"
+}

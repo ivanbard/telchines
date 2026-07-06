@@ -1060,7 +1060,8 @@ def _post_json(provider_name: str, url: str, payload: dict[str, Any], headers: d
         with request.urlopen(http_request, timeout=timeout) as response:
             body = response.read().decode("utf-8")
     except error.HTTPError as exc:
-        raise ProviderError(f"provider {provider_name} returned HTTP {exc.code}") from exc
+        hint = "; check base_url, endpoint, and model configuration" if exc.code == 404 else ""
+        raise ProviderError(f"provider {provider_name} returned HTTP {exc.code} from {_safe_url_for_error(url)}{hint}") from exc
     except error.URLError as exc:
         raise ProviderError(f"provider {provider_name} request failed: {exc.reason}") from exc
     except TimeoutError as exc:
@@ -1227,7 +1228,17 @@ def _openai_compatible_url(config: dict[str, Any]) -> str:
 def _anthropic_url(config: dict[str, Any]) -> str:
     base_url = str(config.get("base_url", "https://api.anthropic.com/v1")).rstrip("/")
     endpoint = str(config.get("endpoint", "messages")).strip().lstrip("/")
+    base_path = urlparse(base_url).path.rstrip("/")
+    if base_path.endswith(f"/{endpoint}") or base_path == f"/{endpoint}":
+        return base_url
     return f"{base_url}/{endpoint}"
+
+
+def _safe_url_for_error(url: str) -> str:
+    parsed = urlparse(url)
+    if not parsed.scheme or not parsed.netloc:
+        return url.split("?", 1)[0].split("#", 1)[0]
+    return f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
 
 
 def _extract_openai_response_content(response_payload: dict[str, Any], provider_name: str) -> dict[str, Any]:

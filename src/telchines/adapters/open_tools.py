@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -84,6 +85,8 @@ class IcarusAdapter(ToolAdapter):
             run_kwargs = {"cwd": project_root, "capture_output": True, "text": True, "check": False}
             if run_spec.timeout_seconds is not None:
                 run_kwargs["timeout"] = run_spec.timeout_seconds
+            if run_spec.env:
+                run_kwargs["env"] = {**dict(os.environ), **run_spec.env}
             compile_process = subprocess.run(compile_command, **run_kwargs)
         except subprocess.TimeoutExpired as exc:
             raise AdapterExecutionError(f"{self.name} compile step timed out after {run_spec.timeout_seconds} second(s)") from exc

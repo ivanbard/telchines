@@ -119,6 +119,7 @@ def test_adapter_parser_handles_realistic_tool_output_shapes() -> None:
 
 def test_iverilog_adapter_runs_compile_and_run(monkeypatch, work_root: Path) -> None:
     commands: list[list[str]] = []
+    run_kwargs: list[dict[str, object]] = []
 
     class Result:
         def __init__(self, returncode: int, stdout: str = "", stderr: str = "") -> None:
@@ -126,8 +127,11 @@ def test_iverilog_adapter_runs_compile_and_run(monkeypatch, work_root: Path) -> 
             self.stdout = stdout
             self.stderr = stderr
 
-    def fake_run(command, cwd, capture_output, text, check):  # noqa: ANN001
+    def fake_run(command, **kwargs):  # noqa: ANN001
         commands.append(command)
+        run_kwargs.append(kwargs)
+        if command[:2] == ["iverilog", "--version"]:
+            return Result(0, "Icarus Verilog fake\n", "")
         if command[0] == "iverilog":
             output_path = Path(command[command.index("-o") + 1])
             output_path.write_text("compiled", encoding="utf-8")
@@ -138,13 +142,23 @@ def test_iverilog_adapter_runs_compile_and_run(monkeypatch, work_root: Path) -> 
     monkeypatch.setattr("telchines.adapters.open_tools.subprocess.run", fake_run)
 
     adapter = IcarusAdapter()
-    execution = adapter.run("run_iverilog", work_root, ["rtl/demo.sv"], work_root / "artifacts")
+    execution = adapter.run(
+        "run_iverilog",
+        work_root,
+        ["rtl/demo.sv"],
+        work_root / "artifacts",
+        spec=AdapterRunSpec(files=["rtl/demo.sv"], env={"API_TOKEN": "secret", "VISIBLE": "ok"}),
+    )
     assert execution.exit_code == 0
     assert commands[0][:3] == ["iverilog", "-g2012", "-o"]
     assert commands[1][0] == "vvp"
+    assert run_kwargs[0]["env"]["API_TOKEN"] == "secret"
+    assert run_kwargs[1]["env"]["VISIBLE"] == "ok"
     assert execution.result["validation_mode"] == "compile_and_run"
     assert execution.result["compile_exit_code"] == 0
     assert execution.result["run_exit_code"] == 0
+    assert execution.result["run_spec"]["env"]["API_TOKEN"] == "<redacted>"
+    assert execution.result["run_spec"]["env"]["VISIBLE"] == "ok"
     assert execution.artifacts["compiled_executable"].endswith("run_iverilog.out")
 
 

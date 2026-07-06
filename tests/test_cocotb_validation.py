@@ -92,15 +92,20 @@ def test_cocotb_executable_smoke_mode_matrix(
 def test_cocotb_smoke_makefile_records_compile_context(sample_project: Path, monkeypatch) -> None:
     config = _config(sample_project, "required")
     store = RunStore(config)
+    calls: list[dict[str, object]] = []
 
     class Result:
         returncode = 0
         stdout = "smoke passed\n"
         stderr = ""
 
+    def fake_run(command, **kwargs):  # noqa: ANN001
+        calls.append({"command": command, **kwargs})
+        return Result()
+
     monkeypatch.setattr(gen_cocotb, "_select_cocotb_simulator", lambda preferred: ("icarus", []))
     monkeypatch.setattr(gen_cocotb, "_cocotb_common_missing", lambda: [])
-    monkeypatch.setattr(gen_cocotb.subprocess, "run", lambda command, **kwargs: Result())
+    monkeypatch.setattr(gen_cocotb.subprocess, "run", fake_run)
 
     validation_run = gen_cocotb.validate_cocotb_candidate(
         config,
@@ -110,18 +115,25 @@ def test_cocotb_smoke_makefile_records_compile_context(sample_project: Path, mon
             files=["rtl/uart_rx.sv"],
             include_dirs=["rtl/include"],
             defines=["SIM=1"],
+            top_module="uart_rx_tb_top",
             extra_args=["-Wall"],
+            env={"API_KEY": "secret", "VISIBLE": "ok"},
         ),
     )
 
     makefile = Path(validation_run.tool_result["command_artifacts"]["cocotb_smoke_makefile"])
     log_path = Path(validation_run.tool_result["command_artifacts"]["cocotb_smoke_log"])
     makefile_text = makefile.read_text(encoding="utf-8")
-    assert "TOPLEVEL = uart_rx" in makefile_text
+    assert "TOPLEVEL = uart_rx_tb_top" in makefile_text
     assert "MODULE = test_uart_rx" in makefile_text
     assert "VERILOG_SOURCES" in makefile_text
     assert "COMPILE_ARGS += -Irtl/include -DSIM=1 -Wall" in makefile_text
     assert log_path.read_text(encoding="utf-8") == "smoke passed\n"
+    make_call = next(call for call in calls if call["command"][0] == "make")
+    assert make_call["env"]["API_KEY"] == "secret"
+    assert validation_run.tool_result["environment_summary"]["API_KEY"] == "<redacted>"
+    assert validation_run.tool_result["environment_summary"]["VISIBLE"] == "ok"
+    assert validation_run.tool_result["environment_summary"]["PYTHONPATH"]
 
 
 @given(has_import=st.booleans(), has_decorator=st.booleans())

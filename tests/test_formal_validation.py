@@ -44,7 +44,40 @@ class PassingFormalAdapter(MissingFormalAdapter):
             observations=[],
             summary="symbiyosys exited with code 0",
             artifacts={"log_path": str(log_path)},
-            result={"status": "passed", "validation_mode": "formal_run"},
+            result={"status": "passed", "validation_mode": "formal_run", "run_spec": spec.summary(project_root) if spec else {}},
+        )
+
+
+class RecordingAdapterValidationAdapter(ToolAdapter):
+    name = "slang"
+    kind = "simulator"
+    category = "simulation"
+    validation_mode = "compile_only"
+    supported_workflows = ("generation_validation",)
+
+    def is_available(self) -> bool:
+        return True
+
+    def build_command(self, project_root: Path, files: list[str], extra_args: list[str] | None = None) -> list[str]:
+        return ["slang", "--lint-only", *(extra_args or []), *files]
+
+    def run(self, run_id, project_root, files, artifacts_dir, extra_args=None, spec=None):  # noqa: ANN001
+        artifacts_dir.mkdir(parents=True, exist_ok=True)
+        log_path = artifacts_dir / f"{run_id}.log"
+        log_path.write_text("slang: validation passed\n", encoding="utf-8")
+        return AdapterExecution(
+            command=["slang", "--lint-only", *files],
+            cwd=str(project_root),
+            exit_code=0,
+            stdout="slang: validation passed\n",
+            stderr="",
+            log_path=str(log_path),
+            started_at="2026-07-04T00:00:00+00:00",
+            finished_at="2026-07-04T00:00:01+00:00",
+            observations=[],
+            summary="slang exited with code 0",
+            artifacts={"log_path": str(log_path)},
+            result={"status": "passed", "validation_mode": "compile_only"},
         )
 
 
@@ -92,6 +125,14 @@ class FakeRegistry:
     def get(self, name: str) -> ToolAdapter:
         assert name == "symbiyosys"
         return self.adapter
+
+
+class MultiRegistry:
+    def __init__(self, adapters: dict[str, ToolAdapter]) -> None:
+        self.adapters = adapters
+
+    def get(self, name: str) -> ToolAdapter:
+        return self.adapters[name]
 
 
 class RaisingRegistry:
@@ -162,6 +203,23 @@ def test_formal_validation_records_sby_artifact(work_root: Path, monkeypatch) ->
     assert Path(str(tool_result["command_artifacts"]["sby_file"])).exists()
 
 
+def test_sva_adapter_validation_records_command_artifacts(work_root: Path, monkeypatch) -> None:
+    config = _write_project(work_root)
+    config.generation["sva"]["validation_adapters"] = ["slang"]
+    config.generation["sva"]["formal"]["mode"] = "off"
+    config.adapters = ["slang"]
+    config.save()
+    monkeypatch.setattr(gen_sva, "AdapterRegistry", lambda: MultiRegistry({"slang": RecordingAdapterValidationAdapter()}))
+
+    validator, command, returncode, _, tool_result = gen_sva._run_validation(config, work_root, _candidate())
+
+    assert validator == "slang"
+    assert command[0] == "slang"
+    assert returncode == 0
+    assert tool_result["validation_mode"] == "adapter_backed"
+    assert Path(str(tool_result["command_artifacts"]["log_path"])).exists()
+
+
 @given(
     mode=st.sampled_from(["off", "auto", "required"]),
     registered=st.booleans(),
@@ -223,14 +281,25 @@ def test_formal_sby_file_uses_run_spec_top_and_sources(work_root: Path, monkeypa
         config,
         work_root,
         _candidate(),
-        run_spec=AdapterRunSpec(files=["rtl/dut.sv", "rtl/helper.sv"], top_module="formal_top", extra_args=["--append"]),
+        run_spec=AdapterRunSpec(
+            files=["rtl/dut.sv", "rtl/helper.sv"],
+            include_dirs=["rtl/include"],
+            defines=["FORMAL=1"],
+            top_module="formal_top",
+            work_library="work",
+            extra_args=["--append"],
+            env={"API_TOKEN": "secret"},
+        ),
     )
 
     sby_text = Path(str(tool_result["command_artifacts"]["sby_file"])).read_text(encoding="utf-8")
     assert returncode == 0
     assert "mode bmc" in sby_text
     assert "depth 4" in sby_text
-    assert "read -formal rtl/dut.sv" in sby_text
-    assert "read -formal rtl/helper.sv" in sby_text
-    assert "read -formal dut_assertions.sv" in sby_text
+    assert "read -formal -sv -Irtl/include -DFORMAL=1 rtl/dut.sv" in sby_text
+    assert "read -formal -sv -Irtl/include -DFORMAL=1 rtl/helper.sv" in sby_text
+    assert "read -formal -sv -Irtl/include -DFORMAL=1 dut_assertions.sv" in sby_text
     assert "prep -top formal_top" in sby_text
+    run_spec = tool_result["adapter_result"]["run_spec"]
+    assert run_spec["work_library"] == "work"
+    assert run_spec["env"]["API_TOKEN"] == "<redacted>"

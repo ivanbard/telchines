@@ -65,6 +65,7 @@ For each planned provider, the harness can run:
 - plain shell smoke with `/providers`, `/providers check`, `/transcript`, and `/exit`
 
 Each run emits bounded stdout/stderr, elapsed time, parsed validation status, candidate ids, and attempt counts where available.
+Workflow scenarios are scored semantically: a zero exit code is still failed when the parsed payload reports `failed`, `no_patch`, `no_generation`, or `rejected`, unless that no-op status is explicitly expected by the scenario.
 
 ## Outputs
 
@@ -74,6 +75,8 @@ Reports are written under `.test-work/provider-capability-study/<matrix-name>/` 
 - `<matrix>_provider_capability_summary.md`
 
 Secret-looking environment values are redacted from the summary payload. Raw `.tel` run artifacts stay inside the ignored scratch directory.
+
+Use `--repeat-count N` to repeat each scenario. The JSON summary records repeat index, provider kind, model, reasoning level, latency, retry count, JSON repair attempts when reported by the workflow, validation deltas, and semantic fingerprints. The stability section groups repeats by provider, scenario, model, and reasoning level.
 
 ## Presets
 

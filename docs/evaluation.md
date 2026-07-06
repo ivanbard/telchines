@@ -11,6 +11,9 @@ Covered task types:
 - SVA generation
 - cocotb generation
 - coverage planning
+- CI/regression import
+- coverage import
+- provider-response handling
 
 ## Run The Suite
 
@@ -27,7 +30,19 @@ Inside an initialized Telchines project, `tel eval run` runs with that project's
 - retrieval grounding quality
 - artifact generation and validation
 - coverage recommendation quality
+- UVM-like and vendor build log parsing
+- CI import normalization for JUnit, GitHub Actions, and Jenkins fixtures
+- coverage import normalization for UCIS JSON and vendor-style text fixtures
+- malformed or partial local provider responses fail with explicit provider-error rows
 - replayable release-over-release checks
+
+The report includes `metrics.readiness` plus per-case `benchmark_scope` and
+`execution_backing` fields. Treat these as calibration labels: most default
+cases are deterministic fixtures, and generated-code pass rates should be read
+with `validation_status`, `validation_mode`, `formal_status`, and
+`executable_status`. A passing fixture row is not evidence that a production
+simulator, formal engine, or vendor build flow ran unless the backing field says
+so.
 
 ## Release Gate Expectations
 
@@ -39,4 +54,4 @@ Before cutting a public release:
 
 ## Current Default Suite Shape
 
-The default suite spans all shipped `v1` workflows, including agent-runtime repair, review-gated agent, retrieval, repair, SVA, cocotb, coverage, triage, import, and coverage-import cases. Use the report's `total` field as the source of truth for the installed suite size. The automated test suite verifies that the default benchmark run completes successfully and writes a report to the run store when run inside an initialized project.
+The default suite spans all shipped `v1` workflows, including agent-runtime repair, review-gated agent, retrieval, repair, SVA, cocotb, coverage, triage, import, coverage-import, and provider-response cases. It includes a larger fixture with a filelist, include file, package, core, and top wrapper, plus UVM-like logs, vendor build logs, CI imports, and malformed/partial provider responses. Use the report's `total` field as the source of truth for the installed suite size. The automated test suite verifies that the default benchmark run completes successfully, writes a report to the run store when run inside an initialized project, and runs without mutating a non-project directory by using scratch context.

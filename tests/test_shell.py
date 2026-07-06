@@ -29,6 +29,7 @@ from telchines.shell import (
     _parse_repair_args,
     _parse_repeated_option,
     _sidebar_text,
+    render_artifact_purge_payload,
     render_artifact_review_payload,
     render_agent_payload,
     render_cocotb_payload,
@@ -106,7 +107,9 @@ def test_shell_help_renders_core_commands() -> None:
     assert "/waveforms" in rendered
     assert "/runs [list|doctor|show RUN_ID|replay RUN_ID" in rendered
     assert "import MANIFEST" in rendered
-    assert "/artifacts [purge [--yes]|review REF]" in rendered
+    assert "/artifacts [purge" in rendered
+    assert "--scope NAME" in rendered
+    assert "--older-than-days N" in rendered
     assert "/raw <slash command>" in rendered
 
 
@@ -706,6 +709,35 @@ def test_shell_result_renderers_include_validation_mode() -> None:
     assert "validation mode: syntax_plus_structure" in cocotb
     assert "executable status: skipped" in cocotb
     assert "does not run a simulator" in cocotb
+
+
+def test_shell_artifact_purge_renderer_shows_scope_age_and_retention() -> None:
+    rendered = render_artifact_purge_payload(
+        {
+            "dry_run": True,
+            "status": "planned",
+            "scopes": ["task-artifacts"],
+            "older_than_days": 30,
+            "file_count": 1,
+            "byte_count": 12,
+            "targets": [
+                {
+                    "scope": "task-artifacts",
+                    "path": ".tel/task-artifacts",
+                    "file_count": 1,
+                    "byte_count": 12,
+                    "files": [".tel/task-artifacts/request.json"],
+                }
+            ],
+            "retained_metadata": ["run records under .tel/runs"],
+            "privacy_note": "Purge removes artifact payloads but leaves metadata.",
+        }
+    )
+
+    assert "scopes: task-artifacts" in rendered
+    assert "older than days: 30" in rendered
+    assert "retained metadata:" in rendered
+    assert "run records under .tel/runs" in rendered
 
 
 def test_shell_generation_renderers_skip_empty_artifact_rows() -> None:

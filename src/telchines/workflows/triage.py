@@ -319,7 +319,8 @@ def _waveform_evidence(
     waveform_summaries: list[WaveformSummary],
 ):
     messages = [item.message for item in items[:3]]
-    return [summarize_for_cluster(summary, signature, files, messages) for summary in waveform_summaries[:3]]
+    metadata = [item.metadata for item in items[:3] if item.metadata]
+    return [summarize_for_cluster(summary, signature, files, messages, metadata) for summary in waveform_summaries[:3]]
 
 
 def _find_formal_evidence(previous_runs: list[VerificationRun], items: list[Observation]) -> list[FormalEvidence]:

@@ -1,0 +1,40 @@
+{
+  "workflow_name": "nightly-fpga-regression",
+  "run_id": "991122",
+  "jobs": [
+    {
+      "id": 10,
+      "name": "sim-icarus-uart",
+      "conclusion": "failure",
+      "steps": [
+        {
+          "name": "compile",
+          "conclusion": "success"
+        },
+        {
+          "name": "simulate",
+          "conclusion": "failure"
+        }
+      ],
+      "annotations": [
+        {
+          "path": "rtl/uart_rx.sv",
+          "line": 42,
+          "message": "timeout waiting for start bit"
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "name": "lint-uart",
+      "conclusion": "success",
+      "steps": [
+        {
+          "name": "lint",
+          "conclusion": "success"
+        }
+      ],
+      "annotations": []
+    }
+  ]
+}

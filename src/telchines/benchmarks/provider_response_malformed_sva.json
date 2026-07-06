@@ -1,0 +1,45 @@
+{
+  "benchmark_id": "provider_response_malformed_sva",
+  "task_type": "provider_response",
+  "title": "Reject malformed local provider output for SVA generation",
+  "fixture_root": "benchmarks/assets/provider_response_malformed_sva",
+  "config": {
+    "workflow": "sva",
+    "provider": "malformed-local",
+    "spec_path": "docs/uart.md",
+    "rtl_path": "rtl/uart_rx.sv",
+    "model_policy": {
+      "default_provider_by_capability": {
+        "repair": "heuristic",
+        "generation": "malformed-local"
+      },
+      "providers": {
+        "heuristic": {
+          "kind": "heuristic",
+          "capabilities": [
+            "repair",
+            "generation"
+          ]
+        },
+        "malformed-local": {
+          "kind": "local_command",
+          "capabilities": [
+            "generation"
+          ],
+          "command": "__python__",
+          "args": [
+            "tools/malformed_provider.py"
+          ],
+          "timeout_seconds": 5
+        }
+      }
+    }
+  },
+  "scoring": {
+    "expected_status": "provider_error",
+    "expected_error_contains": "JSON object",
+    "benchmark_scope": "fixture_provider_response",
+    "execution_backing": "fixture_provider_response"
+  },
+  "schema_version": "0.1"
+}

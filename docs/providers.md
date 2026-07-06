@@ -46,6 +46,8 @@ Optional fields:
 - `max_tokens`, defaulting to `4096`
 - `headers` for extra string-valued HTTP headers; `x-api-key`, `anthropic-version`, and `content-type` are reserved
 
+`providers check` sends a small Messages API request to `base_url` plus `endpoint`. If a `base_url` is accidentally configured as a full `/messages` URL, Telchines avoids appending a duplicate `/messages` segment. HTTP 404 diagnostics include only the sanitized URL path and point users to base URL, endpoint, or model configuration.
+
 ### `local_command`
 
 Local process that reads JSON on stdin and writes JSON on stdout.
@@ -137,7 +139,7 @@ Agent-runtime repair pilot:
 
 Use `tel providers list` to inspect which providers are allowed and why any provider is blocked.
 
-Use `tel providers setup NAME` to add common HTTP provider configs without storing secret values. The command writes `api_key_env` references, model/base URL settings, and optional default-provider selections:
+Use `tel providers setup NAME` to add common HTTP provider configs without storing secret values. The command writes `api_key_env` references, model/base URL settings, and optional default-provider selections. `--api-key-env` must be an uppercase environment variable name, such as `OPENROUTER_API_KEY`, not the API key value itself:
 
 ```bash
 tel providers setup openrouter-dev \
@@ -161,7 +163,7 @@ tel providers setup local-openai \
   --capability generation
 ```
 
-Set the referenced environment variable in your shell or an ignored local `.env` file, then run `tel providers check NAME`. Do not paste API key values into `.tel/config.json`.
+Set the referenced environment variable in your shell or an ignored local `.env` file, then run `tel providers check NAME`. Do not paste API key values into `.tel/config.json`; `tel providers setup` rejects values that are not valid environment variable names.
 
 Use `tel providers check [NAME]` to validate one provider, or omit `NAME` to check all providers. By default this performs a live transport check for `openai_compatible` and `local_command` providers and reports `agent_runtime` routing metadata. Add `--offline` to validate only configuration and policy:
 
@@ -252,7 +254,7 @@ Native Anthropic endpoint:
         "anthropic-dev": {
           "kind": "anthropic",
           "capabilities": ["repair", "generation"],
-          "model": "claude-3-5-sonnet-latest",
+          "model": "claude-sonnet-5",
           "api_key_env": "ANTHROPIC_API_KEY",
           "max_tokens": 4096,
           "timeout_seconds": 90

@@ -29,14 +29,21 @@ def test_triage_clusters_failures(sample_project: Path) -> None:
     rx_evidence = rx_cluster.waveform_evidence[0]
     assert rx_evidence.source_path.endswith("uart_rx_trace.vcd")
     assert rx_evidence.relevance == "matched"
+    assert rx_evidence.evidence_status == "strong"
     assert set(rx_evidence.matched_signals) & {"start_seen", "serial_i"}
+    assert set(rx_evidence.candidate_signals) & {"start_seen", "serial_i"}
     assert not set(rx_evidence.matched_signals) <= {"clk", "rst_n"}
+    assert "start" in rx_evidence.reason or "timeout" in rx_evidence.reason
 
     tx_cluster = next(cluster for cluster in clusters if cluster.signature == "SV_UNKNOWN_IDENTIFIER")
     tx_evidence = tx_cluster.waveform_evidence[0]
     assert tx_evidence.relevance == "unrelated"
+    assert tx_evidence.evidence_status == "unrelated"
     assert tx_evidence.matched_signals == []
-    assert "no non-generic signal overlap" in tx_evidence.reason
+    assert tx_evidence.candidate_signals == []
+    assert "generic clock/reset excerpts were not attached" in tx_evidence.reason
+    assert "clk" not in tx_evidence.excerpt
+    assert "rst_n" not in tx_evidence.excerpt
 
 
 def test_triage_finds_similar_previous_runs(sample_project: Path) -> None:

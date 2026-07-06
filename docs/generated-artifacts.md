@@ -32,6 +32,8 @@ Neither structural nor parser-backed validation proves assertion semantics, vacu
 
 `gen-cocotb` always starts with `syntax_plus_structure` validation. It runs `py_compile` and checks for a cocotb import plus at least one `@cocotb.test` decorator. When `generation.cocotb.executable_smoke` is `auto` or `required`, Telchines attempts a cocotb Makefile smoke with Icarus or Verilator when the required tools are available. A passing smoke upgrades `validation_mode` to `compile_and_run`; missing tools are skipped in `auto` mode and fail validation in `required` mode.
 
+Executable smoke metadata includes the Makefile, smoke log, command argv, setup diagnostics, and a bounded `environment_summary` that redacts secret-looking run-spec keys and summarizes inherited `PYTHONPATH` entries.
+
 For an executable smoke in developer or release environments, install the optional Python dependency and provide Icarus plus cocotb's makefile tooling on `PATH`:
 
 ```bash
@@ -86,4 +88,15 @@ Templates support `{module}`, `{rtl_stem}`, and `{dut_stem}`. Template values mu
 
 ## Retention And Privacy
 
-Generated files, generation candidates, validation runs, patches, reports, waveform summaries, replay metadata, and task artifacts live under `.tel/`. Task artifacts intentionally keep prompts, retrieved RTL/spec/log context, and provider responses for replayability. Telchines redacts dictionary fields with credential-looking keys before saving task artifacts, but it does not redact proprietary design content. Run `tel doctor privacy` to inspect retention guidance, `tel artifacts purge` to preview cleanup, and `tel artifacts purge --yes` to remove retained artifact payloads.
+Generated files, generation candidates, validation runs, patches, reports, waveform summaries, replay metadata, and task artifacts live under `.tel/`. Task artifacts intentionally keep prompts, retrieved RTL/spec/log context, and provider responses for replayability. Telchines redacts dictionary fields with credential-looking keys before saving task artifacts, but it does not redact proprietary design content.
+
+Run `tel doctor privacy` to inspect retention guidance. `tel artifacts purge` is a dry-run preview by default; add `--yes` to delete matching payloads. Use scopes or an age window when you need narrower retention:
+
+```bash
+tel artifacts purge
+tel artifacts purge --scope task-artifacts --scope reports
+tel artifacts purge --older-than-days 30
+tel artifacts purge --scope task-artifacts --older-than-days 30 --yes
+```
+
+Supported purge scopes are `generated`, `task-artifacts`, `patches`, `generations`, `waveforms`, and `reports`. Purge removes artifact payloads but preserves run records, retrieval contexts, observations, project config, and workspace files.

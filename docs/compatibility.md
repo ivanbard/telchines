@@ -18,6 +18,12 @@ Telchines `1.x` is a CLI-first product line. The following interfaces are treate
   - `adapters list`
   - `eval report`
 
+Benchmark reports may add new case types, per-case calibration fields, and
+aggregate readiness counters. Existing `eval report` consumers should treat
+unknown fields as additive metadata and use each report's `total`,
+`validation_mode`, `validation_status`, and `execution_backing` fields rather
+than assuming a fixed suite size or tool-backed execution.
+
 ## What May Change In A Backward-Compatible Way
 
 - additional JSON fields

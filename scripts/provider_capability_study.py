@@ -553,7 +553,10 @@ def _run_commands(scratch: Path, commands: list[dict[str, Any]]) -> list[dict[st
                 "validation_status": validation_status,
                 "candidate_id": _payload_candidate_id(parsed),
                 "patch_id": _payload_patch_id(parsed),
-                "attempt_count": len(parsed.get("attempts", [])) if isinstance(parsed, dict) and isinstance(parsed.get("attempts"), list) else None,
+                "attempt_count": len(_payload_attempts(parsed)) if _payload_attempts(parsed) else None,
+                "retry_count": _payload_retry_count(parsed),
+                "json_repair_attempt_count": _payload_json_repair_attempt_count(parsed),
+                "validation_delta": _payload_validation_delta(parsed),
                 "semantic_fingerprint": _semantic_fingerprint(item, parsed),
             }
         )
@@ -567,6 +570,9 @@ def _score_command_result(command: dict[str, Any], returncode: int, parsed: dict
     if label in {"provider_check", "provider_check_offline"}:
         return ("passed", "") if parsed.get("status") == "passed" else ("failed", "provider_check_status_not_passed")
     if label == "agent_repair":
+        no_op_reason = _unexpected_workflow_no_op(parsed, expected=str(command.get("expected") or ""))
+        if no_op_reason:
+            return "failed", no_op_reason
         workflow_status = str(parsed.get("status", ""))
         validation_status = _payload_validation_status(parsed)
         patch_id = _payload_patch_id(parsed)
@@ -574,6 +580,9 @@ def _score_command_result(command: dict[str, Any], returncode: int, parsed: dict
             return "passed", ""
         return "failed", "agent_repair_missing_validated_patch"
     if label in {"gen_sva", "gen_cocotb"}:
+        no_op_reason = _unexpected_workflow_no_op(parsed, expected=str(command.get("expected") or ""))
+        if no_op_reason:
+            return "failed", no_op_reason
         workflow_status = str(parsed.get("status", ""))
         validation_status = _payload_validation_status(parsed)
         candidate_id = _payload_candidate_id(parsed)
@@ -583,6 +592,32 @@ def _score_command_result(command: dict[str, Any], returncode: int, parsed: dict
             return "passed", ""
         return "failed", f"{label}_missing_validated_candidate"
     return "passed", ""
+
+
+def _unexpected_workflow_no_op(parsed: dict[str, Any], *, expected: str = "") -> str:
+    expected_statuses = {item.strip() for item in expected.split(",") if item.strip()}
+    bad_statuses = {"failed", "no_patch", "no_generation", "rejected"}
+    for location, status in _payload_workflow_statuses(parsed):
+        if status in bad_statuses and status not in expected_statuses:
+            return f"workflow_{location}:{status}"
+    return ""
+
+
+def _payload_workflow_statuses(parsed: dict[str, Any]) -> list[tuple[str, str]]:
+    if not isinstance(parsed, dict):
+        return []
+    statuses: list[tuple[str, str]] = []
+    for key in ("status", "workflow_status", "candidate_status"):
+        value = parsed.get(key)
+        if isinstance(value, str) and value:
+            statuses.append((key, value))
+    result = parsed.get("result")
+    if isinstance(result, dict):
+        for key in ("status", "workflow_status", "candidate_status"):
+            value = result.get(key)
+            if isinstance(value, str) and value:
+                statuses.append((f"result.{key}", value))
+    return statuses
 
 
 def _payload_validation_status(parsed: dict[str, Any]) -> Any:
@@ -621,6 +656,62 @@ def _payload_patch_id(parsed: dict[str, Any]) -> Any:
     return None
 
 
+def _payload_attempts(parsed: dict[str, Any]) -> list[dict[str, Any]]:
+    if not isinstance(parsed, dict):
+        return []
+    attempts = parsed.get("attempts")
+    if isinstance(attempts, list):
+        return [item for item in attempts if isinstance(item, dict)]
+    result = parsed.get("result")
+    if isinstance(result, dict) and isinstance(result.get("attempts"), list):
+        return [item for item in result["attempts"] if isinstance(item, dict)]
+    return []
+
+
+def _payload_retry_count(parsed: dict[str, Any]) -> int | None:
+    attempts = _payload_attempts(parsed)
+    if not attempts:
+        return None
+    return max(len(attempts) - 1, 0)
+
+
+def _payload_json_repair_attempt_count(parsed: dict[str, Any]) -> int:
+    if not isinstance(parsed, dict):
+        return 0
+    for key in ("json_repair_attempt_count", "json_repair_attempts"):
+        value = parsed.get(key)
+        if isinstance(value, int):
+            return max(value, 0)
+        if isinstance(value, list):
+            return len(value)
+    result = parsed.get("result")
+    if isinstance(result, dict):
+        for key in ("json_repair_attempt_count", "json_repair_attempts"):
+            value = result.get(key)
+            if isinstance(value, int):
+                return max(value, 0)
+            if isinstance(value, list):
+                return len(value)
+    return 0
+
+
+def _payload_validation_delta(parsed: dict[str, Any]) -> dict[str, Any]:
+    attempts = _payload_attempts(parsed)
+    validation_statuses = [str(item.get("validation_status")) for item in attempts if item.get("validation_status") is not None]
+    candidate_statuses = [str(item.get("status")) for item in attempts if item.get("status") is not None]
+    rejected_candidate_ids = parsed.get("rejected_candidate_ids") if isinstance(parsed, dict) else None
+    result = parsed.get("result") if isinstance(parsed, dict) else None
+    if not isinstance(rejected_candidate_ids, list) and isinstance(result, dict):
+        rejected_candidate_ids = result.get("rejected_candidate_ids")
+    return {
+        "attempt_count": len(attempts),
+        "first_validation_status": validation_statuses[0] if validation_statuses else None,
+        "final_validation_status": validation_statuses[-1] if validation_statuses else _payload_validation_status(parsed),
+        "candidate_statuses": candidate_statuses,
+        "rejected_candidate_count": len(rejected_candidate_ids) if isinstance(rejected_candidate_ids, list) else 0,
+    }
+
+
 def _semantic_fingerprint(command: dict[str, Any], parsed: dict[str, Any]) -> str | None:
     if not isinstance(parsed, dict):
         return None
@@ -629,13 +720,15 @@ def _semantic_fingerprint(command: dict[str, Any], parsed: dict[str, Any]) -> st
         "label": label,
         "status": parsed.get("status"),
         "validation_status": _payload_validation_status(parsed),
-        "candidate_id": _payload_candidate_id(parsed),
-        "patch_id": _payload_patch_id(parsed),
+        "has_candidate": bool(_payload_candidate_id(parsed)),
+        "has_patch": bool(_payload_patch_id(parsed)),
+        "artifact_path": parsed.get("artifact_path") or parsed.get("file_path") or parsed.get("path"),
+        "validation_delta": _payload_validation_delta(parsed),
     }
     result = parsed.get("result")
     if isinstance(result, dict):
         material["result_status"] = result.get("status")
-        material["file_path"] = result.get("file_path") or result.get("path")
+        material["file_path"] = result.get("artifact_path") or result.get("file_path") or result.get("path")
     if label in {"provider_check", "provider_check_offline"}:
         material["provider_check_status"] = parsed.get("status")
     encoded = json.dumps(material, sort_keys=True, separators=(",", ":"))
@@ -698,6 +791,18 @@ def _stability_metrics(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
         fingerprints = sorted({str(item.get("semantic_fingerprint")) for item in items if item.get("semantic_fingerprint")})
         statuses = sorted({str(item.get("status")) for item in items})
         latencies = [float(item.get("elapsed_seconds", 0)) for item in items if isinstance(item.get("elapsed_seconds"), (int, float))]
+        retry_counts = [int(item.get("retry_count", 0)) for item in items if isinstance(item.get("retry_count"), int)]
+        json_repair_counts = [
+            int(item.get("json_repair_attempt_count", 0)) for item in items if isinstance(item.get("json_repair_attempt_count"), int)
+        ]
+        validation_deltas = [item.get("validation_delta") for item in items if isinstance(item.get("validation_delta"), dict)]
+        final_validation_statuses = sorted(
+            {
+                str(delta.get("final_validation_status"))
+                for delta in validation_deltas
+                if delta.get("final_validation_status") is not None
+            }
+        )
         metrics.append(
             {
                 "provider": provider,
@@ -711,6 +816,11 @@ def _stability_metrics(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "latency_seconds_min": min(latencies) if latencies else None,
                 "latency_seconds_max": max(latencies) if latencies else None,
                 "latency_seconds_avg": round(sum(latencies) / len(latencies), 3) if latencies else None,
+                "retry_count_min": min(retry_counts) if retry_counts else None,
+                "retry_count_max": max(retry_counts) if retry_counts else None,
+                "json_repair_attempt_count_max": max(json_repair_counts) if json_repair_counts else 0,
+                "validation_final_statuses": final_validation_statuses,
+                "validation_delta_stable": len(final_validation_statuses) <= 1,
             }
         )
     return metrics
@@ -761,8 +871,8 @@ def _markdown_report(summary: dict[str, Any]) -> str:
             f"`{provider.get('model') or ''}` | `{provider.get('reasoning_level') or 'auto'}` | "
             f"`{provider['status']}` | `{provider.get('reason') or ''}` |"
         )
-    lines.extend(["", "## Results", "", "| Provider | Scenario | Repeat | Model | Reasoning | Status | Exit | Seconds | Validation | Candidate | Attempts | Fingerprint |"])
-    lines.append("| --- | --- | ---: | --- | --- | --- | ---: | ---: | --- | --- | ---: | --- |")
+    lines.extend(["", "## Results", "", "| Provider | Scenario | Repeat | Model | Reasoning | Status | Exit | Seconds | Validation | Candidate | Attempts | Retries | JSON repair | Fingerprint |"])
+    lines.append("| --- | --- | ---: | --- | --- | --- | ---: | ---: | --- | --- | ---: | ---: | ---: | --- |")
     for item in summary["results"]:
         lines.append(
             "| "
@@ -777,11 +887,16 @@ def _markdown_report(summary: dict[str, Any]) -> str:
             f"{item.get('validation_status') or ''} | "
             f"{item.get('candidate_id') or ''} | "
             f"{item.get('attempt_count') or ''} | "
+            f"{item.get('retry_count') if item.get('retry_count') is not None else ''} | "
+            f"{item.get('json_repair_attempt_count') if item.get('json_repair_attempt_count') is not None else ''} | "
             f"`{item.get('semantic_fingerprint') or ''}` |"
         )
-    lines.extend(["", "## Stability", "", "| Provider | Scenario | Model | Reasoning | Runs | Stable | Statuses | Fingerprints |"])
-    lines.append("| --- | --- | --- | --- | ---: | --- | --- | --- |")
+    lines.extend(["", "## Stability", "", "| Provider | Scenario | Model | Reasoning | Runs | Stable | Statuses | Validation | Retry range | JSON repair max | Fingerprints |"])
+    lines.append("| --- | --- | --- | --- | ---: | --- | --- | --- | --- | ---: | --- |")
     for item in summary.get("metrics", {}).get("stability", []):
+        retry_range = ""
+        if item.get("retry_count_min") is not None and item.get("retry_count_max") is not None:
+            retry_range = f"{item.get('retry_count_min')}..{item.get('retry_count_max')}"
         lines.append(
             "| "
             f"`{item.get('provider', '')}` | "
@@ -791,6 +906,9 @@ def _markdown_report(summary: dict[str, Any]) -> str:
             f"{item.get('runs', '')} | "
             f"{item.get('stable', '')} | "
             f"`{','.join(item.get('statuses', []))}` | "
+            f"`{','.join(item.get('validation_final_statuses', []))}` | "
+            f"`{retry_range}` | "
+            f"{item.get('json_repair_attempt_count_max', 0)} | "
             f"`{','.join(item.get('fingerprints', []))}` |"
         )
     lines.extend(["", "Stdout/stderr are bounded in the JSON summary. Secret-looking environment values are redacted."])

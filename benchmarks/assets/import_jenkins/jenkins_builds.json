@@ -1,0 +1,29 @@
+{
+  "builds": [
+    {
+      "fullDisplayName": "nightly-uart #108",
+      "result": "FAILURE",
+      "url": "https://ci.example/job/nightly-uart/108",
+      "testResult": {
+        "suites": [
+          {
+            "cases": [
+              {
+                "className": "uart_rx",
+                "name": "seed_timeout",
+                "status": "FAILED",
+                "errorDetails": "rtl/uart_rx.sv:42: error: timeout waiting for start bit"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "fullDisplayName": "nightly-uart #109",
+      "result": "SUCCESS",
+      "url": "https://ci.example/job/nightly-uart/109",
+      "log": "completed without failures"
+    }
+  ]
+}

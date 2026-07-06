@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import difflib
 import json
+import re
 import shutil
 import subprocess
 import tempfile
+import time
 from dataclasses import asdict
 from pathlib import Path
 
@@ -36,6 +38,9 @@ from telchines.workflows.gen_sva import execute_generation
 from telchines.workflows.repair import execute_repair
 from telchines.workflows.triage import triage_logs
 from telchines.waveforms import ingest_waveform, select_signal
+
+ARTIFACT_PURGE_SCOPES = ("generated", "task-artifacts", "patches", "generations", "waveforms", "reports")
+ENV_VAR_NAME_RE = re.compile(r"^[A-Z_][A-Z0-9_]*$")
 
 
 def load_services(root: Path | None = None) -> tuple[ProjectConfig, RunStore, RetrievalService]:
@@ -73,36 +78,61 @@ def clean_index(root: Path | None = None) -> dict[str, object]:
     return retrieval.clean()
 
 
-def purge_artifacts(root: Path | None = None, *, dry_run: bool = True) -> dict[str, object]:
+def purge_artifacts(
+    root: Path | None = None,
+    *,
+    dry_run: bool = True,
+    scopes: list[str] | None = None,
+    older_than_days: int | None = None,
+) -> dict[str, object]:
     config, store, _ = load_services(root)
-    targets = [
-        config.project_root / config.artifacts_dir,
-        store.task_artifacts_dir,
-        store.patches_dir,
-        store.generations_dir,
-        store.waveforms_dir,
-        store.reports_dir,
-    ]
-    unique_targets = []
+    if older_than_days is not None and older_than_days < 0:
+        raise ValueError("older_than_days must be zero or greater")
+    selected_scopes = _normalize_artifact_purge_scopes(scopes)
+    targets_by_scope = {
+        "generated": config.project_root / config.artifacts_dir,
+        "task-artifacts": store.task_artifacts_dir,
+        "patches": store.patches_dir,
+        "generations": store.generations_dir,
+        "waveforms": store.waveforms_dir,
+        "reports": store.reports_dir,
+    }
+    cutoff = None if older_than_days is None else time.time() - (older_than_days * 24 * 60 * 60)
+    unique_targets: list[tuple[str, Path]] = []
     seen: set[Path] = set()
-    for target in targets:
+    for scope in selected_scopes:
+        target = targets_by_scope[scope]
         resolved = target.resolve()
         if resolved in seen:
             continue
         seen.add(resolved)
-        unique_targets.append(target)
-    summaries = [_directory_summary(target) for target in unique_targets]
+        unique_targets.append((scope, target))
+    summaries = [_directory_summary(target, scope=scope, cutoff=cutoff) for scope, target in unique_targets]
     if not dry_run:
-        for target in unique_targets:
-            if target.exists():
+        for summary, (_, target) in zip(summaries, unique_targets, strict=True):
+            if older_than_days is None and target.exists():
                 remove_tree(target)
-            ensure_directory(target)
+                ensure_directory(target)
+                continue
+            for file_path in summary["files"]:
+                candidate = Path(str(file_path))
+                if candidate.exists() and candidate.is_file():
+                    candidate.unlink()
     return {
         "dry_run": dry_run,
+        "scopes": selected_scopes,
+        "older_than_days": older_than_days,
         "targets": summaries,
         "file_count": sum(int(item["file_count"]) for item in summaries),
         "byte_count": sum(int(item["byte_count"]) for item in summaries),
         "status": "planned" if dry_run else "purged",
+        "retained_metadata": [
+            "run records under .tel/runs",
+            "retrieval contexts under .tel/contexts",
+            "observations under .tel/observations",
+            "project config under .tel/config.json",
+        ],
+        "privacy_note": "Purge removes artifact payloads but does not redact or rewrite preserved run metadata, context records, observations, or workspace files.",
     }
 
 
@@ -214,10 +244,25 @@ def privacy_report(root: Path | None = None) -> dict[str, object]:
             str(config.project_root / config.artifacts_dir),
             str(config.project_root / config.store_dir / "task-artifacts"),
         ],
+        "artifact_scopes": list(ARTIFACT_PURGE_SCOPES),
+        "artifact_retention": {
+            "default": "kept until explicitly purged",
+            "purge_preview": "tel artifacts purge",
+            "purge_all": "tel artifacts purge --yes",
+            "purge_by_scope": "tel artifacts purge --scope task-artifacts --scope reports --yes",
+            "purge_by_age": "tel artifacts purge --older-than-days 30 --yes",
+            "preserved_metadata": [
+                ".tel/runs",
+                ".tel/contexts",
+                ".tel/observations",
+                ".tel/config.json",
+            ],
+        },
         "retention_guidance": [
             "Telchines keeps generated artifacts, patch metadata, reports, waveform summaries, replay metadata, and task artifacts under the project .tel directory.",
             "Task artifacts intentionally retain prompts, retrieved RTL/spec/log snippets, and provider responses for replay and auditability.",
             "Run `tel artifacts purge` to preview cleanup and `tel artifacts purge --yes` to remove retained artifact payloads.",
+            "Use `--scope` or `--older-than-days` to enforce narrower artifact-retention windows without deleting run metadata.",
         ],
         "cleanup_command": "tel artifacts purge",
         "redaction_scope": "Dictionary fields with credential-looking keys are redacted before task artifacts are stored; proprietary RTL/spec/log content is not redacted.",
@@ -227,15 +272,31 @@ def privacy_report(root: Path | None = None) -> dict[str, object]:
     }
 
 
-def _directory_summary(path: Path) -> dict[str, object]:
+def _normalize_artifact_purge_scopes(scopes: list[str] | None) -> list[str]:
+    raw = scopes or list(ARTIFACT_PURGE_SCOPES)
+    normalized: list[str] = []
+    for scope in raw:
+        value = scope.strip()
+        if value not in ARTIFACT_PURGE_SCOPES:
+            raise ValueError(f"artifact purge scope must be one of: {', '.join(ARTIFACT_PURGE_SCOPES)}")
+        if value not in normalized:
+            normalized.append(value)
+    if not normalized:
+        raise ValueError("at least one artifact purge scope is required")
+    return normalized
+
+
+def _directory_summary(path: Path, *, scope: str | None = None, cutoff: float | None = None) -> dict[str, object]:
     if not path.exists():
-        return {"path": str(path), "exists": False, "file_count": 0, "byte_count": 0}
-    files = [item for item in path.rglob("*") if item.is_file()]
+        return {"scope": scope, "path": str(path), "exists": False, "file_count": 0, "byte_count": 0, "files": []}
+    files = [item for item in path.rglob("*") if item.is_file() and (cutoff is None or item.stat().st_mtime <= cutoff)]
     return {
+        "scope": scope,
         "path": str(path),
         "exists": True,
         "file_count": len(files),
         "byte_count": sum(item.stat().st_size for item in files),
+        "files": [str(item) for item in files],
     }
 
 
@@ -908,17 +969,17 @@ def _provider_setup_config(
 ) -> dict[str, object]:
     if timeout_seconds is not None and timeout_seconds <= 0:
         raise ConfigError("timeout_seconds must be a positive integer")
+    normalized_api_key_env = _normalize_api_key_env(api_key_env)
     if setup_kind == "anthropic":
         resolved_base_url = (base_url or "https://api.anthropic.com/v1").strip()
-        resolved_api_key_env = (api_key_env or "").strip()
-        if not resolved_api_key_env:
+        if not normalized_api_key_env:
             raise ConfigError("api_key_env is required for anthropic provider setup")
         return {
             "kind": "anthropic",
             "capabilities": capabilities,
             "base_url": resolved_base_url,
             "model": model,
-            "api_key_env": resolved_api_key_env,
+            "api_key_env": normalized_api_key_env,
             "timeout_seconds": timeout_seconds or 90,
         }
     resolved_auth = (auth or ("none" if setup_kind == "local-openai" else "bearer")).strip()
@@ -938,14 +999,22 @@ def _provider_setup_config(
         "auth": resolved_auth,
         "timeout_seconds": timeout_seconds or 60,
     }
-    resolved_api_key_env = (api_key_env or "").strip()
     if resolved_auth != "none":
-        if not resolved_api_key_env:
+        if not normalized_api_key_env:
             raise ConfigError("api_key_env is required unless auth is none")
-        provider_config["api_key_env"] = resolved_api_key_env
-    elif resolved_api_key_env:
-        provider_config["api_key_env"] = resolved_api_key_env
+        provider_config["api_key_env"] = normalized_api_key_env
+    elif normalized_api_key_env:
+        provider_config["api_key_env"] = normalized_api_key_env
     return provider_config
+
+
+def _normalize_api_key_env(api_key_env: str | None) -> str:
+    value = (api_key_env or "").strip()
+    if not value:
+        return ""
+    if not ENV_VAR_NAME_RE.fullmatch(value):
+        raise ConfigError("api_key_env must be an uppercase environment variable name like OPENROUTER_API_KEY, not a literal secret value")
+    return value
 
 
 def _provider_model_details(provider_name: str, provider_configs: dict[str, object]) -> dict[str, object]:
@@ -1064,8 +1133,10 @@ def format_triage_ci(payload: dict[str, object]) -> dict[str, object]:
                         "source_path": item["source_path"],
                         "matched_signals": item["matched_signals"],
                         "relevance": item.get("relevance", "unrelated"),
+                        "evidence_status": item.get("evidence_status", item.get("relevance", "unrelated")),
                         "score": item.get("score", 0.0),
                         "reason": item.get("reason", ""),
+                        "candidate_signals": item.get("candidate_signals", []),
                     }
                     for item in cluster["waveform_evidence"]
                 ],
@@ -1117,12 +1188,13 @@ def format_triage_human(payload: dict[str, object]) -> str:
 
 def _format_waveform_evidence(item: dict[str, object]) -> str:
     relevance = str(item.get("relevance", "unrelated"))
+    evidence_status = str(item.get("evidence_status", relevance))
     reason = str(item.get("reason", "")).strip()
     signals = ", ".join(str(signal) for signal in item.get("matched_signals", []))
     if signals:
-        detail = f"{signals}; {relevance}"
+        detail = f"{signals}; {evidence_status}"
     else:
-        detail = relevance
+        detail = evidence_status
     if reason:
         detail = f"{detail}; {reason}"
     return f"{item['source_path']} ({detail})"

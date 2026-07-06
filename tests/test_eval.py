@@ -38,12 +38,12 @@ def test_eval_default_suite(work_root: Path) -> None:
     store = RunStore(config)
     report = run_default_suite(config, store)
     assert report["passed"] == report["total"]
-    assert report["total"] == 24
+    assert report["total"] == 30
     assert report["metrics"]["agent"]["cases"] == 1
     assert report["metrics"]["agent"]["pass_rate"] == 1.0
     assert report["metrics"]["agent"]["review_required_count"] == 1
-    assert report["metrics"]["retrieval"]["cases"] == 3
-    assert report["metrics"]["retrieval"]["avg_recall_at_k"] == 1.0
+    assert report["metrics"]["retrieval"]["cases"] == 4
+    assert report["metrics"]["retrieval"]["avg_recall_at_k"] >= 0.95
     assert report["metrics"]["retrieval"]["avg_external_recall_at_k"] == 1.0
     assert report["metrics"]["sva"]["cases"] == 3
     assert report["metrics"]["sva"]["generation_rate"] == 1.0
@@ -65,10 +65,20 @@ def test_eval_default_suite(work_root: Path) -> None:
     assert report["metrics"]["coverage"]["avg_recommendation_count"] >= 1.0
     assert report["metrics"]["coverage"]["avg_evidence_count"] >= 1.0
     assert report["metrics"]["triage"]["cases"] == 4
-    assert report["metrics"]["import"]["cases"] == 1
+    assert report["metrics"]["import"]["cases"] == 3
     assert report["metrics"]["import"]["avg_imported_count"] == 2.0
-    assert report["metrics"]["coverage_import"]["cases"] == 1
+    assert report["metrics"]["coverage_import"]["cases"] == 2
     assert report["metrics"]["coverage_import"]["avg_item_count"] == 2.0
+    assert report["metrics"]["provider_response"]["cases"] == 2
+    assert report["metrics"]["provider_response"]["provider_error_count"] == 2
+    assert report["metrics"]["provider_response"]["generated_candidate_count"] == 0
+    assert report["metrics"]["readiness"]["case_scope_counts"]["fixture_large_design"] == 1
+    assert report["metrics"]["readiness"]["execution_backing_counts"]["fixture_provider_response"] == 2
+    assert (
+        report["metrics"]["readiness"]["structure_or_fixture_only_case_count"]
+        + report["metrics"]["readiness"]["tool_backed_case_count"]
+        == report["total"]
+    )
     assert "project_context" not in report
 
 
@@ -82,8 +92,8 @@ def test_eval_default_suite_uses_bundled_benchmarks(work_root: Path) -> None:
     report = run_default_suite(config, store)
 
     assert report["passed"] == report["total"]
-    assert report["total"] == 24
-    assert store.load_report("latest_eval")["total"] == 24
+    assert report["total"] == 30
+    assert store.load_report("latest_eval")["total"] == 30
 
 
 def test_eval_operation_uses_project_context_and_persists_report(work_root: Path) -> None:

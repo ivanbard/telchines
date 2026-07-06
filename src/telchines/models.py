@@ -320,8 +320,10 @@ class WaveformEvidence:
     matched_signals: list[str] = field(default_factory=list)
     excerpt: str = ""
     relevance: str = "unrelated"
+    evidence_status: str = "unrelated"
     score: float = 0.0
     reason: str = ""
+    candidate_signals: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)

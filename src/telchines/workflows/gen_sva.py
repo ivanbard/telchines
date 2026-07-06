@@ -372,7 +372,7 @@ def _run_adapter_validation(
             "adapter_result": execution.result,
             "formal_status": "not_run",
             "formal_adapter": None,
-            "command_artifacts": {},
+            "command_artifacts": dict(execution.artifacts),
             "setup_diagnostics": [],
         }
         return adapter_name, execution.command, execution.exit_code, combined, tool_result
@@ -415,6 +415,7 @@ def _run_formal_validation(
     spec = (run_spec or AdapterRunSpec(files=[candidate.rtl_path])).expanded(project_root)
     files = [*spec.files, candidate.file_path]
     top = spec.top_module or str(builtin_checks.get("dut_module") or _extract_module_name((project_root / candidate.rtl_path).read_text(encoding="utf-8")) or Path(candidate.rtl_path).stem)
+    read_lines = _sby_read_formal_lines(files, spec)
     sby_path.write_text(
         "\n".join(
             [
@@ -426,7 +427,7 @@ def _run_formal_validation(
                 "smtbmc",
                 "",
                 "[script]",
-                *(f"read -formal {path}" for path in files),
+                *read_lines,
                 f"prep -top {top}",
                 "",
                 "[files]",
@@ -436,7 +437,13 @@ def _run_formal_validation(
         ),
         encoding="utf-8",
     )
-    formal_spec = AdapterRunSpec(files=[str(sby_path.relative_to(project_root)).replace("\\", "/")], extra_args=spec.extra_args, timeout_seconds=spec.timeout_seconds)
+    formal_spec = AdapterRunSpec(
+        files=[str(sby_path.relative_to(project_root)).replace("\\", "/")],
+        work_library=spec.work_library,
+        extra_args=spec.extra_args,
+        timeout_seconds=spec.timeout_seconds,
+        env=dict(spec.env),
+    )
     try:
         execution = adapter.run(
             stable_id("run", candidate.candidate_id, adapter.name, "formal_validation"),
@@ -463,6 +470,14 @@ def _run_formal_validation(
         "setup_diagnostics": [],
     }
     return adapter.name, execution.command, execution.exit_code, combined or f"{adapter.name}: formal validation passed\n", tool_result
+
+
+def _sby_read_formal_lines(files: list[str], spec: AdapterRunSpec) -> list[str]:
+    options = ["-formal", "-sv"]
+    options.extend(f"-I{path}" for path in spec.include_dirs)
+    options.extend(f"-D{define}" for define in spec.defines)
+    option_text = " ".join(options)
+    return [f"read {option_text} {path}" for path in files]
 
 
 def _formal_setup_result(adapter_name: str, diagnostics: list[str], *, required: bool) -> tuple[str, list[str], int, str, dict[str, object]] | None:

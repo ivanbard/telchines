@@ -39,8 +39,11 @@ def test_waveform_signals_and_inspect_return_transitions(sample_project: Path) -
 
 def test_waveform_inspect_rejects_missing_signal_without_fuzzy_fallback(sample_project: Path) -> None:
     triage(sample_project, [sample_project / "logs" / "regressions"])
-    with pytest.raises(ValueError, match="signal was not found"):
+    with pytest.raises(ValueError, match="signal was not found") as excinfo:
         inspect_waveform(sample_project, "logs/regressions/uart_rx_trace.vcd", signal="rx", window=4)
+    message = str(excinfo.value)
+    assert "uart_rx_tb.serial_i" in message
+    assert "uart_rx_tb.start_seen" in message
 
 
 def test_select_signal_rejects_ambiguous_leaf_name() -> None:

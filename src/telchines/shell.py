@@ -90,7 +90,7 @@ SHELL_COMMAND_HELP = [
     ("/eval [run|report]", "Run or show benchmarks"),
     ("/doctor", "Show project/provider/adapter diagnostics"),
     ("/doctor privacy", "Show privacy and artifact-storage diagnostics"),
-    ("/artifacts [purge [--yes]|review REF]", "Report, purge, or review generated artifacts"),
+    ("/artifacts [purge [--scope NAME] [--older-than-days N] [--yes]|review REF]", "Report, purge, or review generated artifacts"),
     ("/history", "Show shell command history"),
     ("/transcript", "Show the current shell transcript"),
     ("/clear", "Clear the shell transcript"),
@@ -158,7 +158,7 @@ SHELL_COMMAND_OPTIONS = {
     "/runs import-jenkins": ("--dry-run",),
     "/waveforms signals": ("--filter",),
     "/waveforms inspect": ("--signal", "--window"),
-    "/artifacts purge": ("--yes",),
+    "/artifacts purge": ("--scope", "--older-than-days", "--yes"),
 }
 REPEATABLE_OPTIONS = {"--file", "--extra-arg", "--adapter-arg", "--filelist", "--include-dir", "--define", "--logs", "--waveform", "--rtl", "--spec"}
 
@@ -672,7 +672,10 @@ def _execute_command(session: ShellSession, parts: list[str], raw: bool) -> str 
 
     if command == "artifacts":
         if len(parts) > 1 and parts[1] == "purge":
-            payload = purge_artifacts(session.cwd, dry_run="--yes" not in parts[2:])
+            scopes = _parse_repeated_option(parts[2:], "--scope", strict=False)
+            older_than_value = _parse_optional_argument(parts[2:], "--older-than-days")
+            older_than_days = int(older_than_value) if older_than_value is not None else None
+            payload = purge_artifacts(session.cwd, dry_run="--yes" not in parts[2:], scopes=scopes or None, older_than_days=older_than_days)
             return dump_json(payload) if raw else render_artifact_purge_payload(payload)
         if len(parts) > 2 and parts[1] == "review":
             payload = review_artifact(session.cwd, reference=parts[2])
@@ -1092,13 +1095,22 @@ def render_index_status_payload(payload: dict[str, object]) -> str:
 
 def render_artifact_purge_payload(payload: dict[str, object]) -> str:
     title = "Artifact Purge Plan" if payload["dry_run"] else "Artifacts Purged"
+    scopes = payload.get("scopes") or []
     body = [
         f"status: {payload['status']}",
+        f"scopes: {', '.join(str(item) for item in scopes) or 'none'}",
+        f"older than days: {payload.get('older_than_days') if payload.get('older_than_days') is not None else 'any'}",
         f"files: {payload['file_count']}",
         f"bytes: {payload['byte_count']}",
     ]
     for target in payload["targets"][:6]:
-        body.append(f"- {target['path']} ({target['file_count']} files)")
+        body.append(f"- {target.get('scope')}: {target['path']} ({target['file_count']} files)")
+    retained = payload.get("retained_metadata") or []
+    if isinstance(retained, list) and retained:
+        body.append("retained metadata:")
+        body.extend(f"- {item}" for item in retained[:4])
+    if payload.get("privacy_note"):
+        body.append(f"note: {payload['privacy_note']}")
     return render_action_panel(title, "\n".join(body))
 
 

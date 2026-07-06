@@ -175,6 +175,7 @@ def parse_common_output(run_id: str, text: str, default_type: str = "tool_error"
                     line=int(groups["line"]) if groups.get("line") else None,
                     message=message,
                     severity=severity,
+                    metadata=_generic_metadata(line_text, groups),
                 )
             )
             break
@@ -227,3 +228,22 @@ def _normalize_severity(value: str | None, message: str) -> str:
     if lowered_message.startswith("warning") or " warning" in lowered_message:
         return "warning"
     return "error"
+
+
+def _generic_metadata(line_text: str, groups: dict[str, str | None]) -> dict[str, str]:
+    metadata = {
+        "raw_line": line_text,
+        "code": (groups.get("code") or "").strip(),
+        "column": (groups.get("column") or "").strip(),
+        "identifier": _extract_identifier(groups.get("message") or line_text),
+    }
+    return {key: value for key, value in metadata.items() if value}
+
+
+def _extract_identifier(message: str) -> str:
+    match = re.search(
+        r"(?:unknown|undeclared)\s+(?:identifier|signal|net|wire|reg)?\s*['`\"]?(?P<name>[A-Za-z_][A-Za-z0-9_$]*)",
+        message,
+        flags=re.IGNORECASE,
+    )
+    return match.group("name") if match else ""
