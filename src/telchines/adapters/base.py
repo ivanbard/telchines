@@ -155,6 +155,7 @@ class ToolAdapter:
     required_binaries: tuple[str, ...] = ()
     supported_workflows: tuple[str, ...] = ()
     artifact_types: tuple[str, ...] = ("log",)
+    setup_guidance: tuple[str, ...] = ()
 
     def is_available(self) -> bool:
         required = self.required_binaries or self.binary_names
@@ -218,6 +219,25 @@ class ToolAdapter:
             version=self.version(),
         )
 
+    def missing_binaries(self) -> list[str]:
+        required = self.required_binaries or self.binary_names
+        return [binary for binary in required if shutil.which(binary) is None]
+
+    def setup_diagnostics(self, missing: list[str] | None = None) -> list[str]:
+        missing = list(missing if missing is not None else self.missing_binaries())
+        missing_text = ", ".join(missing) if missing else self.name
+        diagnostics = [f"Install/configure {self.name} and ensure these binaries are on PATH: {missing_text}"]
+        diagnostics.extend(self.setup_guidance)
+        if self.binary_names:
+            diagnostics.append(f"Verify with: {next(iter(self.binary_names))} --version")
+        return diagnostics
+
+    def unavailable_message(self) -> str:
+        missing = self.missing_binaries()
+        missing_text = ", ".join(missing) or ", ".join(self.required_binaries or self.binary_names) or self.name
+        diagnostics = "; ".join(self.setup_diagnostics(missing))
+        return f"{self.name} is not available on PATH; missing required binaries: {missing_text}. {diagnostics}"
+
     def run(
         self,
         run_id: str,
@@ -232,8 +252,7 @@ class ToolAdapter:
         if not run_spec.files:
             raise AdapterExecutionError(f"{self.name} requires at least one input file")
         if not self.is_available():
-            binaries = ", ".join(self.binary_names) or self.name
-            raise AdapterExecutionError(f"{self.name} is not available on PATH; expected one of: {binaries}")
+            raise AdapterExecutionError(self.unavailable_message())
         started_at = utc_now()
         try:
             run_kwargs: dict[str, Any] = {"cwd": project_root, "capture_output": True, "text": True, "check": False}

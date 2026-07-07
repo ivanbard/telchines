@@ -286,7 +286,11 @@ def validate_cocotb_candidate(config: ProjectConfig, store: RunStore, candidate:
                 "setup_diagnostics": smoke["setup_diagnostics"],
                 "limitations": [
                     *([] if smoke["executable_status"] == "passed" else ["built-in validation did not complete a simulator run"]),
-                    "executable cocotb smoke requires optional cocotb, make, and simulator tooling",
+                    *(
+                        []
+                        if smoke["executable_status"] == "passed"
+                        else ["executable cocotb smoke requires optional cocotb, make, and simulator tooling"]
+                    ),
                 ],
             },
             observation_ids=[observation.observation_id for observation in observations],
@@ -360,6 +364,8 @@ def _run_executable_smoke(
         return _smoke_skipped(["generation.cocotb.executable_smoke is off"])
     simulator, diagnostics = _select_cocotb_simulator(str(section.get("simulator", "auto")))
     diagnostics.extend(_cocotb_common_missing())
+    makefiles_dir, makefiles_diagnostics = _cocotb_makefiles_dir()
+    diagnostics.extend(makefiles_diagnostics)
     if diagnostics:
         status = "failed" if mode == "required" else "skipped"
         return {
@@ -372,9 +378,10 @@ def _run_executable_smoke(
     module_name = Path(candidate.file_path).stem
     spec = (run_spec or AdapterRunSpec(files=[candidate.dut_path])).expanded(temp_root)
     verilog_sources = spec.files or [candidate.dut_path]
-    source_paths = [str((temp_root / path).resolve()) for path in verilog_sources]
+    source_paths = [_makefile_path((temp_root / path).resolve()) for path in verilog_sources]
     compile_args = [*(f"-I{path}" for path in spec.include_dirs), *(f"-D{define}" for define in spec.defines), *spec.extra_args]
     toplevel = spec.top_module or candidate.top_module
+    makefile_sim = _makefile_path(makefiles_dir / "Makefile.sim")
     makefile.write_text(
         "\n".join(
             [
@@ -384,17 +391,21 @@ def _run_executable_smoke(
                 f"TOPLEVEL = {toplevel}",
                 f"MODULE = {module_name}",
                 f"COMPILE_ARGS += {' '.join(compile_args)}" if compile_args else "",
-                "include $(shell cocotb-config --makefiles)/Makefile.sim",
+                f"include {makefile_sim}",
                 "",
             ]
         ),
         encoding="utf-8",
     )
-    command = ["make", "-f", str(makefile), f"SIM={simulator}"]
+    python_bin = _cocotb_python_bin_for_make()
+    command = ["make", "-f", _makefile_path(makefile), f"SIM={simulator}", f"PYTHON_BIN={python_bin}"]
     env = os.environ.copy()
     env.update(spec.env)
+    _prepend_cocotb_smoke_path(env)
     env["PYTHONPATH"] = str((temp_root / candidate.file_path).parent.resolve()) + os.pathsep + env.get("PYTHONPATH", "")
     environment_summary = _cocotb_environment_summary(spec.env, env["PYTHONPATH"], temp_root)
+    environment_summary["COCOTB_MAKEFILES"] = _summarize_path(str(makefiles_dir), temp_root)
+    environment_summary["PYTHON_BIN"] = python_bin
     try:
         result = subprocess.run(command, cwd=temp_root, env=env, capture_output=True, text=True, check=False, timeout=120)
     except subprocess.TimeoutExpired:
@@ -428,11 +439,72 @@ def _select_cocotb_simulator(preferred: str) -> tuple[str | None, list[str]]:
 def _cocotb_common_missing() -> list[str]:
     missing: list[str] = []
     if importlib.util.find_spec("cocotb") is None:
-        missing.append("python package cocotb is not installed")
-    for binary in ("cocotb-config", "make"):
-        if shutil.which(binary) is None:
-            missing.append(f"{binary} is not available on PATH")
+        missing.append('python package cocotb is not installed; run python -m pip install -e ".[cocotb-smoke]"')
+    if shutil.which("make") is None:
+        missing.append("make is not available on PATH")
     return missing
+
+
+def _cocotb_makefiles_dir() -> tuple[Path, list[str]]:
+    command = ["cocotb-config", "--makefiles"] if shutil.which("cocotb-config") else [sys.executable, "-m", "cocotb_tools.config", "--makefiles"]
+    if command[0] == sys.executable and importlib.util.find_spec("cocotb_tools.config") is None:
+        return Path(), ["cocotb makefiles are not discoverable via cocotb-config or python -m cocotb_tools.config --makefiles"]
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, check=False, timeout=15)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return Path(), [f"failed to query cocotb makefiles with {' '.join(command)}: {exc}"]
+    makefiles = result.stdout.strip().splitlines()[0] if result.stdout.strip() else ""
+    if result.returncode != 0 or not makefiles:
+        detail = (result.stderr or result.stdout).strip()
+        suffix = f": {detail}" if detail else ""
+        return Path(), [f"failed to query cocotb makefiles with {' '.join(command)}{suffix}"]
+    makefiles_dir = Path(makefiles)
+    if not (makefiles_dir / "Makefile.sim").exists():
+        return Path(), [f"cocotb Makefile.sim was not found under {makefiles_dir}"]
+    return makefiles_dir, []
+
+
+def _prepend_cocotb_smoke_path(env: dict[str, str]) -> None:
+    entries: list[str] = []
+    make_path = shutil.which("make")
+    if make_path:
+        entries.append(str(Path(make_path).resolve().parent))
+    entries.append(str(Path(sys.executable).resolve().parent))
+    existing = env.get("PATH", "")
+    env["PATH"] = os.pathsep.join([*entries, existing]) if existing else os.pathsep.join(entries)
+
+
+def _cocotb_python_bin_for_make() -> str:
+    return _makefile_path(Path(sys.executable).resolve())
+
+
+def _makefile_path(path: Path) -> str:
+    original = path.as_posix()
+    if os.name == "nt" and original.startswith("/") and not original.startswith("//"):
+        return original
+    resolved = path.resolve()
+    if _make_uses_msys():
+        converted = _cygpath(resolved)
+        if converted:
+            return converted
+    return resolved.as_posix()
+
+
+def _make_uses_msys() -> bool:
+    make_path = shutil.which("make") or ""
+    normalized = make_path.replace("\\", "/").lower()
+    return "msys" in normalized or "mingw" in normalized
+
+
+def _cygpath(path: Path) -> str:
+    cygpath = shutil.which("cygpath")
+    if cygpath is None:
+        return ""
+    try:
+        result = subprocess.run([cygpath, "-u", str(path)], capture_output=True, text=True, check=False, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    return result.stdout.strip() if result.returncode == 0 else ""
 
 
 def _smoke_not_attempted() -> dict[str, object]:
@@ -466,7 +538,7 @@ def _summarize_path(path: str, root: Path) -> str:
     try:
         return str(Path(path).resolve().relative_to(root.resolve())).replace("\\", "/")
     except ValueError:
-        return path
+        return path.replace("\\", "/")
 
 
 def _default_cocotb_output_dir(config: ProjectConfig) -> str:

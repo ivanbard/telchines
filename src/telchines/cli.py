@@ -588,7 +588,7 @@ def providers_setup(
     name: str = typer.Argument(...),
     kind: str = typer.Option(..., "--kind", help="Provider setup kind: openai-compatible, anthropic, or local-openai."),
     capability: Optional[list[str]] = typer.Option(None, "--capability", help="Capability to enable; repeat for repair and generation."),
-    model: str = typer.Option(..., "--model", help="Model identifier to store in config."),
+    model: Optional[str] = typer.Option(None, "--model", help="Model identifier to store in config."),
     base_url: Optional[str] = typer.Option(None, "--base-url", help="Provider base URL."),
     api_key_env: Optional[str] = typer.Option(None, "--api-key-env", help="Environment variable that holds the API key."),
     auth: Optional[str] = typer.Option(None, "--auth", help="Auth mode for OpenAI-compatible providers: bearer or none."),

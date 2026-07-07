@@ -16,7 +16,7 @@ from urllib.parse import urlparse
 from telchines.agent_runtime import LangGraphRepairRuntime, runtime_capability
 from telchines.config import ProjectConfig
 from telchines.errors import ConfigError, ProviderError, WorkflowInputError
-from telchines.model_catalog import provider_model_metadata
+from telchines.model_catalog import DEFAULT_ANTHROPIC_MODEL, DEFAULT_OPENAI_API_MODEL, provider_model_metadata
 from telchines.models import CocotbCandidate, CocotbPort, Observation, PatchProposal, RetrievalContext, SvaCandidate, SvaProperty, VerificationRun
 from telchines.utils import stable_id
 
@@ -649,6 +649,20 @@ class ProviderRegistry:
                 checks=checks,
                 **model_fields,
             )
+        model_readiness = _provider_model_readiness(provider_name, provider_config)
+        checks["model"] = model_readiness or {"status": "passed", **model_fields}
+        if model_readiness is not None:
+            return ProviderCheck(
+                name=provider_name,
+                kind=kind,
+                status="failed",
+                allowed=True,
+                summary=str(model_readiness["summary"]),
+                capabilities=capabilities,
+                default_for=default_for,
+                checks=checks,
+                **model_fields,
+            )
         if not live:
             checks["transport"] = {"status": "skipped", "reason": "offline check requested", **_transport_model_fields(model_fields)}
             return ProviderCheck(
@@ -1120,6 +1134,9 @@ def _invoke_local_command(provider_name: str, config: dict[str, Any], project_ro
 def _check_provider_transport(provider_name: str, config: dict[str, Any], project_root: Path) -> dict[str, Any]:
     kind = config.get("kind")
     model_metadata = provider_model_metadata(provider_name, config)
+    model_readiness = _provider_model_readiness(provider_name, config)
+    if model_readiness is not None:
+        raise ProviderError(str(model_readiness["summary"]))
     if kind == "heuristic":
         return {"status": "passed", "mode": "builtin", **_transport_model_fields(model_metadata)}
     if kind == "local_command":
@@ -1203,6 +1220,41 @@ def _transport_model_fields(metadata: dict[str, Any]) -> dict[str, Any]:
 
 def _provider_check_model_fields(metadata: dict[str, Any]) -> dict[str, Any]:
     return _transport_model_fields(metadata)
+
+
+def _provider_model_readiness(provider_name: str, config: dict[str, Any]) -> dict[str, Any] | None:
+    kind = config.get("kind")
+    if kind not in {"openai_compatible", "anthropic"}:
+        return None
+    if str(config.get("model") or "").strip():
+        return None
+    suggestion = _default_model_suggestion(config)
+    model_env = _model_env_suggestion(config)
+    return {
+        "status": "failed",
+        "reason": "missing_model",
+        "model_env": model_env,
+        "default_model_suggestion": suggestion,
+        "summary": f"provider {provider_name} is missing model: configure model or set {model_env}; suggested default: {suggestion}",
+    }
+
+
+def _default_model_suggestion(config: dict[str, Any]) -> str:
+    if config.get("kind") == "anthropic":
+        return DEFAULT_ANTHROPIC_MODEL
+    return DEFAULT_OPENAI_API_MODEL
+
+
+def _model_env_suggestion(config: dict[str, Any]) -> str:
+    configured = config.get("model_env")
+    if isinstance(configured, str) and configured.strip():
+        return configured.strip()
+    if config.get("kind") == "anthropic":
+        return "TELCHINES_ANTHROPIC_MODEL"
+    base_url = str(config.get("base_url") or "")
+    if "api.openai.com" in base_url:
+        return "TELCHINES_OPENAI_MODEL"
+    return "TELCHINES_PROVIDER_MODEL"
 
 
 def _agent_runtime_transport(config: dict[str, Any]) -> dict[str, Any]:

@@ -23,6 +23,22 @@ tel adapters check --category simulation
 ```
 
 The command prints JSON and exits nonzero when a selected adapter is missing required binaries.
+Missing open-source tools include `setup_diagnostics` with platform-oriented hints. Telchines only reports these
+instructions; it does not install simulators, linters, formal engines, or commercial tools for you.
+
+Common open-source setup routes:
+
+- Verilator: install from your Linux package manager, build from upstream, or use the MSYS2 UCRT64 package on Windows.
+- Slang: install a `slang` command from upstream prebuilt releases or build it from source. The Python-only `pyslang` package is not enough unless it also puts `slang` on `PATH`.
+- SymbiYosys: install `sby` through OSS CAD Suite or from the YosysHQ `sby` source tree with Yosys and solvers available.
+
+After setup, restart the shell and rerun:
+
+```bash
+tel adapters check verilator
+tel adapters check slang
+tel adapters check symbiyosys
+```
 
 Adapter-backed commands accept compile context through `--filelist`, `--include-dir`, `--define`, `--top`, `--worklib`, and `--adapter-arg`. Filelists support blank lines, comments, source paths, `+incdir+...`, and `+define+...`. Telchines stores the expanded run spec, command argv, cwd, adapter version, and redacted env summary in run metadata.
 
@@ -82,13 +98,24 @@ These are roadmap items, not `v1` release blockers.
 Mocked tests cover command construction and parsing. For real binaries, run:
 
 ```bash
-python scripts/tool_smoke.py --adapters verilator iverilog
+python scripts/tool_smoke.py --adapters verilator iverilog slang symbiyosys --allow-missing
 ```
 
 The script creates tiny SystemVerilog fixtures in a temporary directory and runs:
 
 - `verilator --lint-only` through the Verilator adapter
 - `iverilog` plus `vvp` through the Icarus adapter
+- `slang --lint-only` through the Slang adapter
+- `sby` against a bounded `smoke_counter.sby` file through the SymbiYosys adapter
 - filelist/include/define/top command construction for adapters that support it
+
+To include Telchines' executable cocotb smoke path in the same manual check, install the optional dependency and add `--cocotb`:
+
+```bash
+python -m pip install -e ".[cocotb-smoke]"
+python scripts/tool_smoke.py --adapters iverilog --cocotb
+```
+
+The cocotb lane creates a tiny counter DUT, validates a generated cocotb test with `generation.cocotb.executable_smoke=required`, and reports setup diagnostics when cocotb, its makefiles, `make`, Icarus, or `vvp` are missing. Telchines accepts cocotb makefile discovery through `cocotb-config` or `python -m cocotb_tools.config`, which helps Python 3.13 environments where the console script shim is absent.
 
 There is also a manual GitHub Actions workflow, `.github/workflows/tool-smoke.yml`, that installs Verilator and Icarus on Ubuntu and runs the same script. It is intentionally `workflow_dispatch` so normal CI remains lightweight while real-tool checks are available before releases.

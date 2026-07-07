@@ -9,6 +9,7 @@ import tempfile
 import time
 from dataclasses import asdict
 from pathlib import Path
+from urllib.parse import urlparse
 
 from telchines.adapters.base import AdapterRunSpec
 from telchines.ci_importers import import_ci_runs
@@ -19,6 +20,8 @@ from telchines.config import ProjectConfig
 from telchines.eval import run_default_suite
 from telchines.import_manifest import import_regression_manifest
 from telchines.model_catalog import (
+    DEFAULT_ANTHROPIC_MODEL,
+    DEFAULT_OPENAI_API_MODEL,
     list_model_options as list_model_options_catalog,
     set_default_provider as set_default_provider_catalog,
     set_provider_model as set_provider_model_catalog,
@@ -32,7 +35,7 @@ from telchines.retrieval import RetrievalService
 from telchines.run_store import RunStore
 from telchines.utils import SECRET_KEY_RE, dataclass_to_dict, ensure_directory, read_json, remove_tree, stable_id, utc_now
 from telchines.workflows.agent import execute_agent
-from telchines.workflows.coverage import execute_coverage_plan, format_coverage_human
+from telchines.workflows.coverage import execute_coverage_plan, format_coverage_human  # noqa: F401
 from telchines.workflows.gen_cocotb import execute_cocotb_generation
 from telchines.workflows.gen_sva import execute_generation
 from telchines.workflows.repair import execute_repair
@@ -388,7 +391,7 @@ def check_adapters(root: Path | None = None, adapter_name: str | None = None, ca
                 "summary": "adapter is available" if descriptor.available else f"missing required binaries: {', '.join(missing)}",
                 "command_preview": command_preview,
                 "timeout_default_seconds": None,
-                "setup_diagnostics": [] if descriptor.available else [_adapter_setup_hint(descriptor.name, missing)],
+                "setup_diagnostics": [] if descriptor.available else adapter.setup_diagnostics(missing),
             }
         )
     return {"adapters": checks}
@@ -396,11 +399,6 @@ def check_adapters(root: Path | None = None, adapter_name: str | None = None, ca
 
 def _binary_available(binary: str) -> bool:
     return shutil.which(binary) is not None
-
-
-def _adapter_setup_hint(adapter_name: str, missing: list[str]) -> str:
-    missing_text = ", ".join(missing) if missing else adapter_name
-    return f"install/configure {adapter_name} and ensure these binaries are on PATH: {missing_text}"
 
 
 def list_runs(root: Path | None = None) -> list[dict[str, object]]:
@@ -883,7 +881,7 @@ def setup_provider(
     *,
     kind: str,
     capabilities: list[str] | None = None,
-    model: str,
+    model: str | None = None,
     base_url: str | None = None,
     api_key_env: str | None = None,
     auth: str | None = None,
@@ -897,9 +895,6 @@ def setup_provider(
     normalized_kind = kind.strip().lower().replace("_", "-")
     if normalized_kind not in {"openai-compatible", "anthropic", "local-openai"}:
         raise ConfigError("provider setup kind must be openai-compatible, anthropic, or local-openai")
-    model = model.strip()
-    if not model:
-        raise ConfigError("model must be non-empty")
     selected_capabilities = _normalize_provider_setup_capabilities(capabilities)
     provider_config = _provider_setup_config(
         normalized_kind,
@@ -926,6 +921,9 @@ def setup_provider(
     next_steps = []
     if provider_config.get("auth") != "none" and provider_config.get("api_key_env"):
         next_steps.append(f"Set {provider_config['api_key_env']} in your shell or ignored .env file.")
+    model_env_hint = _provider_setup_model_env_hint(normalized_kind, provider_config)
+    if model_env_hint:
+        next_steps.append(f"Override the default model with `{model_env_hint}` or `tel providers set-model {provider_name} MODEL` when needed.")
     next_steps.append(f"Run `tel providers check {provider_name}`.")
     if not select_defaults:
         for capability in selected_capabilities:
@@ -961,7 +959,7 @@ def _provider_setup_config(
     setup_kind: str,
     capabilities: list[str],
     *,
-    model: str,
+    model: str | None,
     base_url: str | None,
     api_key_env: str | None,
     auth: str | None,
@@ -974,11 +972,12 @@ def _provider_setup_config(
         resolved_base_url = (base_url or "https://api.anthropic.com/v1").strip()
         if not normalized_api_key_env:
             raise ConfigError("api_key_env is required for anthropic provider setup")
+        resolved_model = _resolve_provider_setup_model(setup_kind, model, resolved_base_url)
         return {
             "kind": "anthropic",
             "capabilities": capabilities,
             "base_url": resolved_base_url,
-            "model": model,
+            "model": resolved_model,
             "api_key_env": normalized_api_key_env,
             "timeout_seconds": timeout_seconds or 90,
         }
@@ -991,11 +990,12 @@ def _provider_setup_config(
             raise ConfigError("base_url is required for openai-compatible provider setup")
     else:
         resolved_base_url = (base_url or "http://127.0.0.1:11434/v1").strip()
+    resolved_model = _resolve_provider_setup_model(setup_kind, model, resolved_base_url)
     provider_config: dict[str, object] = {
         "kind": "openai_compatible",
         "capabilities": capabilities,
         "base_url": resolved_base_url,
-        "model": model,
+        "model": resolved_model,
         "auth": resolved_auth,
         "timeout_seconds": timeout_seconds or 60,
     }
@@ -1006,6 +1006,35 @@ def _provider_setup_config(
     elif normalized_api_key_env:
         provider_config["api_key_env"] = normalized_api_key_env
     return provider_config
+
+
+def _resolve_provider_setup_model(setup_kind: str, model: str | None, base_url: str) -> str:
+    value = (model or "").strip()
+    if value:
+        return value
+    if setup_kind == "anthropic":
+        return DEFAULT_ANTHROPIC_MODEL
+    if setup_kind == "openai-compatible" and _is_official_openai_base_url(base_url):
+        return DEFAULT_OPENAI_API_MODEL
+    if setup_kind == "openai-compatible":
+        raise ConfigError(
+            "model is required for openai-compatible provider setup unless base_url is https://api.openai.com/v1; "
+            f"for official OpenAI, suggested default is {DEFAULT_OPENAI_API_MODEL}"
+        )
+    raise ConfigError("model is required for local-openai provider setup")
+
+
+def _is_official_openai_base_url(base_url: str) -> bool:
+    parsed = urlparse(base_url)
+    return parsed.scheme in {"http", "https"} and parsed.netloc.lower() == "api.openai.com"
+
+
+def _provider_setup_model_env_hint(setup_kind: str, provider_config: dict[str, object]) -> str:
+    if setup_kind == "anthropic":
+        return "TELCHINES_ANTHROPIC_MODEL"
+    if setup_kind == "openai-compatible" and _is_official_openai_base_url(str(provider_config.get("base_url") or "")):
+        return "TELCHINES_OPENAI_MODEL"
+    return ""
 
 
 def _normalize_api_key_env(api_key_env: str | None) -> str:

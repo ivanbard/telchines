@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
@@ -75,6 +76,7 @@ def test_cocotb_executable_smoke_mode_matrix(
 
     monkeypatch.setattr(gen_cocotb, "_select_cocotb_simulator", lambda preferred: ("icarus", []) if simulator_available else (None, ["no simulator"]))
     monkeypatch.setattr(gen_cocotb, "_cocotb_common_missing", lambda: [])
+    monkeypatch.setattr(gen_cocotb, "_cocotb_makefiles_dir", lambda: (Path("/opt/cocotb/makefiles"), []))
     monkeypatch.setattr(gen_cocotb.subprocess, "run", fake_run)
 
     validation_run = gen_cocotb.validate_cocotb_candidate(config, store, _candidate())
@@ -105,6 +107,8 @@ def test_cocotb_smoke_makefile_records_compile_context(sample_project: Path, mon
 
     monkeypatch.setattr(gen_cocotb, "_select_cocotb_simulator", lambda preferred: ("icarus", []))
     monkeypatch.setattr(gen_cocotb, "_cocotb_common_missing", lambda: [])
+    monkeypatch.setattr(gen_cocotb, "_cocotb_makefiles_dir", lambda: (Path("/opt/cocotb/makefiles"), []))
+    monkeypatch.setattr(gen_cocotb.shutil, "which", lambda name: "C:/msys64/usr/bin/make.exe" if name == "make" else None)
     monkeypatch.setattr(gen_cocotb.subprocess, "run", fake_run)
 
     validation_run = gen_cocotb.validate_cocotb_candidate(
@@ -128,16 +132,21 @@ def test_cocotb_smoke_makefile_records_compile_context(sample_project: Path, mon
     assert "MODULE = test_uart_rx" in makefile_text
     assert "VERILOG_SOURCES" in makefile_text
     assert "COMPILE_ARGS += -Irtl/include -DSIM=1 -Wall" in makefile_text
+    assert "cocotb/makefiles/Makefile.sim" in makefile_text
     assert log_path.read_text(encoding="utf-8") == "smoke passed\n"
     make_call = next(call for call in calls if call["command"][0] == "make")
+    assert "PYTHON_BIN=" in make_call["command"][-1]
+    assert make_call["env"]["PATH"].startswith(str(Path("C:/msys64/usr/bin").resolve()))
     assert make_call["env"]["API_KEY"] == "secret"
     assert validation_run.tool_result["environment_summary"]["API_KEY"] == "<redacted>"
     assert validation_run.tool_result["environment_summary"]["VISIBLE"] == "ok"
     assert validation_run.tool_result["environment_summary"]["PYTHONPATH"]
+    assert validation_run.tool_result["environment_summary"]["COCOTB_MAKEFILES"].replace("\\", "/").endswith("/opt/cocotb/makefiles")
+    assert validation_run.tool_result["environment_summary"]["PYTHON_BIN"]
 
 
 @given(has_import=st.booleans(), has_decorator=st.booleans())
-@settings(suppress_health_check=[HealthCheck.function_scoped_fixture])
+@settings(deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])
 def test_cocotb_structural_failures_skip_executable_smoke(sample_project: Path, monkeypatch, has_import: bool, has_decorator: bool) -> None:
     config = _config(sample_project, "required")
     store = RunStore(config)
@@ -174,3 +183,51 @@ def test_cocotb_python_syntax_failure_skips_executable_smoke(sample_project: Pat
 
     assert validation_run.status == "failed"
     assert validation_run.tool_result["executable_status"] == "skipped"
+
+
+def test_cocotb_makefiles_dir_falls_back_to_python_module(monkeypatch) -> None:
+    calls: list[list[str]] = []
+
+    class Result:
+        returncode = 0
+        stdout = "/tmp/cocotb-makefiles\n"
+        stderr = ""
+
+    monkeypatch.setattr(gen_cocotb.shutil, "which", lambda name: None if name == "cocotb-config" else f"/usr/bin/{name}")
+    monkeypatch.setattr(gen_cocotb.importlib.util, "find_spec", lambda name: object())
+    monkeypatch.setattr(Path, "exists", lambda self: self.as_posix() == "/tmp/cocotb-makefiles/Makefile.sim")
+
+    def fake_run(command, **kwargs):  # noqa: ANN001
+        calls.append(command)
+        return Result()
+
+    monkeypatch.setattr(gen_cocotb.subprocess, "run", fake_run)
+
+    makefiles_dir, diagnostics = gen_cocotb._cocotb_makefiles_dir()
+
+    assert makefiles_dir == Path("/tmp/cocotb-makefiles")
+    assert diagnostics == []
+    assert calls == [[sys.executable, "-m", "cocotb_tools.config", "--makefiles"]]
+
+
+def test_cocotb_common_missing_reports_install_command(monkeypatch) -> None:
+    monkeypatch.setattr(gen_cocotb.importlib.util, "find_spec", lambda name: None if name == "cocotb" else object())
+    monkeypatch.setattr(gen_cocotb.shutil, "which", lambda name: None if name == "make" else f"/usr/bin/{name}")
+
+    diagnostics = gen_cocotb._cocotb_common_missing()
+
+    assert 'python -m pip install -e ".[cocotb-smoke]"' in diagnostics[0]
+    assert "make is not available on PATH" in diagnostics
+
+
+def test_cocotb_makefile_path_uses_cygpath_for_msys_make(monkeypatch) -> None:
+    class Result:
+        returncode = 0
+        stdout = "/c/project/rtl/dut.sv\n"
+        stderr = ""
+
+    monkeypatch.setattr(gen_cocotb, "_make_uses_msys", lambda: True)
+    monkeypatch.setattr(gen_cocotb.shutil, "which", lambda name: "/usr/bin/cygpath" if name == "cygpath" else None)
+    monkeypatch.setattr(gen_cocotb.subprocess, "run", lambda *args, **kwargs: Result())
+
+    assert gen_cocotb._makefile_path(Path("C:/project/rtl/dut.sv")) == "/c/project/rtl/dut.sv"

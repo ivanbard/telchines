@@ -407,6 +407,7 @@ def _run_formal_validation(
         diagnostics.append(f"{adapter.name} does not support formal_validation")
     if not adapter.is_available():
         diagnostics.append(f"{adapter.name} is not available on PATH")
+        diagnostics.extend(adapter.setup_diagnostics())
     if diagnostics:
         return _formal_setup_result(adapter.name, diagnostics, required=mode == "required")
 

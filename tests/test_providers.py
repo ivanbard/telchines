@@ -25,6 +25,7 @@ from telchines.providers import (
     _extract_anthropic_response_content,
     _extract_json_object,
     _extract_openai_response_content,
+    _invoke_openai_compatible,
     _invoke_anthropic,
     _invoke_local_command,
     _openai_compatible_url,
@@ -327,6 +328,57 @@ def test_invoke_anthropic_uses_messages_endpoint_headers_and_body(monkeypatch: p
     assert json.loads(body["messages"][0]["content"])["workflow_type"] == "provider_check"
 
 
+def test_invoke_openai_compatible_uses_responses_endpoint_headers_and_body(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: dict[str, object] = {}
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self) -> bytes:
+            return b'{"output_text":"{\\"status\\":\\"ok\\"}"}'
+
+    def fake_urlopen(http_request, timeout: int):
+        seen["url"] = http_request.full_url
+        seen["timeout"] = timeout
+        seen["headers"] = {key.lower(): value for key, value in http_request.header_items()}
+        seen["body"] = json.loads(http_request.data.decode("utf-8"))
+        return Response()
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-token")
+    monkeypatch.setattr(providers_module.request, "urlopen", fake_urlopen)
+    payload = _build_openai_compatible_payload(
+        {"model": "gpt-5.5", "endpoint": "responses"},
+        "Return JSON.",
+        {"workflow_type": "provider_check"},
+    )
+
+    response = _invoke_openai_compatible(
+        "mock-openai",
+        {
+            "base_url": "https://api.openai.com/v1",
+            "endpoint": "responses",
+            "model": "gpt-5.5",
+            "timeout_seconds": 7,
+        },
+        payload,
+    )
+
+    headers = seen["headers"]
+    body = seen["body"]
+    assert response["output_text"] == '{"status":"ok"}'
+    assert seen["url"] == "https://api.openai.com/v1/responses"
+    assert seen["timeout"] == 7
+    assert headers["authorization"] == "Bearer test-token"
+    assert body["model"] == "gpt-5.5"
+    assert body["instructions"] == "Return JSON."
+    assert json.loads(body["input"])["workflow_type"] == "provider_check"
+    assert "test-token" not in json.dumps(body)
+
+
 def test_invoke_anthropic_404_error_is_sanitized_and_actionable(monkeypatch: pytest.MonkeyPatch) -> None:
     def fake_urlopen(http_request, timeout: int):
         raise url_error.HTTPError(http_request.full_url, 404, "Not Found", {}, None)
@@ -349,6 +401,59 @@ def test_invoke_anthropic_404_error_is_sanitized_and_actionable(monkeypatch: pyt
     assert "HTTP 404 from https://api.anthropic.com/v1/messages" in message
     assert "base_url, endpoint, and model" in message
     assert "test-token" not in message
+
+
+def test_provider_check_missing_model_reports_default_and_env_without_secret(sample_project: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "super-secret-token")
+    config = ProjectConfig.load(sample_project)
+    config.project.model_policy = {
+        "default_provider_by_capability": {"repair": "openai"},
+        "providers": {
+            "openai": {
+                "kind": "openai_compatible",
+                "capabilities": ["repair"],
+                "base_url": "https://api.openai.com/v1",
+                "endpoint": "responses",
+                "model_env": "TELCHINES_OPENAI_MODEL",
+                "api_key_env": "OPENAI_API_KEY",
+            }
+        },
+    }
+
+    check = ProviderRegistry(config).check("openai", live=True)
+
+    encoded = json.dumps(check.checks)
+    assert check.status == "failed"
+    assert check.checks["model"]["reason"] == "missing_model"
+    assert check.checks["model"]["model_env"] == "TELCHINES_OPENAI_MODEL"
+    assert check.checks["model"]["default_model_suggestion"] == "gpt-5.5"
+    assert "super-secret-token" not in encoded
+    assert "OPENAI_API_KEY" not in encoded
+
+
+def test_provider_check_missing_credentials_is_distinct_from_model(sample_project: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    config = ProjectConfig.load(sample_project)
+    config.project.model_policy = {
+        "default_provider_by_capability": {"repair": "openai"},
+        "providers": {
+            "openai": {
+                "kind": "openai_compatible",
+                "capabilities": ["repair"],
+                "base_url": "https://api.openai.com/v1",
+                "endpoint": "responses",
+                "model": "gpt-5.5",
+                "api_key_env": "OPENAI_API_KEY",
+            }
+        },
+    }
+
+    check = ProviderRegistry(config).check("openai", live=True)
+
+    assert check.status == "failed"
+    assert check.checks["model"]["status"] == "passed"
+    assert check.checks["transport"]["status"] == "failed"
+    assert check.checks["transport"]["error"] == "provider openai is missing credentials: set OPENAI_API_KEY"
 
 
 @settings(max_examples=20)

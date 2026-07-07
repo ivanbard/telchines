@@ -80,6 +80,15 @@ tel gen-sva --spec docs/uart.md --rtl rtl/uart_rx.sv
 
 The JSON result includes `validation_mode`, `validation_status`, `validation_limitations`, `formal_status`, `command_artifacts`, and `setup_diagnostics`. Built-in SVA validation checks structure and obvious bind references; when Slang or Verilator is enabled and available, Telchines also runs adapter-backed parser/lint validation. SymbiYosys formal execution is attempted when configured and available.
 
+Check optional open-source EDA tools before relying on adapter-backed validation:
+
+```bash
+tel adapters check
+python scripts/tool_smoke.py --allow-missing
+```
+
+Missing Verilator, Slang, or SymbiYosys entries include Windows/MSYS2, Linux, source, or OSS CAD Suite setup hints where applicable. These are diagnostics only; Telchines expects the selected tool binaries to be installed externally and visible on `PATH`.
+
 Generate a cocotb scaffold:
 
 ```bash
@@ -87,6 +96,15 @@ tel gen-cocotb --dut rtl/uart_rx.sv --spec docs/uart.md --intent "smoke the star
 ```
 
 The default cocotb path always runs `syntax_plus_structure`, which uses `py_compile` and confirms basic cocotb test shape. When cocotb, make, and an enabled simulator are available, Telchines also attempts an executable smoke and reports `compile_and_run`. Naming, output directories, and real-tool modes can be configured in `.tel/config.json` under `generation.sva` and `generation.cocotb`; see `docs/generated-artifacts.md`.
+
+To enable executable cocotb smoke locally or in CI, install the optional dependency and run the explicit smoke lane:
+
+```bash
+python -m pip install -e ".[cocotb-smoke]"
+python scripts/tool_smoke.py --adapters iverilog --cocotb
+```
+
+This requires `make`, `iverilog`, and `vvp`. Cocotb makefiles may be discovered through either `cocotb-config` or `python -m cocotb_tools.config`, so Python environments without the console-script shim can still run.
 
 Plan coverage closure:
 

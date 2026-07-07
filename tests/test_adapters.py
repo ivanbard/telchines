@@ -10,6 +10,7 @@ from telchines.adapters.base import AdapterRunSpec, ToolAdapter
 from telchines.adapters.open_tools import IcarusAdapter, SlangAdapter, SymbiYosysAdapter, VeribleAdapter, VerilatorAdapter
 from telchines.adapters.registry import AdapterRegistry
 from telchines.errors import AdapterExecutionError
+from telchines.operations import check_adapters
 
 
 SV_IDENTIFIER = st.from_regex(r"[A-Za-z_][A-Za-z0-9_]{0,12}", fullmatch=True).filter(lambda value: value not in {"module", "endmodule"})
@@ -115,6 +116,85 @@ def test_adapter_parser_handles_realistic_tool_output_shapes() -> None:
     assert parsed["verible"][0].signature == "SV_GENERIC_SYNTAX_ERROR"
     assert parsed["symbiyosys"][0].signature == "ASSERTION_FAILURE"
     assert (parsed["symbiyosys"][0].file or "").replace("\\", "/") == "rtl/uart_tx.sv"
+
+
+def test_adapter_check_reports_actionable_open_tool_setup_guidance(sample_project: Path, monkeypatch) -> None:
+    monkeypatch.setattr("telchines.adapters.base.shutil.which", lambda _: None)
+    monkeypatch.setattr("telchines.operations.shutil.which", lambda _: None)
+
+    checks = {item["name"]: item for item in check_adapters(sample_project)["adapters"]}
+
+    assert checks["verilator"]["status"] == "missing"
+    assert checks["verilator"]["missing_binaries"] == ["verilator"]
+    assert any("MSYS2" in item for item in checks["verilator"]["setup_diagnostics"])
+    assert checks["slang"]["missing_binaries"] == ["slang"]
+    assert any("github.com/MikePopoloski/slang/releases" in item for item in checks["slang"]["setup_diagnostics"])
+    assert checks["symbiyosys"]["missing_binaries"] == ["sby"]
+    assert any("OSS CAD Suite" in item for item in checks["symbiyosys"]["setup_diagnostics"])
+
+
+def test_open_tool_missing_binary_errors_include_setup_guidance(work_root: Path, monkeypatch) -> None:
+    monkeypatch.setattr("telchines.adapters.base.shutil.which", lambda _: None)
+
+    expected = {
+        VerilatorAdapter(): "MSYS2",
+        SlangAdapter(): "github.com/MikePopoloski/slang/releases",
+        SymbiYosysAdapter(): "OSS CAD Suite",
+    }
+    for adapter, hint in expected.items():
+        with pytest.raises(AdapterExecutionError) as exc:
+            adapter.run(
+                f"run_{adapter.name}",
+                work_root,
+                ["rtl/top.sv"],
+                work_root / "artifacts",
+                spec=AdapterRunSpec(files=["rtl/top.sv"]),
+            )
+        assert "missing required binaries" in str(exc.value)
+        assert hint in str(exc.value)
+
+
+def test_open_tool_run_records_commands_when_binaries_available(monkeypatch, work_root: Path) -> None:
+    commands: list[list[str]] = []
+
+    class Result:
+        def __init__(self, returncode: int = 0, stdout: str = "summary: passed\n", stderr: str = "") -> None:
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = stderr
+
+    def fake_run(command, **kwargs):  # noqa: ANN001
+        if len(command) > 1 and command[1] in {"--version", "-V", "-version"}:
+            return Result(stdout=f"{command[0]} fake version\n")
+        commands.append(command)
+        return Result()
+
+    monkeypatch.setattr("telchines.adapters.base.shutil.which", lambda binary: f"/tools/{binary}")
+    monkeypatch.setattr("telchines.adapters.base.subprocess.run", fake_run)
+
+    spec = AdapterRunSpec(
+        files=["rtl/top.sv"],
+        include_dirs=["rtl/include"],
+        defines=["FORMAL=1"],
+        top_module="top",
+        extra_args=["--quiet"],
+    )
+    artifacts = work_root / "artifacts"
+
+    verilator = VerilatorAdapter().run("run_verilator", work_root, spec.files, artifacts, spec=spec)
+    slang = SlangAdapter().run("run_slang", work_root, spec.files, artifacts, spec=spec)
+    sby_spec = AdapterRunSpec(files=["proof.sby"], extra_args=["--prefix", "proof"])
+    sby = SymbiYosysAdapter().run("run_sby", work_root, sby_spec.files, artifacts, spec=sby_spec)
+
+    assert verilator.exit_code == 0
+    assert verilator.command[:3] == ["verilator", "--lint-only", "-sv"]
+    assert "-Irtl/include" in verilator.command
+    assert "-DFORMAL=1" in verilator.command
+    assert ["--top-module", "top"] == verilator.command[verilator.command.index("--top-module") : verilator.command.index("--top-module") + 2]
+    assert slang.command[:2] == ["slang", "--lint-only"]
+    assert ["--top", "top"] == slang.command[slang.command.index("--top") : slang.command.index("--top") + 2]
+    assert sby.command == ["sby", "--prefix", "proof", "proof.sby"]
+    assert commands == [verilator.command, slang.command, sby.command]
 
 
 def test_iverilog_adapter_runs_compile_and_run(monkeypatch, work_root: Path) -> None:

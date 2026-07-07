@@ -1325,18 +1325,41 @@ def test_cli_provider_setup_anthropic_and_local_openai_shapes(sample_project: Pa
     assert local_provider["capabilities"] == ["generation"]
 
 
-def test_cli_provider_setup_reports_required_values(sample_project: Path, monkeypatch) -> None:
+def test_cli_provider_setup_reports_required_values_and_hosted_defaults(sample_project: Path, monkeypatch) -> None:
     monkeypatch.chdir(sample_project)
 
     missing_base = runner.invoke(app, ["providers", "setup", "remote", "--kind", "openai-compatible", "--model", "m", "--api-key-env", "KEY"])
     missing_env = runner.invoke(app, ["providers", "setup", "remote", "--kind", "openai-compatible", "--model", "m", "--base-url", "https://example.com/v1"])
-    missing_model = runner.invoke(app, ["providers", "setup", "remote", "--kind", "anthropic", "--api-key-env", "KEY"])
+    generic_missing_model = runner.invoke(app, ["providers", "setup", "remote", "--kind", "openai-compatible", "--base-url", "https://example.com/v1", "--api-key-env", "KEY"])
+    anthropic_default = runner.invoke(app, ["providers", "setup", "anthropic-default", "--kind", "anthropic", "--api-key-env", "KEY"])
+    openai_default = runner.invoke(
+        app,
+        [
+            "providers",
+            "setup",
+            "openai-default",
+            "--kind",
+            "openai-compatible",
+            "--base-url",
+            "https://api.openai.com/v1",
+            "--api-key-env",
+            "OPENAI_API_KEY",
+        ],
+    )
 
     assert missing_base.exit_code == 2
     assert "base_url is required" in missing_base.stderr
     assert missing_env.exit_code == 2
     assert "api_key_env is required" in missing_env.stderr
-    assert missing_model.exit_code != 0
+    assert generic_missing_model.exit_code == 2
+    assert "model is required for openai-compatible" in generic_missing_model.stderr
+    assert anthropic_default.exit_code == 0
+    assert openai_default.exit_code == 0
+    config = read_json(sample_project / ".tel" / "config.json")
+    assert config["project"]["model_policy"]["providers"]["anthropic-default"]["model"] == "claude-sonnet-5"
+    assert config["project"]["model_policy"]["providers"]["openai-default"]["model"] == "gpt-5.5"
+    assert "TELCHINES_ANTHROPIC_MODEL" in anthropic_default.stdout
+    assert "TELCHINES_OPENAI_MODEL" in openai_default.stdout
 
 
 def test_cli_provider_setup_rejects_literal_secret_in_api_key_env(sample_project: Path, monkeypatch) -> None:
@@ -1440,6 +1463,30 @@ def test_provider_setup_anthropic_config_shape(model: str, api_key_env: str, tim
     assert provider["model"] == model
     assert provider["api_key_env"] == api_key_env
     assert provider["timeout_seconds"] == timeout
+
+
+def test_provider_setup_hosted_defaults_apply_when_model_is_missing() -> None:
+    anthropic = _provider_setup_config(
+        "anthropic",
+        ["repair"],
+        model=None,
+        base_url=None,
+        api_key_env="ANTHROPIC_API_KEY",
+        auth=None,
+        timeout_seconds=None,
+    )
+    openai = _provider_setup_config(
+        "openai-compatible",
+        ["generation"],
+        model=None,
+        base_url="https://api.openai.com/v1",
+        api_key_env="OPENAI_API_KEY",
+        auth="bearer",
+        timeout_seconds=None,
+    )
+
+    assert anthropic["model"] == "claude-sonnet-5"
+    assert openai["model"] == "gpt-5.5"
 
 
 @settings(max_examples=40)

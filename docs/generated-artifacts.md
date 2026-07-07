@@ -27,6 +27,7 @@ The command reports whether the artifact is unchanged, modified, or missing and 
 If the built-in checks pass, Telchines tries the configured `generation.sva.validation_adapters` in order. The default order is `slang`, then `verilator`. The first enabled and available adapter that supports `generation_validation` is run against the DUT RTL plus generated assertion artifact, and the result is reported as `adapter_backed`. If no configured adapter can run, Telchines falls back to `structure_only` and includes adapter fallback reasons in the validation run's `tool_result.checks`.
 
 When `generation.sva.formal.mode` is `auto` or `required`, Telchines also attempts the configured formal adapter after structural/parser validation succeeds. The default formal adapter is `symbiyosys`. A successful bounded run is reported as `formal_run`; missing tools are skipped in `auto` mode and fail validation in `required` mode.
+When SymbiYosys is missing, `setup_diagnostics` includes `sby` setup hints, including OSS CAD Suite as the practical cross-platform route.
 
 Neither structural nor parser-backed validation proves assertion semantics, vacuity, timing intent, or protocol correctness. Use formal/simulation flows for protocol confidence.
 
@@ -34,14 +35,22 @@ Neither structural nor parser-backed validation proves assertion semantics, vacu
 
 Executable smoke metadata includes the Makefile, smoke log, command argv, setup diagnostics, and a bounded `environment_summary` that redacts secret-looking run-spec keys and summarizes inherited `PYTHONPATH` entries.
 
-For an executable smoke in developer or release environments, install the optional Python dependency and provide Icarus plus cocotb's makefile tooling on `PATH`:
+For an executable smoke in developer or release environments, install the optional Python dependency and provide `make`, Icarus, and `vvp` on `PATH`:
 
 ```bash
 python -m pip install -e ".[cocotb-smoke]"
 pytest tests/test_cocotb_smoke.py
 ```
 
-That test generates a cocotb scaffold for a tiny UART fixture and asserts Telchines' own executable smoke path passes. It skips automatically when `cocotb`, `cocotb-config`, `make`, `iverilog`, or `vvp` are unavailable.
+That test generates a cocotb scaffold for a tiny UART fixture and asserts Telchines' own executable smoke path passes. It skips automatically when `cocotb`, cocotb's makefiles, `make`, `iverilog`, or `vvp` are unavailable. Telchines can discover cocotb makefiles through either `cocotb-config --makefiles` or `python -m cocotb_tools.config --makefiles`, so a missing `cocotb-config` console script is not by itself fatal when the Python package is installed.
+
+For a manual or CI smoke command that does not require remembering the pytest name, use:
+
+```bash
+python scripts/tool_smoke.py --adapters iverilog --cocotb
+```
+
+Add `--allow-missing` when checking a developer machine where optional tools may be absent; missing cocotb setup is reported as a skip with setup diagnostics.
 
 ## Project Conventions
 

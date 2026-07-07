@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import os
 import re
+import shlex
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -18,22 +20,44 @@ class VerilatorAdapter(ToolAdapter):
     binary_names = ("verilator",)
     supported_workflows = ("repair_validation", "generation_validation")
     artifact_types = ("log", "stdout", "stderr")
+    setup_guidance = (
+        "Windows/MSYS2 UCRT64: pacman -S mingw-w64-ucrt-x86_64-verilator, then add C:\\msys64\\ucrt64\\bin to PATH.",
+        "Linux: use your distro package, for example sudo apt-get install verilator on Debian/Ubuntu.",
+        "WSL: install Verilator inside the distro and run Telchines from that same shell.",
+    )
+
+    def is_available(self) -> bool:
+        return _verilator_binary() != ""
+
+    def missing_binaries(self) -> list[str]:
+        return [] if self.is_available() else ["verilator or verilator_bin.exe"]
+
+    def version(self) -> str:
+        binary = _verilator_binary()
+        if not binary:
+            return "unavailable"
+        try:
+            result = subprocess.run([binary, "--version"], capture_output=True, text=True, check=False, timeout=5)
+        except (OSError, subprocess.TimeoutExpired):
+            return "unknown"
+        output = (result.stdout or result.stderr).strip()
+        return output.splitlines()[0].strip() if result.returncode == 0 and output else "unknown"
 
     def build_command(self, project_root: Path, files: list[str], extra_args: list[str] | None = None) -> list[str]:
-        return ["verilator", "--lint-only", *(extra_args or []), *files]
+        return _verilator_command(project_root, ["--lint-only", *(extra_args or []), *files])
 
     def build_command_from_spec(self, project_root: Path, spec: AdapterRunSpec) -> list[str]:
         spec = spec.expanded(project_root)
-        command = ["verilator", "--lint-only"]
+        args = ["--lint-only"]
         if spec.standard.lower() in {"systemverilog", "sv", "2012", "sv2012"}:
-            command.append("-sv")
-        command.extend(f"-I{path}" for path in spec.include_dirs)
-        command.extend(f"-D{define}" for define in spec.defines)
+            args.append("-sv")
+        args.extend(f"-I{path}" for path in spec.include_dirs)
+        args.extend(f"-D{define}" for define in spec.defines)
         if spec.top_module:
-            command.extend(["--top-module", spec.top_module])
-        command.extend(spec.extra_args)
-        command.extend(spec.files)
-        return command
+            args.extend(["--top-module", spec.top_module])
+        args.extend(spec.extra_args)
+        args.extend(spec.files)
+        return _verilator_command(project_root, args)
 
 
 class IcarusAdapter(ToolAdapter):
@@ -45,6 +69,10 @@ class IcarusAdapter(ToolAdapter):
     required_binaries = ("iverilog", "vvp")
     supported_workflows = ("repair_validation",)
     artifact_types = ("log", "stdout", "stderr", "executable")
+    setup_guidance = (
+        "Windows/MSYS2 UCRT64: pacman -S mingw-w64-ucrt-x86_64-iverilog, then add C:\\msys64\\ucrt64\\bin to PATH.",
+        "Linux: use your distro package, for example sudo apt-get install iverilog on Debian/Ubuntu.",
+    )
 
     def build_command(self, project_root: Path, files: list[str], extra_args: list[str] | None = None) -> list[str]:
         return ["iverilog", "-g2012", *(extra_args or []), *files]
@@ -73,8 +101,7 @@ class IcarusAdapter(ToolAdapter):
         if not run_spec.files:
             raise AdapterExecutionError(f"{self.name} requires at least one input file")
         if not self.is_available():
-            binaries = ", ".join(self.required_binaries or self.binary_names) or self.name
-            raise AdapterExecutionError(f"{self.name} is not available on PATH; expected: {binaries}")
+            raise AdapterExecutionError(self.unavailable_message())
 
         ensure_directory(artifacts_dir)
         executable_path = artifacts_dir / f"{run_id}.out"
@@ -153,6 +180,10 @@ class SlangAdapter(ToolAdapter):
     binary_names = ("slang",)
     supported_workflows = ("repair_validation", "generation_validation")
     artifact_types = ("log", "stdout", "stderr")
+    setup_guidance = (
+        "Windows/Linux/macOS: download a prebuilt slang CLI from https://github.com/MikePopoloski/slang/releases or build from source.",
+        "Python-only installs of pyslang are not enough unless they also put a slang executable on PATH.",
+    )
 
     def build_command(self, project_root: Path, files: list[str], extra_args: list[str] | None = None) -> list[str]:
         return ["slang", "--lint-only", *(extra_args or []), *files]
@@ -192,6 +223,11 @@ class SymbiYosysAdapter(ToolAdapter):
     binary_names = ("sby",)
     supported_workflows = ("formal_validation",)
     artifact_types = ("log", "report", "counterexample")
+    setup_guidance = (
+        "Windows/Linux/macOS: install the free OSS CAD Suite from https://github.com/YosysHQ/oss-cad-suite-build/releases and activate its environment.",
+        "Linux source install: install Yosys and solvers, then build/install sby from https://github.com/YosysHQ/sby.",
+        "Windows shell: run oss-cad-suite\\environment.bat or start.bat before running Telchines so sby is on PATH.",
+    )
 
     def build_command(self, project_root: Path, files: list[str], extra_args: list[str] | None = None) -> list[str]:
         return ["sby", *(extra_args or []), *files]
@@ -202,6 +238,61 @@ class SymbiYosysAdapter(ToolAdapter):
 
     def parse_result(self, project_root: Path, files: list[str], stdout: str, stderr: str, combined: str) -> dict[str, Any]:
         return _parse_symbiyosys_result(project_root, combined)
+
+
+def _verilator_binary() -> str:
+    for binary in ("verilator", "verilator.exe", "verilator_bin", "verilator_bin.exe"):
+        found = shutil.which(binary)
+        if found:
+            return binary
+    return ""
+
+
+def _verilator_command(project_root: Path, args: list[str]) -> list[str]:
+    if not project_root.is_absolute():
+        return ["verilator", *args]
+    if shutil.which("verilator"):
+        return ["verilator", *args]
+    wrapper = _extensionless_verilator_wrapper()
+    bash = _msys_bash(wrapper)
+    if wrapper and bash:
+        project = _msys_path(project_root.resolve())
+        command = "export PATH=/ucrt64/bin:/usr/bin:/bin"
+        if project:
+            command += f"; cd {shlex.quote(project)}"
+        command += "; verilator " + " ".join(shlex.quote(arg) for arg in args)
+        return [bash, "-lc", command]
+    return [_verilator_binary() or "verilator", *args]
+
+
+def _extensionless_verilator_wrapper() -> Path | None:
+    path_env = os.environ.get("PATH", "")
+    for raw_entry in path_env.split(os.pathsep):
+        if not raw_entry:
+            continue
+        candidate = Path(raw_entry) / "verilator"
+        if candidate.exists() and candidate.is_file():
+            return candidate
+    return None
+
+
+def _msys_bash(wrapper: Path) -> str:
+    msys_root = wrapper.parent.parent.parent
+    candidate = msys_root / "usr" / "bin" / "bash.exe"
+    if candidate.exists():
+        return str(candidate)
+    return shutil.which("bash") or ""
+
+
+def _msys_path(path: Path) -> str:
+    cygpath = shutil.which("cygpath")
+    if cygpath is None:
+        return ""
+    try:
+        result = subprocess.run([cygpath, "-u", str(path)], capture_output=True, text=True, check=False, timeout=5)
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    return result.stdout.strip() if result.returncode == 0 else ""
 
 
 def _parse_symbiyosys_result(project_root: Path, combined: str) -> dict[str, Any]:

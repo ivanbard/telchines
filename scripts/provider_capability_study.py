@@ -231,7 +231,7 @@ def _provider_commands(provider: dict[str, Any], *, repeat_count: int = 1) -> li
         )
     if supports.get("generation", "generation" in provider.get("capabilities", [])):
         base_commands.append(_command(name, "gen_sva", ["gen-sva", "--spec", "docs/spec.md", "--rtl", "rtl/broken_counter.sv", "--provider", name]))
-        base_commands.append(_command(name, "gen_cocotb", ["gen-cocotb", "--dut", "rtl/broken_counter.sv", "--intent", "counter smoke", "--provider", name]))
+        base_commands.append(_command(name, "gen_cocotb", ["gen-cocotb", "--dut", "rtl/counter_smoke.sv", "--intent", "counter smoke", "--provider", name]))
     if supports.get("shell", True):
         base_commands.append(
             {
@@ -284,7 +284,7 @@ def _provider_model_fields(provider: dict[str, Any]) -> dict[str, Any]:
         "reasoning_level": provider.get("reasoning_level", "auto"),
         "reasoning_summary": provider.get("reasoning_summary"),
         "reasoning_wire_format": provider.get("reasoning_wire_format"),
-        "model_source": provider.get("model_source") or ("configured" if provider.get("model") or provider.get("model_default") else "preset"),
+        "model_source": provider.get("model_source") or ("configured" if provider.get("model") else "default" if provider.get("model_default") else "preset"),
         "supports_reasoning_effort": provider.get("supports_reasoning_effort"),
         "model_warnings": provider.get("model_warnings", []),
     }
@@ -380,7 +380,7 @@ def _provider_config(provider: dict[str, Any]) -> dict[str, Any]:
 
 
 def _with_model_selection(provider: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
-    for field in ("model_source", "reasoning_level", "reasoning_summary", "reasoning_wire_format"):
+    for field in ("model_env", "model_source", "reasoning_level", "reasoning_summary", "reasoning_wire_format"):
         if provider.get(field) is not None:
             config[field] = provider[field]
     return config
@@ -417,6 +417,27 @@ def _ensure_generation_fixture_files(scratch: Path) -> None:
         """# Broken Counter Spec
 
 The `broken_counter` module has an active-low reset. When `rst_n` is low, `count` resets to zero. On each rising edge after reset, `count` increments by one.
+""",
+        encoding="utf-8",
+    )
+    rtl = scratch / "rtl"
+    rtl.mkdir(parents=True, exist_ok=True)
+    (rtl / "counter_smoke.sv").write_text(
+        """module counter_smoke(
+  input logic clk,
+  input logic rst_n,
+  output logic [3:0] count
+);
+
+always_ff @(posedge clk or negedge rst_n) begin
+  if (!rst_n) begin
+    count <= 4'd0;
+  end else begin
+    count <= count + 1;
+  end
+end
+
+endmodule
 """,
         encoding="utf-8",
     )

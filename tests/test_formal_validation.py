@@ -6,6 +6,7 @@ from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
 from telchines.adapters.base import AdapterExecution, AdapterRunSpec, ToolAdapter
+from telchines.adapters.open_tools import SymbiYosysAdapter
 from telchines.config import ProjectConfig
 from telchines.models import SvaCandidate
 from telchines.workflows import gen_sva
@@ -187,6 +188,20 @@ def test_required_formal_validation_fails_when_adapter_missing(work_root: Path, 
     assert returncode == 1
     assert "not available" in combined
     assert tool_result["formal_status"] == "failed"
+
+
+def test_required_formal_validation_reports_symbiyosys_setup_guidance(work_root: Path, monkeypatch) -> None:
+    config = _write_project(work_root)
+    monkeypatch.setattr("telchines.adapters.base.shutil.which", lambda _: None)
+    monkeypatch.setattr(gen_sva, "AdapterRegistry", lambda: FakeRegistry(SymbiYosysAdapter()))
+
+    validator, _, returncode, combined, tool_result = gen_sva._run_validation(config, work_root, _candidate())
+
+    assert validator == "symbiyosys"
+    assert returncode == 1
+    assert "sby" in combined
+    assert tool_result["formal_status"] == "failed"
+    assert any("OSS CAD Suite" in item for item in tool_result["setup_diagnostics"])
 
 
 def test_formal_validation_records_sby_artifact(work_root: Path, monkeypatch) -> None:

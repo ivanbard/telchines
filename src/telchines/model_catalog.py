@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-from pathlib import Path
 from typing import Any
 from urllib import error, request
 
@@ -13,10 +12,12 @@ from telchines.errors import ConfigError
 OPENAI_REASONING_LEVELS = ["auto", "none", "minimal", "low", "medium", "high", "xhigh"]
 ANTHROPIC_REASONING_LEVELS = ["auto", "low", "medium", "high"]
 LOCAL_REASONING_LEVELS = sorted(SUPPORTED_REASONING_LEVELS)
+DEFAULT_OPENAI_API_MODEL = "gpt-5.5"
+DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-5"
 
 PRESET_MODELS: dict[str, list[str]] = {
-    "openai_compatible": ["gpt-5.5", "gpt-5.1", "gpt-4.1", "gpt-4.1-mini"],
-    "anthropic": ["claude-fable-5", "claude-opus-4-8", "claude-sonnet-5", "claude-haiku-4-5"],
+    "openai_compatible": [DEFAULT_OPENAI_API_MODEL, "gpt-5.1", "gpt-4.1", "gpt-4.1-mini"],
+    "anthropic": ["claude-fable-5", "claude-opus-4-8", DEFAULT_ANTHROPIC_MODEL, "claude-haiku-4-5"],
     "local_command": [],
     "agent_runtime": [],
     "heuristic": ["heuristic"],

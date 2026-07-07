@@ -13,6 +13,10 @@ if SRC_ROOT.exists():
 
 from telchines.adapters.base import AdapterRunSpec  # noqa: E402
 from telchines.adapters.open_tools import IcarusAdapter, SlangAdapter, SymbiYosysAdapter, VerilatorAdapter  # noqa: E402
+from telchines.config import ProjectConfig  # noqa: E402
+from telchines.models import CocotbCandidate  # noqa: E402
+from telchines.run_store import RunStore  # noqa: E402
+from telchines.workflows.gen_cocotb import _cocotb_common_missing, _cocotb_makefiles_dir, _select_cocotb_simulator, validate_cocotb_candidate  # noqa: E402
 
 
 ADAPTERS = {
@@ -27,6 +31,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Run real-tool Telchines adapter smoke tests.")
     parser.add_argument("--adapters", nargs="+", default=["verilator", "iverilog", "slang", "symbiyosys"], choices=sorted(ADAPTERS))
     parser.add_argument("--allow-missing", action="store_true", help="Skip adapters whose required binaries are not on PATH.")
+    parser.add_argument("--cocotb", action="store_true", help="Also run Telchines' executable cocotb smoke with Icarus when cocotb tooling is installed.")
     args = parser.parse_args()
 
     failures: list[str] = []
@@ -92,13 +97,17 @@ endmodule
 
         for adapter_name in args.adapters:
             adapter = ADAPTERS[adapter_name]()
-            missing = [binary for binary in adapter.required_binaries or adapter.binary_names if shutil.which(binary) is None]
-            if missing:
+            if not _adapter_available(adapter):
+                missing = _adapter_missing_binaries(adapter)
                 message = f"{adapter_name}: missing required binaries: {', '.join(missing)}"
                 if args.allow_missing:
                     print(f"SKIP {message}")
+                    for diagnostic in _adapter_setup_diagnostics(adapter, missing):
+                        print(f"  {diagnostic}")
                     continue
                 print(f"FAIL {message}")
+                for diagnostic in _adapter_setup_diagnostics(adapter, missing):
+                    print(f"  {diagnostic}")
                 failures.append(message)
                 continue
 
@@ -134,12 +143,92 @@ rtl/smoke_counter.sv
             if execution.exit_code != 0:
                 failures.append(f"{adapter_name}: exit code {execution.exit_code}")
 
+        if args.cocotb:
+            _run_cocotb_smoke(root, failures, allow_missing=args.allow_missing)
+
     if failures:
         print("\nFailures:")
         for failure in failures:
             print(f"- {failure}")
         return 1
     return 0
+
+
+def _run_cocotb_smoke(root: Path, failures: list[str], *, allow_missing: bool) -> None:
+    simulator, simulator_diagnostics = _select_cocotb_simulator("icarus")
+    _, makefile_diagnostics = _cocotb_makefiles_dir()
+    diagnostics = [*simulator_diagnostics, *_cocotb_common_missing(), *makefile_diagnostics]
+    if diagnostics:
+        message = f"cocotb: {'; '.join(diagnostics)}"
+        if allow_missing:
+            print(f"SKIP {message}")
+            return
+        print(f"FAIL {message}")
+        failures.append(message)
+        return
+
+    config = ProjectConfig.init_project(root)
+    config.generation["cocotb"]["executable_smoke"] = "required"
+    config.generation["cocotb"]["simulator"] = simulator or "icarus"
+    config.save()
+    candidate = CocotbCandidate(
+        candidate_id="cocotb_tool_smoke",
+        task_id="task_cocotb_tool_smoke",
+        dut_path="rtl/smoke_counter.sv",
+        spec_path=None,
+        top_module="smoke_counter",
+        file_path=".tel/artifacts/generated/cocotb/test_smoke_counter.py",
+        manifest_path=".tel/artifacts/generated/cocotb/smoke_counter_cocotb_manifest.json",
+        candidate_content="""import cocotb
+from cocotb.clock import Clock
+from cocotb.triggers import RisingEdge
+
+
+@cocotb.test()
+async def test_smoke_counter(dut):
+    cocotb.start_soon(Clock(dut.clk, 2, units="ns").start())
+    dut.rst_n.value = 0
+    await RisingEdge(dut.clk)
+    dut.rst_n.value = 1
+    await RisingEdge(dut.clk)
+    await RisingEdge(dut.clk)
+    assert int(dut.count.value) >= 1
+""",
+        explanation="real cocotb smoke",
+        status="proposed",
+    )
+    validation = validate_cocotb_candidate(
+        config,
+        RunStore(config),
+        candidate,
+        run_spec=AdapterRunSpec(files=["rtl/smoke_counter.sv"], top_module="smoke_counter"),
+    )
+    status = "PASS" if validation.status == "passed" else "FAIL"
+    print(f"{status} cocotb: {validation.summary}")
+    if validation.status != "passed":
+        failures.append(f"cocotb: {validation.summary}")
+
+
+def _adapter_available(adapter) -> bool:  # noqa: ANN001
+    if hasattr(adapter, "is_available"):
+        return bool(adapter.is_available())
+    if hasattr(adapter, "missing_binaries"):
+        return not adapter.missing_binaries()
+    required = getattr(adapter, "required_binaries", None) or getattr(adapter, "binary_names", ())
+    return all(shutil.which(binary) for binary in required)
+
+
+def _adapter_missing_binaries(adapter) -> list[str]:  # noqa: ANN001
+    if hasattr(adapter, "missing_binaries"):
+        return list(adapter.missing_binaries())
+    required = getattr(adapter, "required_binaries", None) or getattr(adapter, "binary_names", ())
+    return [binary for binary in required if shutil.which(binary) is None]
+
+
+def _adapter_setup_diagnostics(adapter, missing: list[str]) -> list[str]:  # noqa: ANN001
+    if hasattr(adapter, "setup_diagnostics"):
+        return list(adapter.setup_diagnostics(missing))
+    return [f"install/configure adapter and ensure these binaries are on PATH: {', '.join(missing)}"] if missing else []
 
 
 if __name__ == "__main__":

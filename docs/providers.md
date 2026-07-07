@@ -18,15 +18,17 @@ Remote HTTP provider for hosted generation or repair.
 Required fields:
 
 - `base_url`, an `http://` or `https://` URL with any path prefix such as `/v1`
-- `model`
 - `api_key_env`
 - `timeout_seconds`
 
 Optional fields:
 
+- `model`; `tel providers setup --kind openai-compatible` defaults this to `gpt-5.5` only when `base_url` is the official OpenAI API (`https://api.openai.com/v1`). Generic OpenAI-compatible gateways should set an explicit model.
 - `endpoint`, a relative path such as `chat/completions`; leading slashes are tolerated, and base URL path prefixes like `/v1` are preserved
 - `headers` for extra string-valued HTTP headers; `Authorization` is reserved and always derived from `api_key_env`
 - `auth`, either `bearer` (default) or `none`; use `none` for local servers that do not require an `Authorization` header
+
+For official OpenAI live studies, the checked-in matrix uses `gpt-5.5` and the Responses API endpoint by default. Chat Completions remains supported for OpenAI-compatible providers by leaving `endpoint` unset or setting it to `chat/completions`.
 
 ### `anthropic`
 
@@ -34,12 +36,12 @@ Native Anthropic Messages API provider for hosted Claude models.
 
 Required fields:
 
-- `model`
 - `api_key_env`
 - `timeout_seconds`
 
 Optional fields:
 
+- `model`, defaulting to `claude-sonnet-5` when created with `tel providers setup --kind anthropic`
 - `base_url`, defaulting to `https://api.anthropic.com/v1`
 - `endpoint`, defaulting to `messages`
 - `anthropic_version`, defaulting to `2023-06-01`
@@ -153,8 +155,12 @@ tel providers setup openrouter-dev \
 
 tel providers setup anthropic-dev \
   --kind anthropic \
-  --model claude-sonnet-5 \
   --api-key-env ANTHROPIC_API_KEY
+
+tel providers setup openai-dev \
+  --kind openai-compatible \
+  --base-url https://api.openai.com/v1 \
+  --api-key-env OPENAI_API_KEY
 
 tel providers setup local-openai \
   --kind local-openai \
@@ -163,7 +169,7 @@ tel providers setup local-openai \
   --capability generation
 ```
 
-Set the referenced environment variable in your shell or an ignored local `.env` file, then run `tel providers check NAME`. Do not paste API key values into `.tel/config.json`; `tel providers setup` rejects values that are not valid environment variable names.
+Set the referenced environment variable in your shell or an ignored local `.env` file, then run `tel providers check NAME`. Do not paste API key values into `.tel/config.json`; `tel providers setup` rejects values that are not valid environment variable names. For hosted defaults, override the model later with `tel providers set-model NAME MODEL` or an external matrix env var such as `TELCHINES_OPENAI_MODEL` or `TELCHINES_ANTHROPIC_MODEL`.
 
 Use `tel providers check [NAME]` to validate one provider, or omit `NAME` to check all providers. By default this performs a live transport check for `openai_compatible` and `local_command` providers and reports `agent_runtime` routing metadata. Add `--offline` to validate only configuration and policy:
 
@@ -220,7 +226,8 @@ Hosted OpenAI-compatible endpoint:
           "kind": "openai_compatible",
           "capabilities": ["repair"],
           "base_url": "https://api.openai.com/v1",
-          "model": "gpt-4.1-mini",
+          "endpoint": "responses",
+          "model": "gpt-5.5",
           "api_key_env": "OPENAI_API_KEY",
           "timeout_seconds": 30
         },
@@ -228,7 +235,8 @@ Hosted OpenAI-compatible endpoint:
           "kind": "openai_compatible",
           "capabilities": ["generation"],
           "base_url": "https://api.openai.com/v1",
-          "model": "gpt-4.1",
+          "endpoint": "responses",
+          "model": "gpt-5.5",
           "api_key_env": "OPENAI_API_KEY",
           "timeout_seconds": 60
         }

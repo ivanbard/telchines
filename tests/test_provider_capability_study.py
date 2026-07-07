@@ -73,6 +73,15 @@ def test_provider_capability_matrix_accepts_anthropic_preset() -> None:
     assert matrix["providers"][0]["model_default"] == "claude-sonnet-5"
 
 
+def test_provider_capability_matrix_accepts_openai_default_responses_preset() -> None:
+    matrix = provider_capability_study.load_matrix(REPO_ROOT / "docs" / "provider-matrices" / "openai.json")
+    provider = matrix["providers"][0]
+    assert provider["kind"] == "openai_compatible"
+    assert provider["endpoint"] == "responses"
+    assert provider["model_env"] == "TELCHINES_OPENAI_MODEL"
+    assert provider["model_default"] == "gpt-5.5"
+
+
 def test_provider_capability_repair_commands_select_provider(work_root: Path) -> None:
     matrix = provider_capability_study.load_matrix(REPO_ROOT / "docs" / "provider-matrices" / "local_command.json")
     plan = provider_capability_study.build_plan(matrix, matrix["providers"], work_root, include_live=False, dry_run=True)
@@ -301,7 +310,7 @@ def test_provider_capability_semantic_fingerprint_ignores_volatile_ids() -> None
     assert first == second
 
 
-def test_provider_capability_skips_missing_openai_model_before_scratch(work_root: Path, monkeypatch) -> None:
+def test_provider_capability_plans_openai_with_default_model_when_key_and_gate_are_set(work_root: Path, monkeypatch) -> None:
     monkeypatch.setenv("TELCHINES_LIVE_OPENAI", "1")
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.delenv("TELCHINES_OPENAI_MODEL", raising=False)
@@ -309,7 +318,20 @@ def test_provider_capability_skips_missing_openai_model_before_scratch(work_root
 
     plan = provider_capability_study.build_plan(matrix, matrix["providers"], work_root, include_live=True)
 
+    assert all(command["status"] == "planned" for command in plan["commands"])
+    assert any(command["model"] == "gpt-5.5" and command["model_source"] == "default" for command in plan["commands"])
+    assert [provider["name"] for provider in provider_capability_study._active_providers(matrix["providers"], plan["commands"])] == ["openai", "openai-agent"]
+
+
+def test_provider_capability_skips_openai_when_credentials_are_missing(work_root: Path, monkeypatch) -> None:
+    monkeypatch.setenv("TELCHINES_LIVE_OPENAI", "1")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("TELCHINES_OPENAI_MODEL", raising=False)
+    matrix = provider_capability_study.load_matrix(REPO_ROOT / "docs" / "provider-matrices" / "openai.json")
+
+    plan = provider_capability_study.build_plan(matrix, matrix["providers"], work_root, include_live=True)
+
     assert all(command["status"] == "skipped" for command in plan["commands"])
-    assert any(command["reason"] == "missing_env:TELCHINES_OPENAI_MODEL" for command in plan["commands"])
+    assert any(command["reason"] == "missing_env:OPENAI_API_KEY" for command in plan["commands"])
     assert any(str(command["reason"]).startswith("base_provider_skipped:openai:") for command in plan["commands"])
     assert provider_capability_study._active_providers(matrix["providers"], plan["commands"]) == []
