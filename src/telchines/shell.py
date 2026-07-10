@@ -718,7 +718,7 @@ def _execute_command(session: ShellSession, parts: list[str], raw: bool) -> str 
             return dump_json(payload) if raw else render_model_update_payload(payload)
         if action == "set":
             provider = _parse_required_argument(parts[2:], "--provider")
-            model = _parse_required_argument(parts[2:], "--model")
+            model = _parse_required_argument(parts[2:], "--model", allow_option_like=True)
             payload = set_provider_model(session.cwd, provider, model)
             return dump_json(payload) if raw else render_model_update_payload(payload)
         if action == "reasoning":
@@ -1853,24 +1853,24 @@ def _parse_repeated_option(parts: list[str], option_name: str, strict: bool = Tr
     return values
 
 
-def _parse_required_argument(parts: list[str], option_name: str) -> str:
-    value = _parse_optional_argument(parts, option_name)
+def _parse_required_argument(parts: list[str], option_name: str, *, allow_option_like: bool = False) -> str:
+    value = _parse_optional_argument(parts, option_name, allow_option_like=allow_option_like)
     if value is None:
         raise ValueError(f"{option_name} requires a value")
     return value
 
 
-def _parse_optional_argument(parts: list[str], option_name: str) -> str | None:
+def _parse_optional_argument(parts: list[str], option_name: str, *, allow_option_like: bool = False) -> str | None:
     index = 0
     while index < len(parts):
         if parts[index] == option_name:
-            return _require_option_value(parts, index, option_name)
+            return _require_option_value(parts, index, option_name, allow_option_like=allow_option_like)
         index += 1
     return None
 
 
-def _require_option_value(parts: list[str], index: int, option_name: str) -> str:
-    if index + 1 >= len(parts) or parts[index + 1].startswith("--"):
+def _require_option_value(parts: list[str], index: int, option_name: str, *, allow_option_like: bool = False) -> str:
+    if index + 1 >= len(parts) or (parts[index + 1].startswith("--") and not allow_option_like):
         raise ValueError(f"{option_name} requires a value")
     return parts[index + 1]
 

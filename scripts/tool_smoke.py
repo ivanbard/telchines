@@ -124,10 +124,10 @@ mode bmc
 depth 2
 
 [engines]
-smtbmc
+smtbmc z3
 
 [script]
-read -formal rtl/smoke_counter.sv
+read -formal smoke_counter.sv
 prep -top smoke_counter
 
 [files]

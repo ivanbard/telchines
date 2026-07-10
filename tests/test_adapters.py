@@ -120,25 +120,29 @@ def test_adapter_parser_handles_realistic_tool_output_shapes() -> None:
 
 def test_adapter_check_reports_actionable_open_tool_setup_guidance(sample_project: Path, monkeypatch) -> None:
     monkeypatch.setattr("telchines.adapters.base.shutil.which", lambda _: None)
+    monkeypatch.setattr("telchines.adapters.open_tools.shutil.which", lambda _: None)
+    monkeypatch.setattr("telchines.adapters.open_tools._pyslang_available", lambda: False)
     monkeypatch.setattr("telchines.operations.shutil.which", lambda _: None)
 
     checks = {item["name"]: item for item in check_adapters(sample_project)["adapters"]}
 
     assert checks["verilator"]["status"] == "missing"
-    assert checks["verilator"]["missing_binaries"] == ["verilator"]
+    assert checks["verilator"]["missing_binaries"] == ["verilator or verilator_bin.exe"]
     assert any("MSYS2" in item for item in checks["verilator"]["setup_diagnostics"])
-    assert checks["slang"]["missing_binaries"] == ["slang"]
-    assert any("github.com/MikePopoloski/slang/releases" in item for item in checks["slang"]["setup_diagnostics"])
+    assert checks["slang"]["missing_binaries"] == ["slang or pyslang"]
+    assert any("pip install pyslang" in item for item in checks["slang"]["setup_diagnostics"])
     assert checks["symbiyosys"]["missing_binaries"] == ["sby"]
     assert any("OSS CAD Suite" in item for item in checks["symbiyosys"]["setup_diagnostics"])
 
 
 def test_open_tool_missing_binary_errors_include_setup_guidance(work_root: Path, monkeypatch) -> None:
     monkeypatch.setattr("telchines.adapters.base.shutil.which", lambda _: None)
+    monkeypatch.setattr("telchines.adapters.open_tools.shutil.which", lambda _: None)
+    monkeypatch.setattr("telchines.adapters.open_tools._pyslang_available", lambda: False)
 
     expected = {
         VerilatorAdapter(): "MSYS2",
-        SlangAdapter(): "github.com/MikePopoloski/slang/releases",
+        SlangAdapter(): "pip install pyslang",
         SymbiYosysAdapter(): "OSS CAD Suite",
     }
     for adapter, hint in expected.items():
@@ -170,6 +174,7 @@ def test_open_tool_run_records_commands_when_binaries_available(monkeypatch, wor
         return Result()
 
     monkeypatch.setattr("telchines.adapters.base.shutil.which", lambda binary: f"/tools/{binary}")
+    monkeypatch.setattr("telchines.adapters.open_tools.shutil.which", lambda binary: f"/tools/{binary}")
     monkeypatch.setattr("telchines.adapters.base.subprocess.run", fake_run)
 
     spec = AdapterRunSpec(
@@ -195,6 +200,22 @@ def test_open_tool_run_records_commands_when_binaries_available(monkeypatch, wor
     assert ["--top", "top"] == slang.command[slang.command.index("--top") : slang.command.index("--top") + 2]
     assert sby.command == ["sby", "--prefix", "proof", "proof.sby"]
     assert commands == [verilator.command, slang.command, sby.command]
+
+
+def test_slang_adapter_uses_pyslang_fallback_when_cli_is_missing(monkeypatch) -> None:
+    monkeypatch.setattr("telchines.adapters.open_tools.shutil.which", lambda _: None)
+    monkeypatch.setattr("telchines.adapters.open_tools._pyslang_available", lambda: True)
+
+    command = SlangAdapter().build_command_from_spec(
+        Path("."),
+        AdapterRunSpec(files=["rtl/top.sv"], include_dirs=["rtl/include"], defines=["FORMAL=1"], top_module="top"),
+    )
+
+    assert command[1:3] == ["-m", "telchines.adapters.pyslang_runner"]
+    assert "--lint-only" in command
+    assert "-Irtl/include" in command
+    assert "-DFORMAL=1" in command
+    assert ["--top", "top"] == command[command.index("--top") : command.index("--top") + 2]
 
 
 def test_iverilog_adapter_runs_compile_and_run(monkeypatch, work_root: Path) -> None:

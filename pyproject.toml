@@ -49,6 +49,9 @@ dev = [
 cocotb-smoke = [
   "cocotb>=1.9",
 ]
+slang-smoke = [
+  "pyslang>=11.0",
+]
 agentic = [
   "langchain>=1.0,<2.0",
   "langgraph>=1.0,<2.0",

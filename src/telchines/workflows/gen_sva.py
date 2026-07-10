@@ -295,12 +295,20 @@ def _run_validation(
     formal_result = _run_formal_validation(config, project_root, candidate, checks, run_spec=run_spec)
     if formal_result is None:
         return base_result
-    if formal_result[2] == 0 or formal_result[4].get("formal_status") == "failed":
+    if formal_result[2] == 0 or _formal_mode(config) == "required":
         return formal_result
     merged_result = dict(base_result[4])
     merged_result["formal_status"] = formal_result[4].get("formal_status")
     merged_result["formal_adapter"] = formal_result[4].get("formal_adapter")
     merged_result["setup_diagnostics"] = formal_result[4].get("setup_diagnostics", [])
+    merged_result["command_artifacts"] = {
+        **dict(base_result[4].get("command_artifacts", {})),
+        **dict(formal_result[4].get("command_artifacts", {})),
+    }
+    merged_result["limitations"] = [
+        *list(base_result[4].get("limitations", [])),
+        "optional formal validation did not pass; rerun with generation.sva.formal.mode=required to gate on formal results",
+    ]
     return base_result[0], base_result[1], base_result[2], base_result[3], merged_result
 
 
@@ -390,7 +398,7 @@ def _run_formal_validation(
 ) -> tuple[str, list[str], int, str, dict[str, object]] | None:
     section = config.generation.get("sva", {}) if isinstance(config.generation, dict) else {}
     formal = section.get("formal", {}) if isinstance(section.get("formal", {}), dict) else {}
-    mode = str(formal.get("mode", "auto"))
+    mode = _formal_mode(config)
     if mode == "off":
         return None
     adapter_name = str(formal.get("adapter", "symbiyosys"))
@@ -425,7 +433,7 @@ def _run_formal_validation(
                 "depth 4",
                 "",
                 "[engines]",
-                "smtbmc",
+                "smtbmc z3",
                 "",
                 "[script]",
                 *read_lines,
@@ -478,7 +486,13 @@ def _sby_read_formal_lines(files: list[str], spec: AdapterRunSpec) -> list[str]:
     options.extend(f"-I{path}" for path in spec.include_dirs)
     options.extend(f"-D{define}" for define in spec.defines)
     option_text = " ".join(options)
-    return [f"read {option_text} {path}" for path in files]
+    return [f"read {option_text} {Path(path).name}" for path in files]
+
+
+def _formal_mode(config: ProjectConfig) -> str:
+    section = config.generation.get("sva", {}) if isinstance(config.generation, dict) else {}
+    formal = section.get("formal", {}) if isinstance(section.get("formal", {}), dict) else {}
+    return str(formal.get("mode", "auto"))
 
 
 def _formal_setup_result(adapter_name: str, diagnostics: list[str], *, required: bool) -> tuple[str, list[str], int, str, dict[str, object]] | None:

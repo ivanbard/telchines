@@ -150,6 +150,16 @@ def test_shell_model_commands_update_config_and_status_summaries(sample_project:
     assert "repair: local-test:wrapper-v2/high" in sidebar
 
 
+def test_shell_model_set_accepts_option_like_model_value(sample_project: Path) -> None:
+    _install_shell_model_policy(sample_project)
+    session = ShellSession(cwd=sample_project)
+
+    _dispatch_slash_command(session, "model set --provider local-test --model --")
+
+    payload = read_json(sample_project / ".tel" / "config.json")
+    assert payload["project"]["model_policy"]["providers"]["local-test"]["model"] == "--"
+
+
 @settings(max_examples=30, suppress_health_check=[HealthCheck.function_scoped_fixture])
 @given(provider_name=PROVIDER_NAME, model=MODEL_NAME, level=st.sampled_from(sorted(SUPPORTED_REASONING_LEVELS)))
 def test_shell_model_commands_round_trip_generated_values(sample_project: Path, provider_name: str, model: str, level: str) -> None:

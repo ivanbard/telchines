@@ -371,7 +371,7 @@ def check_adapters(root: Path | None = None, adapter_name: str | None = None, ca
     checks = []
     for adapter in adapters:
         descriptor = adapter.describe(enabled=adapter.name in config.adapters)
-        missing = [binary for binary in descriptor.required_binaries if not _binary_available(binary)]
+        missing = adapter.missing_binaries()
         preview_spec = AdapterRunSpec(files=["rtl/example.sv"], top_module="example_top")
         try:
             command_preview = adapter.build_command_from_spec(config.project_root, preview_spec)
@@ -388,7 +388,7 @@ def check_adapters(root: Path | None = None, adapter_name: str | None = None, ca
                 "required_binaries": descriptor.required_binaries,
                 "missing_binaries": missing,
                 "status": "passed" if descriptor.available else "missing",
-                "summary": "adapter is available" if descriptor.available else f"missing required binaries: {', '.join(missing)}",
+                "summary": "adapter is available" if descriptor.available else f"missing required binaries: {', '.join(missing) or descriptor.name}",
                 "command_preview": command_preview,
                 "timeout_default_seconds": None,
                 "setup_diagnostics": [] if descriptor.available else adapter.setup_diagnostics(missing),

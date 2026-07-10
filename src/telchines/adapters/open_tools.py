@@ -5,6 +5,8 @@ import re
 import shlex
 import shutil
 import subprocess
+import sys
+import importlib.util
 from pathlib import Path
 from typing import Any
 
@@ -182,22 +184,39 @@ class SlangAdapter(ToolAdapter):
     artifact_types = ("log", "stdout", "stderr")
     setup_guidance = (
         "Windows/Linux/macOS: download a prebuilt slang CLI from https://github.com/MikePopoloski/slang/releases or build from source.",
-        "Python-only installs of pyslang are not enough unless they also put a slang executable on PATH.",
+        "Python fallback: install pyslang with python -m pip install pyslang when the slang CLI is not available.",
     )
 
+    def is_available(self) -> bool:
+        return shutil.which("slang") is not None or _pyslang_available()
+
+    def missing_binaries(self) -> list[str]:
+        return [] if self.is_available() else ["slang or pyslang"]
+
+    def version(self) -> str:
+        if shutil.which("slang") is not None:
+            return super().version()
+        if not _pyslang_available():
+            return "unavailable"
+        try:
+            import pyslang
+        except ImportError:
+            return "unavailable"
+        return f"pyslang {pyslang.VersionInfo.getVersionString()}"
+
     def build_command(self, project_root: Path, files: list[str], extra_args: list[str] | None = None) -> list[str]:
-        return ["slang", "--lint-only", *(extra_args or []), *files]
+        return _slang_command(["--lint-only", *(extra_args or []), *files])
 
     def build_command_from_spec(self, project_root: Path, spec: AdapterRunSpec) -> list[str]:
         spec = spec.expanded(project_root)
-        command = ["slang", "--lint-only"]
-        command.extend(f"-I{path}" for path in spec.include_dirs)
-        command.extend(f"-D{define}" for define in spec.defines)
+        args = ["--lint-only"]
+        args.extend(f"-I{path}" for path in spec.include_dirs)
+        args.extend(f"-D{define}" for define in spec.defines)
         if spec.top_module:
-            command.extend(["--top", spec.top_module])
-        command.extend(spec.extra_args)
-        command.extend(spec.files)
-        return command
+            args.extend(["--top", spec.top_module])
+        args.extend(spec.extra_args)
+        args.extend(spec.files)
+        return _slang_command(args)
 
 
 class VeribleAdapter(ToolAdapter):
@@ -230,11 +249,11 @@ class SymbiYosysAdapter(ToolAdapter):
     )
 
     def build_command(self, project_root: Path, files: list[str], extra_args: list[str] | None = None) -> list[str]:
-        return ["sby", *(extra_args or []), *files]
+        return _symbiyosys_command(project_root, [*(extra_args or []), *files])
 
     def build_command_from_spec(self, project_root: Path, spec: AdapterRunSpec) -> list[str]:
         spec = spec.expanded(project_root)
-        return ["sby", *spec.extra_args, *spec.files]
+        return _symbiyosys_command(project_root, [*spec.extra_args, *spec.files])
 
     def parse_result(self, project_root: Path, files: list[str], stdout: str, stderr: str, combined: str) -> dict[str, Any]:
         return _parse_symbiyosys_result(project_root, combined)
@@ -245,6 +264,40 @@ def _verilator_binary() -> str:
         found = shutil.which(binary)
         if found:
             return binary
+    return ""
+
+
+def _slang_command(args: list[str]) -> list[str]:
+    if shutil.which("slang") is not None:
+        return ["slang", *args]
+    if _pyslang_available():
+        return [sys.executable, "-m", "telchines.adapters.pyslang_runner", *args]
+    return ["slang", *args]
+
+
+def _pyslang_available() -> bool:
+    return importlib.util.find_spec("pyslang") is not None
+
+
+def _symbiyosys_command(project_root: Path, args: list[str]) -> list[str]:
+    command = ["sby"]
+    if project_root.is_absolute():
+        smtbmc_override = _yosys_smtbmc_python_override()
+        if smtbmc_override:
+            command.extend(["--smtbmc", smtbmc_override])
+    command.extend(args)
+    return command
+
+
+def _yosys_smtbmc_python_override() -> str:
+    smtbmc = shutil.which("yosys-smtbmc")
+    if not smtbmc:
+        return ""
+    smtbmc_path = Path(smtbmc)
+    script = smtbmc_path.with_name("yosys-smtbmc-script.py")
+    python = smtbmc_path.with_name("python3.exe")
+    if os.name == "nt" and script.exists() and python.exists():
+        return f"{python.as_posix()} {script.as_posix()}"
     return ""
 
 

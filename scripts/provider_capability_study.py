@@ -230,7 +230,7 @@ def _provider_commands(provider: dict[str, Any], *, repeat_count: int = 1) -> li
             )
         )
     if supports.get("generation", "generation" in provider.get("capabilities", [])):
-        base_commands.append(_command(name, "gen_sva", ["gen-sva", "--spec", "docs/spec.md", "--rtl", "rtl/broken_counter.sv", "--provider", name]))
+        base_commands.append(_command(name, "gen_sva", ["gen-sva", "--spec", "docs/spec.md", "--rtl", "rtl/counter_smoke.sv", "--provider", name]))
         base_commands.append(_command(name, "gen_cocotb", ["gen-cocotb", "--dut", "rtl/counter_smoke.sv", "--intent", "counter smoke", "--provider", name]))
     if supports.get("shell", True):
         base_commands.append(
@@ -414,9 +414,9 @@ def _ensure_generation_fixture_files(scratch: Path) -> None:
     docs = scratch / "docs"
     docs.mkdir(parents=True, exist_ok=True)
     (docs / "spec.md").write_text(
-        """# Broken Counter Spec
+        """# Counter Spec
 
-The `broken_counter` module has an active-low reset. When `rst_n` is low, `count` resets to zero. On each rising edge after reset, `count` increments by one.
+The counter modules have an active-low reset. When `rst_n` is low, `count` resets to zero. On each rising edge after reset, `count` increments by one.
 """,
         encoding="utf-8",
     )
@@ -475,7 +475,8 @@ if workflow == "compile_repair":
 
 if workflow == "spec_to_sva":
     invalid = not payload.get("previous_attempts")
-    content = """module broken_counter_assertions(
+    top_module = payload["rtl"].get("module_name") or "counter_smoke"
+    content = f"""module {top_module}_assertions(
   input logic clk,
   input logic rst_n,
   input logic [3:0] count
@@ -489,14 +490,14 @@ assert property (p_reset_clears_count);
 
 endmodule
 
-bind broken_counter broken_counter_assertions broken_counter_assertions_i(
+bind {top_module} {top_module}_assertions {top_module}_assertions_i(
   .clk(clk),
   .rst_n(rst_n),
   .count(count)
 );
 """
     if invalid:
-        content = "module broken_counter_assertions;\nproperty p_missing;\nassert property (p_missing);\n"
+        content = f"module {top_module}_assertions;\nproperty p_missing;\nassert property (p_missing);\n"
     print(json.dumps({
         "status": "proposed",
         "file_path": payload["output_file"],

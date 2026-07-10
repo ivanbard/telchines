@@ -29,7 +29,7 @@ instructions; it does not install simulators, linters, formal engines, or commer
 Common open-source setup routes:
 
 - Verilator: install from your Linux package manager, build from upstream, or use the MSYS2 UCRT64 package on Windows.
-- Slang: install a `slang` command from upstream prebuilt releases or build it from source. The Python-only `pyslang` package is not enough unless it also puts `slang` on `PATH`.
+- Slang: install a `slang` command from upstream prebuilt releases or build it from source. If the CLI is not available, Telchines can fall back to `pyslang`; install it with `python -m pip install -e ".[slang-smoke]"` or `python -m pip install pyslang`.
 - SymbiYosys: install `sby` through OSS CAD Suite or from the YosysHQ `sby` source tree with Yosys and solvers available.
 
 After setup, restart the shell and rerun:
@@ -105,7 +105,7 @@ The script creates tiny SystemVerilog fixtures in a temporary directory and runs
 
 - `verilator --lint-only` through the Verilator adapter
 - `iverilog` plus `vvp` through the Icarus adapter
-- `slang --lint-only` through the Slang adapter
+- `slang --lint-only` through the Slang adapter, or the `pyslang` fallback when the CLI is absent
 - `sby` against a bounded `smoke_counter.sby` file through the SymbiYosys adapter
 - filelist/include/define/top command construction for adapters that support it
 

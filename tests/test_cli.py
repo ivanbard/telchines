@@ -2213,8 +2213,11 @@ def test_cli_gen_cocotb_with_heuristic_provider(sample_project: Path, monkeypatc
     assert payload["provider"] == "heuristic"
     assert payload["status"] == "validated"
     assert payload["validation_status"] == "passed"
-    assert payload["validation_mode"] == "syntax_plus_structure"
-    assert payload["validation_limitations"]
+    assert payload["validation_mode"] in {"syntax_plus_structure", "compile_and_run"}
+    if payload["validation_mode"] == "compile_and_run":
+        assert payload["executable_status"] == "passed"
+    else:
+        assert payload["validation_limitations"]
     assert payload["top_module"] == "uart_rx"
     assert payload["artifact_path"].endswith("test_uart_rx.py")
     assert payload["manifest_path"].endswith("uart_rx_cocotb_manifest.json")
@@ -2227,7 +2230,7 @@ def test_cli_gen_cocotb_with_heuristic_provider(sample_project: Path, monkeypatc
     assert manifest_path.exists()
     assert "@cocotb.test()" in artifact_path.read_text(encoding="utf-8")
     manifest = read_json(manifest_path)
-    assert manifest["validation"]["mode"] == "syntax_plus_structure"
+    assert manifest["validation"]["mode"] == payload["validation_mode"]
 
     unchanged = runner.invoke(app, ["artifacts", "review", payload["candidate_id"]])
     assert unchanged.exit_code == 0

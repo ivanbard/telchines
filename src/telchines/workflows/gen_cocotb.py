@@ -131,6 +131,7 @@ def execute_cocotb_generation(
         write_json(manifest_path, manifest_payload)
 
         validation_run = validate_cocotb_candidate(config, store, candidate, run_spec=run_spec)
+        write_json(manifest_path, _build_manifest_payload(candidate, validation_run=validation_run))
         candidate.status = "validated" if validation_run.status == "passed" else "rejected"
         candidate.validation_attempts.append(
             ValidationAttempt(attempt=attempt, result=validation_run.status, run_id=validation_run.run_id, notes=validation_run.summary)
@@ -294,7 +295,7 @@ def validate_cocotb_candidate(config: ProjectConfig, store: RunStore, candidate:
                 ],
             },
             observation_ids=[observation.observation_id for observation in observations],
-            summary=_validation_summary(returncode, combined),
+            summary=_validation_summary(returncode, combined, executable_status=str(smoke["executable_status"])),
             replay_command=command,
         )
         store.save_run(validation_run)
@@ -303,7 +304,27 @@ def validate_cocotb_candidate(config: ProjectConfig, store: RunStore, candidate:
         remove_tree(temp_root)
 
 
-def _build_manifest_payload(candidate: CocotbCandidate) -> dict[str, object]:
+def _build_manifest_payload(candidate: CocotbCandidate, validation_run: VerificationRun | None = None) -> dict[str, object]:
+    validation: dict[str, object] = {
+        "mode": "syntax_plus_structure",
+        "limitations": [
+            "py_compile confirms Python syntax only.",
+            "Built-in cocotb structure checks confirm import and test-decorator shape.",
+            "Simulator execution requires optional cocotb and EDA tooling.",
+        ],
+    }
+    if validation_run is not None:
+        validation = {
+            "run_id": validation_run.run_id,
+            "status": validation_run.status,
+            "summary": validation_run.summary,
+            "mode": validation_run.tool_result.get("validation_mode", "syntax_plus_structure"),
+            "executable_status": validation_run.tool_result.get("executable_status"),
+            "simulator": validation_run.tool_result.get("simulator"),
+            "command_artifacts": validation_run.tool_result.get("command_artifacts", {}),
+            "setup_diagnostics": validation_run.tool_result.get("setup_diagnostics", []),
+            "limitations": validation_run.tool_result.get("limitations", []),
+        }
     return {
         "workflow": "dut_to_cocotb",
         "candidate_id": candidate.candidate_id,
@@ -324,14 +345,7 @@ def _build_manifest_payload(candidate: CocotbCandidate) -> dict[str, object]:
             "Extend stimulus coverage beyond the smoke path.",
             "Connect simulator and cocotb runner configuration for executable validation.",
         ],
-        "validation": {
-            "mode": "syntax_plus_structure",
-            "limitations": [
-                "py_compile confirms Python syntax only.",
-                "Built-in cocotb structure checks confirm import and test-decorator shape.",
-                "Simulator execution requires optional cocotb and EDA tooling.",
-            ],
-        },
+        "validation": validation,
         "evidence_paths": candidate.evidence_paths,
     }
 
@@ -342,8 +356,10 @@ def _generation_summary(candidate: CocotbCandidate, validation_run: Verification
     return f"{provider_name} generated cocotb scaffold for {candidate.top_module}; python syntax validation failed"
 
 
-def _validation_summary(exit_code: int, combined: str) -> str:
+def _validation_summary(exit_code: int, combined: str, *, executable_status: str = "not_attempted") -> str:
     if exit_code == 0:
+        if executable_status == "passed":
+            return "py_compile and executable cocotb smoke validation passed"
         return "py_compile validation passed"
     first_line = next((line.strip() for line in combined.splitlines() if line.strip()), "")
     if first_line:

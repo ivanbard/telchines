@@ -87,7 +87,7 @@ tel adapters check
 python scripts/tool_smoke.py --allow-missing
 ```
 
-Missing Verilator, Slang, or SymbiYosys entries include Windows/MSYS2, Linux, source, or OSS CAD Suite setup hints where applicable. These are diagnostics only; Telchines expects the selected tool binaries to be installed externally and visible on `PATH`.
+Missing Verilator, Slang, or SymbiYosys entries include Windows/MSYS2, Linux, source, Python fallback, or OSS CAD Suite setup hints where applicable. Slang validation can use either a `slang` executable or the optional `pyslang` package; Verilator and SymbiYosys still require external tool installs visible to the current shell.
 
 Generate a cocotb scaffold:
 

@@ -270,11 +270,16 @@ def test_formal_validation_mode_and_availability_matrix(
         return
 
     setup_ready = registered and enabled and available and supported
-    if setup_ready:
+    if setup_ready and (mode == "required" or exit_code == 0):
         assert validator == "symbiyosys"
         assert returncode == exit_code
         assert tool_result["formal_status"] == ("passed" if exit_code == 0 else "failed")
         assert tool_result["validation_mode"] == "formal_run"
+        assert tool_result["command_artifacts"]["sby_file"]
+    elif setup_ready:
+        assert validator == "builtin_sva_syntax"
+        assert returncode == 0
+        assert tool_result["formal_status"] == "failed"
         assert tool_result["command_artifacts"]["sby_file"]
     elif mode == "required":
         assert validator == "symbiyosys"
@@ -311,8 +316,8 @@ def test_formal_sby_file_uses_run_spec_top_and_sources(work_root: Path, monkeypa
     assert returncode == 0
     assert "mode bmc" in sby_text
     assert "depth 4" in sby_text
-    assert "read -formal -sv -Irtl/include -DFORMAL=1 rtl/dut.sv" in sby_text
-    assert "read -formal -sv -Irtl/include -DFORMAL=1 rtl/helper.sv" in sby_text
+    assert "read -formal -sv -Irtl/include -DFORMAL=1 dut.sv" in sby_text
+    assert "read -formal -sv -Irtl/include -DFORMAL=1 helper.sv" in sby_text
     assert "read -formal -sv -Irtl/include -DFORMAL=1 dut_assertions.sv" in sby_text
     assert "prep -top formal_top" in sby_text
     run_spec = tool_result["adapter_result"]["run_spec"]
