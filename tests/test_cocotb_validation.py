@@ -294,6 +294,22 @@ def test_cocotb_makefiles_dir_falls_back_to_python_module(monkeypatch) -> None:
     assert calls == [[sys.executable, "-m", "cocotb_tools.config", "--makefiles"]]
 
 
+def test_cocotb_makefiles_dir_handles_missing_parent_package(monkeypatch) -> None:
+    monkeypatch.setattr(gen_cocotb.shutil, "which", lambda name: None)
+
+    def missing_parent(name: str):
+        raise ModuleNotFoundError(f"No module named {name!r}")
+
+    monkeypatch.setattr(gen_cocotb.importlib.util, "find_spec", missing_parent)
+
+    makefiles_dir, diagnostics = gen_cocotb._cocotb_makefiles_dir()
+
+    assert makefiles_dir == Path()
+    assert diagnostics == [
+        "cocotb makefiles are not discoverable via cocotb-config or python -m cocotb_tools.config --makefiles"
+    ]
+
+
 def test_cocotb_common_missing_reports_install_command(monkeypatch) -> None:
     monkeypatch.setattr(gen_cocotb.importlib.util, "find_spec", lambda name: None if name == "cocotb" else object())
     monkeypatch.setattr(gen_cocotb.shutil, "which", lambda name: None if name == "make" else f"/usr/bin/{name}")

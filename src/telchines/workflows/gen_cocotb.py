@@ -649,8 +649,13 @@ def _timeout_output(value: str | bytes | None) -> str:
 
 def _cocotb_makefiles_dir() -> tuple[Path, list[str]]:
     command = ["cocotb-config", "--makefiles"] if shutil.which("cocotb-config") else [sys.executable, "-m", "cocotb_tools.config", "--makefiles"]
-    if command[0] == sys.executable and importlib.util.find_spec("cocotb_tools.config") is None:
-        return Path(), ["cocotb makefiles are not discoverable via cocotb-config or python -m cocotb_tools.config --makefiles"]
+    if command[0] == sys.executable:
+        try:
+            module_spec = importlib.util.find_spec("cocotb_tools.config")
+        except ModuleNotFoundError:
+            module_spec = None
+        if module_spec is None:
+            return Path(), ["cocotb makefiles are not discoverable via cocotb-config or python -m cocotb_tools.config --makefiles"]
     try:
         result = subprocess.run(command, capture_output=True, text=True, check=False, timeout=15)
     except (OSError, subprocess.TimeoutExpired) as exc:
