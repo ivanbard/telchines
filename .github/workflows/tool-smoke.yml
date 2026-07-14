@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  verilator-iverilog:
+  open-tools:
     runs-on: ubuntu-latest
 
     steps:
@@ -19,12 +19,12 @@ jobs:
       - name: Install Python package
         run: |
           python -m pip install --upgrade pip
-          pip install -e .[dev]
+          pip install -e .[dev,cocotb-smoke,slang-smoke]
 
       - name: Install open-source EDA tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y iverilog verilator
+          sudo apt-get install -y iverilog make verilator
 
       - name: Run real adapter smoke tests
-        run: python scripts/tool_smoke.py --adapters verilator iverilog
+        run: python scripts/tool_smoke.py --adapters verilator iverilog slang --cocotb

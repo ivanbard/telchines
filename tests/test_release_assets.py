@@ -21,6 +21,31 @@ def test_package_version_matches_pyproject() -> None:
     assert pyproject["project"]["version"] == __version__
 
 
+def test_release_version_surfaces_match() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    readme = (repo_root / "README.md").read_text(encoding="utf-8")
+    changelog = (repo_root / "CHANGELOG.md").read_text(encoding="utf-8")
+
+    assert f"version-v{__version__}-" in readme
+    assert f"Version {__version__}" in readme
+    assert re.search(rf"^## {re.escape(__version__)} - (?:Unreleased|\d{{4}}-\d{{2}}-\d{{2}})$", changelog, re.MULTILINE)
+
+
+def test_checkout_and_packaged_benchmarks_match() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    checkout_root = repo_root / "benchmarks"
+    packaged_root = repo_root / "src" / "telchines" / "benchmarks"
+
+    def snapshot(root: Path) -> dict[str, bytes]:
+        return {
+            path.relative_to(root).as_posix(): path.read_bytes().replace(b"\r\n", b"\n")
+            for path in root.rglob("*")
+            if path.is_file() and "__pycache__" not in path.parts and path.suffix not in {".pyc", ".pyo"}
+        }
+
+    assert snapshot(checkout_root) == snapshot(packaged_root)
+
+
 def test_cli_reports_version() -> None:
     result = runner.invoke(app, ["--version"])
     assert result.exit_code == 0

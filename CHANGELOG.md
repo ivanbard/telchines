@@ -1,6 +1,23 @@
 # Changelog
 
-## 1.0.2 - Unreleased
+## 1.1.0 - 2026-07-13
+
+Verification execution, diagnostics, and release-readiness expansion.
+
+- hardened cocotb validation with separate syntax, structure, simulator compile/launch, cocotb initialization, and test-result stages
+- made cocotb smoke subprocesses time-bounded and explicitly classified unsupported Windows/MSYS/native-Icarus environments
+- separated SVA artifact, syntax, adapter, formal, proof, benchmark, and overall workflow statuses so bounded checks cannot imply complete proof
+- added actionable provider HTTP diagnostics, bounded readiness probes, transport-versus-workflow reporting, and repeat stability/drift metrics
+- exposed the actual LangGraph or bounded-fallback runtime and installation remedy in provider and agent results
+- made imported-run replayability explicit and replaced missing-run or missing-executable tracebacks with CLI errors
+- expanded waveform investigation with hierarchical and fuzzy matching, bus decoding, time windows, and log timestamp correlation
+- expanded retrieval and benchmark coverage for nested filelists, packages, includes, macros, generated RTL, vendor compile options, and compile-order failures
+- added CI and coverage importers, broader UVM/vendor triage fixtures, project templates, scratch evaluation, and scoped artifact lifecycle controls
+- added a `pyslang` fallback for Slang validation and strengthened Verilator, Icarus, and SymbiYosys adapter smoke coverage
+- expanded the provider capability harness and model matrices for local, hosted, OpenAI-compatible, Anthropic, OpenRouter, and agent-runtime paths
+- restored the default bundled evaluation suite to a fully passing result while preserving explicit formal warnings and execution-backing metadata
+
+## 1.0.2 - 2026-06-22
 
 PyPI and public repository presentation polish.
 
@@ -8,10 +25,7 @@ PyPI and public repository presentation polish.
 - made the README logo and documentation links render correctly from PyPI
 - removed local agent skill files and internal planning/backlog artifacts from the public tree
 - updated release metadata and badges for the refreshed package page
-
-## 1.0.1 - Unreleased
-
-Release hardening patch.
+- included the release-hardening work originally prepared under the unpublished `1.0.1` version
 
 - packaged the offline benchmark suite in the installed wheel
 - made `tel eval run` fall back to bundled benchmarks when a project does not provide a local `benchmarks/` directory

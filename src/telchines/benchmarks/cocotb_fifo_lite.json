@@ -10,6 +10,7 @@
   },
   "scoring": {
     "expected_validation": "passed",
+    "expected_executable": "when_supported",
     "expected_identifiers": [
       "clk",
       "rst_n",
