@@ -915,11 +915,23 @@ def _stability_metrics(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _redact_summary(value: Any) -> Any:
-    secrets = [secret for key, secret in os.environ.items() if _looks_secret_key(key) and secret]
-    text = json.dumps(value)
-    for secret in secrets:
-        text = text.replace(secret, "[REDACTED]")
-    return json.loads(text)
+    secrets = sorted(
+        {secret for key, secret in os.environ.items() if _looks_secret_key(key) and secret},
+        key=len,
+        reverse=True,
+    )
+
+    def redact(item: Any) -> Any:
+        if isinstance(item, dict):
+            return {key: redact(child) for key, child in item.items()}
+        if isinstance(item, list):
+            return [redact(child) for child in item]
+        if isinstance(item, str):
+            for secret in secrets:
+                item = item.replace(secret, "[REDACTED]")
+        return item
+
+    return redact(value)
 
 
 def _looks_secret_key(key: str) -> bool:

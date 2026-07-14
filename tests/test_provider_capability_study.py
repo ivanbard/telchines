@@ -223,6 +223,15 @@ def test_provider_capability_redaction_removes_secret_env_values(monkeypatch: py
     assert encoded.count("[REDACTED]") >= 1
 
 
+def test_provider_capability_redaction_preserves_keys_that_match_secrets(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TELCHINES_TEST_TOKEN", "scratch_root")
+    summary = {"scratch_root": "scratch_root", "nested": [{"scratch_root": "safe"}]}
+
+    redacted = provider_capability_study._redact_summary(summary)
+
+    assert redacted == {"scratch_root": "[REDACTED]", "nested": [{"scratch_root": "safe"}]}
+
+
 def test_provider_capability_scorer_rejects_false_green_agent_repair() -> None:
     status, reason = provider_capability_study._score_command_result(
         {"label": "agent_repair"},
