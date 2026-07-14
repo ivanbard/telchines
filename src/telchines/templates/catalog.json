@@ -3,7 +3,7 @@
     {
       "name": "basic-rtl",
       "description": "Minimal RTL, docs, logs, and coverage scaffold.",
-      "directories": ["docs", "rtl", "logs/regressions", "cov", "examples"],
+      "directories": ["docs", "rtl", "include", "generated", "filelists", "logs/regressions", "cov", "examples"],
       "aliases": {
         "reset": ["rst_n", "reset_n", "rst"],
         "clock": ["clk", "clock"],
@@ -12,7 +12,11 @@
       "files": [
         {
           "path": "README.telchines.md",
-          "content": "# Telchines Project\n\nThis scaffold keeps RTL, docs, logs, coverage, and import examples in predictable local paths.\n"
+          "content": "# Telchines Project\n\nThis scaffold keeps RTL, docs, generated RTL, filelists, includes, logs, coverage, and import examples in predictable local paths.\n"
+        },
+        {
+          "path": "filelists/design.f",
+          "content": "# Keep package sources before modules that import them.\n+incdir+include\n+define+SIMULATION=1\n# Add ordered RTL and generated RTL sources below.\n"
         },
         {
           "path": "examples/regression_manifest.json",
@@ -53,7 +57,7 @@
     {
       "name": "cocotb",
       "description": "Adds cocotb-oriented test and generated-artifact paths.",
-      "directories": ["docs", "rtl", "tests/cocotb", "logs/regressions", "cov", "examples"],
+      "directories": ["docs", "rtl", "include", "generated", "filelists", "tests/cocotb", "logs/regressions", "cov", "examples"],
       "aliases": {"cocotb": ["testbench", "dut", "makefile", "simulator"]},
       "files": [
         {"path": "README.telchines.md", "content": "# Cocotb Telchines Project\n\nUse `tel gen-cocotb --dut rtl/<dut>.sv --spec docs/<spec>.md` to draft reviewable tests.\n"},
@@ -64,7 +68,7 @@
     {
       "name": "uvm",
       "description": "Adds UVM testbench directories and retrieval aliases.",
-      "directories": ["docs", "rtl", "tb/uvm", "logs/regressions", "cov", "examples"],
+      "directories": ["docs", "rtl", "include", "generated", "filelists", "tb/uvm", "logs/regressions", "cov", "examples"],
       "aliases": {
         "uvm timeout": ["UVM_ERROR", "phase", "objection", "sequence timeout"],
         "vif": ["virtual interface", "config_db"],
@@ -79,31 +83,34 @@
     {
       "name": "vivado",
       "description": "Adds Vivado build-log and constraint placeholders.",
-      "directories": ["docs", "rtl", "constraints", "build/vivado", "logs/regressions", "cov", "examples"],
-      "aliases": {"vivado": ["Synth", "Place", "Route", "Timing"], "xdc": ["constraints", "clock"]},
+      "directories": ["docs", "rtl", "include", "generated", "filelists", "constraints", "build/vivado", "logs/regressions", "cov", "examples"],
+      "aliases": {"vivado": ["Synth", "Place", "Route", "Timing"], "xdc": ["constraints", "clock"], "compile options": ["filelist", "incdir", "define", "generated"]},
       "files": [
         {"path": "README.telchines.md", "content": "# Vivado Telchines Project\n\nImport exported coverage, index build logs, and triage Vivado diagnostics locally.\n"},
         {"path": "constraints/README.md", "content": "# Constraints\n\nKeep project XDC files or references here.\n"}
+        ,{"path": "filelists/vivado.f", "content": "# Vendor-facing compile context. Keep package sources first.\n+incdir+include\n+define+VIVADO_SIM=1\n# Add generated sources before wrappers that instantiate them.\n"}
       ]
     },
     {
       "name": "quartus",
       "description": "Adds Quartus build-log and constraint placeholders.",
-      "directories": ["docs", "rtl", "constraints", "build/quartus", "logs/regressions", "cov", "examples"],
-      "aliases": {"quartus": ["Analysis", "Synthesis", "Fitter", "TimeQuest"], "sdc": ["constraints", "clock"]},
+      "directories": ["docs", "rtl", "include", "generated", "filelists", "constraints", "build/quartus", "logs/regressions", "cov", "examples"],
+      "aliases": {"quartus": ["Analysis", "Synthesis", "Fitter", "TimeQuest"], "sdc": ["constraints", "clock"], "compile options": ["filelist", "incdir", "define", "generated"]},
       "files": [
         {"path": "README.telchines.md", "content": "# Quartus Telchines Project\n\nUse vendor build logs with `tel triage` and normalize coverage exports before `coverage-plan`.\n"},
         {"path": "constraints/README.md", "content": "# Constraints\n\nKeep SDC files or references here.\n"}
+        ,{"path": "filelists/quartus.f", "content": "# Vendor-facing compile context. Keep package sources first.\n+incdir+include\n+define+QUARTUS_SIM=1\n# Add generated sources before wrappers that instantiate them.\n"}
       ]
     },
     {
       "name": "libero",
       "description": "Adds Libero build-log and constraint placeholders.",
-      "directories": ["docs", "rtl", "constraints", "build/libero", "logs/regressions", "cov", "examples"],
-      "aliases": {"libero": ["synthesis", "place", "route", "timing"], "pdc": ["constraints", "clock"]},
+      "directories": ["docs", "rtl", "include", "generated", "filelists", "constraints", "build/libero", "logs/regressions", "cov", "examples"],
+      "aliases": {"libero": ["synthesis", "place", "route", "timing"], "pdc": ["constraints", "clock"], "compile options": ["filelist", "incdir", "define", "generated"]},
       "files": [
         {"path": "README.telchines.md", "content": "# Libero Telchines Project\n\nUse local exports and logs; no vendor install paths or secrets are stored by this template.\n"},
         {"path": "constraints/README.md", "content": "# Constraints\n\nKeep PDC/SDC files or references here.\n"}
+        ,{"path": "filelists/libero.f", "content": "# Vendor-facing compile context. Keep package sources first.\n+incdir+include\n+define+LIBERO_SIM=1\n# Add generated sources before wrappers that instantiate them.\n"}
       ]
     }
   ]

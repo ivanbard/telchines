@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 from telchines.config import ProjectConfig
-from telchines.retrieval import RetrievalService
+from telchines.retrieval import RetrievalService, analyze_filelists
 from telchines.utils import read_json, write_json
 
 
@@ -144,3 +145,39 @@ def test_retrieval_expands_configured_domain_aliases(sample_project: Path) -> No
     assert any(hit.path.endswith(("uart.md", "uart_rx.sv")) for hit in aliased.hits)
     assert aliased.metadata["query_aliases"] == {"framing pulse": ["start bit", "serial_i"]}
     assert "serial_i" in aliased.metadata["expanded_query_tokens"]
+
+
+def test_retrieval_indexes_medium_vendor_fixture_and_exposes_build_context(work_root: Path) -> None:
+    fixture_root = Path(__file__).resolve().parents[1] / "benchmarks" / "assets" / "retrieval_multifile_filelist_include"
+    project_root = work_root / "vendor_fixture"
+    shutil.copytree(fixture_root, project_root)
+    config = ProjectConfig.init_project(project_root)
+    retrieval = RetrievalService(config)
+
+    retrieval.build_index()
+    context = retrieval.search(
+        "SoC UART package filelist include macro vendor generated compile options",
+        mode="vendor_build",
+        focus_paths=["vendor/vendor_compile.f"],
+        limit=10,
+    )
+
+    indexed_paths = {hit.path for hit in context.hits}
+    assert "vendor/vendor_compile.f" in indexed_paths
+    assert "filelists/soc.f" in indexed_paths
+    assert "generated/vendor_pll_wrapper.sv" in indexed_paths
+    assert context.metadata["build_context"]["defines"] == ["VENDOR_PLL_MODEL=1", "SIMULATION=1"]
+    assert context.metadata["build_context"]["generated_sources"] == ["generated/vendor_pll_wrapper.sv"]
+    assert context.metadata["build_context"]["error_count"] == 0
+
+
+def test_filelist_analysis_reports_missing_include_dirs_and_package_order(work_root: Path) -> None:
+    fixture_root = Path(__file__).resolve().parents[1] / "benchmarks" / "assets" / "retrieval_multifile_filelist_include"
+    project_root = work_root / "negative_filelists"
+    shutil.copytree(fixture_root, project_root)
+
+    missing_include = analyze_filelists(project_root, ["negative/missing_include.f"])
+    bad_order = analyze_filelists(project_root, ["negative/bad_order.f"])
+
+    assert any(item["code"] == "unresolved_include" for item in missing_include["diagnostics"])
+    assert any(item["code"] == "compile_order_package" for item in bad_order["diagnostics"])

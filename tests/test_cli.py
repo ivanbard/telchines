@@ -632,6 +632,30 @@ def test_cli_runs_replay_requires_confirmation(sample_project: Path, monkeypatch
     assert marker.read_text(encoding="utf-8") == "ok"
 
 
+def test_cli_rejects_non_replayable_import_without_file_not_found(sample_project: Path, monkeypatch) -> None:
+    config = ProjectConfig.load(sample_project)
+    store = RunStore(config)
+    store.save_run(
+        VerificationRun(
+            run_id="run_import_without_command",
+            project_id=config.project.project_id,
+            commit_sha="workspace",
+            workflow_type="regression_import",
+            tool=ToolReference(kind="regression_manager", name="external"),
+            inputs={"manifest_path": "import.json"},
+            status="failed",
+            started_at="2026-04-13T00:00:00+00:00",
+        )
+    )
+    monkeypatch.chdir(sample_project)
+
+    result = runner.invoke(app, ["runs", "replay", "run_import_without_command", "--yes"])
+
+    assert result.exit_code == 2
+    assert "is not replayable: imported run did not include a replay command" in result.stderr
+    assert "FileNotFoundError" not in result.stderr
+
+
 def test_cli_runs_doctor_reports_corrupt_run_records(sample_project: Path, monkeypatch) -> None:
     config = ProjectConfig.load(sample_project)
     store = RunStore(config)
@@ -2066,9 +2090,19 @@ def test_cli_gen_sva_with_local_command_provider(sample_project: Path, monkeypat
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert payload["provider"] == "sva-local"
-    assert payload["status"] == "validated"
+    assert payload["status"] in {"validated", "validated_with_warnings"}
+    assert payload["candidate_status"] == "validated"
     assert payload["validation_status"] == "passed"
     assert payload["validation_mode"] == "structure_only"
+    assert payload["structural_status"] == "passed"
+    assert payload["syntax_status"] == "not_run"
+    assert payload["adapter_status"] == "not_run"
+    assert payload["proof_status"] in {"not_attempted", "not_proved"}
+    if payload["formal_status"] == "failed":
+        assert payload["status"] == "validated_with_warnings"
+        assert payload["overall_status"] == "passed_with_warnings"
+    else:
+        assert payload["status"] == "validated"
     assert payload["validation_limitations"]
     assert payload["artifact_path"].endswith("uart_rx_assertions.sv")
     assert payload["property_summaries"][0]["name"] == "p_start_seen_after_start_bit"
@@ -2146,11 +2180,13 @@ def test_cli_gen_sva_retries_with_validation_feedback(sample_project: Path, monk
     result = runner.invoke(app, ["gen-sva", "--spec", "docs/uart.md", "--rtl", "rtl/uart_rx.sv"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["status"] == "validated"
+    assert payload["status"] in {"validated", "validated_with_warnings"}
+    assert payload["candidate_status"] == "validated"
     assert payload["validation_status"] == "passed"
     assert len(payload["attempts"]) == 2
     assert payload["attempts"][0]["validation_status"] == "failed"
     assert payload["attempts"][1]["validation_status"] == "passed"
+    assert payload["attempts"][1]["overall_status"] in {"passed", "passed_with_warnings"}
     assert len(payload["rejected_candidate_ids"]) == 1
     rejected = runner.invoke(app, ["artifacts", "review", payload["rejected_candidate_ids"][0]])
     assert rejected.exit_code == 0

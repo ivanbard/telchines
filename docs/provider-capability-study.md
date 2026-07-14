@@ -60,7 +60,7 @@ Live providers are skipped unless `--include-live` is passed and their `enabled_
 
 For each planned provider, the harness can run:
 
-- offline and live `tel providers check`
+- offline and live `tel providers check`. A live check reports transport readiness separately from workflow readiness and sends one bounded `provider_probe` request (64 output tokens for HTTP providers). The request uses the established `provider_check` workflow type with `probe_type: provider_probe` and requires `status: ok`; wrappers may echo either `provider_check` or `provider_probe` as the workflow type.
 - agent repair on a scratch missing-semicolon fixture
 - SVA generation with validator feedback retries enabled
 - cocotb generation with `py_compile` validation and retries enabled
@@ -78,7 +78,11 @@ Reports are written under `.test-work/provider-capability-study/<matrix-name>/` 
 
 Secret-looking environment values are redacted from the summary payload. Raw `.tel` run artifacts stay inside the ignored scratch directory.
 
-Use `--repeat-count N` to repeat each scenario. The JSON summary records repeat index, provider kind, model, reasoning level, latency, retry count, JSON repair attempts when reported by the workflow, validation deltas, and semantic fingerprints. The stability section groups repeats by provider, scenario, model, and reasoning level.
+Use `--repeat-count N` to repeat each scenario. The JSON summary records repeat index, provider kind, model, reasoning level, latency, retry count, JSON repair attempts when reported by the workflow, validation deltas, and semantic fingerprints. The stability section groups repeats by provider, scenario, model, and reasoning level, and explicitly flags retry and validation drift for nightly comparisons.
+
+When `--provider` selects an `agent_runtime` entry, its base provider is retained only as a dependency in the scratch config. The run exercises the selected agent scenarios; base readiness is checked through the agent's own bounded base-provider probe instead of unexpectedly running a second full workflow suite.
+
+HTTP 400 diagnostics identify the safe endpoint path, configured model, payload field shape, and reasoning wire field, then give endpoint-specific remediation. They never include request bodies, response bodies, or credential values.
 
 ## Presets
 

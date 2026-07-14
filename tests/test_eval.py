@@ -9,7 +9,7 @@ from hypothesis import strategies as st
 
 from telchines.config import ProjectConfig
 from telchines.errors import ConfigError
-from telchines.eval import run_default_suite
+from telchines.eval import _aggregate_metrics, _benchmark_status, _cocotb_executable_expectation_met, run_default_suite
 from telchines.operations import load_eval_report, run_eval
 from telchines.run_store import RunStore
 
@@ -26,6 +26,13 @@ def _tiny_eval_report(*_args, **_kwargs) -> dict[str, object]:
         "total": 1,
         "metrics": {},
     }
+
+
+def test_cocotb_benchmark_executable_expectation_tracks_environment_contract() -> None:
+    assert _cocotb_executable_expectation_met("when_supported", "supported", "passed")
+    assert _cocotb_executable_expectation_met("when_supported", "unsupported", "skipped")
+    assert not _cocotb_executable_expectation_met("when_supported", "supported", "skipped")
+    assert not _cocotb_executable_expectation_met("when_supported", "unsupported", "failed")
 
 
 def test_eval_default_suite(work_root: Path) -> None:
@@ -61,6 +68,13 @@ def test_eval_default_suite(work_root: Path) -> None:
     assert report["metrics"]["cocotb"]["manifest_generation_rate"] == 1.0
     assert sum(report["metrics"]["cocotb"]["validation_modes"].values()) == report["metrics"]["cocotb"]["cases"]
     assert sum(report["metrics"]["cocotb"]["executable_statuses"].values()) == report["metrics"]["cocotb"]["cases"]
+    cocotb_cases = [case for case in report["cases"] if case["task_type"] == "cocotb"]
+    assert all(case["executable_expectation"] == "when_supported" for case in cocotb_cases)
+    assert all(
+        (case["executable_contract"] == "supported" and case["executable_status"] == "passed")
+        or (case["executable_contract"] == "unsupported" and case["executable_status"] == "skipped")
+        for case in cocotb_cases
+    )
     assert report["metrics"]["coverage"]["cases"] == 3
     assert report["metrics"]["coverage"]["avg_recommendation_count"] >= 1.0
     assert report["metrics"]["coverage"]["avg_evidence_count"] >= 1.0
@@ -80,6 +94,36 @@ def test_eval_default_suite(work_root: Path) -> None:
         == report["total"]
     )
     assert "project_context" not in report
+
+
+def test_eval_surfaces_optional_formal_failures_as_warnings() -> None:
+    result = {
+        "task_type": "sva",
+        "passed": True,
+        "benchmark_status": _benchmark_status(True, "passed_with_warnings"),
+        "generated_candidate": True,
+        "validation_status": "passed",
+        "validation_mode": "structure_only",
+        "structural_status": "passed",
+        "syntax_status": "not_run",
+        "adapter_status": "not_run",
+        "formal_status": "failed",
+        "proof_status": "not_proved",
+        "overall_status": "passed_with_warnings",
+        "artifact_generated": True,
+        "property_count": 1,
+        "property_name_match_rate": 1.0,
+        "citation_match_rate": 1.0,
+        "benchmark_scope": "fixture",
+        "execution_backing": "formal_tool",
+    }
+
+    metrics = _aggregate_metrics([result])
+
+    assert result["benchmark_status"] == "passed_with_warnings"
+    assert metrics["sva"]["formal_failure_count"] == 1
+    assert metrics["sva"]["overall_statuses"] == {"passed_with_warnings": 1}
+    assert metrics["readiness"]["benchmark_status_counts"] == {"passed_with_warnings": 1}
 
 
 def test_eval_default_suite_uses_bundled_benchmarks(work_root: Path) -> None:

@@ -207,7 +207,7 @@ def validate_sva_candidate(config: ProjectConfig, store: RunStore, candidate: Sv
             artifacts={"log_path": str(log_path), "generated_file": candidate.file_path},
             tool_result=tool_result,
             observation_ids=[observation.observation_id for observation in observations],
-            summary=_validation_summary(returncode, combined, validator_name),
+            summary=_validation_summary(returncode, combined, validator_name, tool_result),
             replay_command=command,
         )
         store.save_run(validation_run)
@@ -243,6 +243,12 @@ def _attempt_record(
         "validation_run_id": validation_run.run_id,
         "validation_status": validation_run.status,
         "validation_summary": validation_run.summary,
+        "structural_status": validation_run.tool_result.get("structural_status"),
+        "syntax_status": validation_run.tool_result.get("syntax_status"),
+        "adapter_status": validation_run.tool_result.get("adapter_status"),
+        "formal_status": validation_run.tool_result.get("formal_status"),
+        "proof_status": validation_run.tool_result.get("proof_status"),
+        "overall_status": validation_run.tool_result.get("overall_status"),
         "request_artifact": request_artifact,
         "response_artifact": response_artifact,
         "replay_artifact": replay_artifact,
@@ -275,7 +281,12 @@ def _run_validation(
         "validator": "builtin_sva_syntax",
         "checks": checks,
         "limitations": limitations,
+        "structural_status": "failed" if errors else "passed",
+        "syntax_status": "not_run",
+        "adapter_status": "not_run",
         "formal_status": "not_run",
+        "proof_status": "not_attempted",
+        "overall_status": "failed" if errors else "passed",
         "formal_adapter": None,
         "command_artifacts": {},
         "setup_diagnostics": [],
@@ -295,21 +306,67 @@ def _run_validation(
     formal_result = _run_formal_validation(config, project_root, candidate, checks, run_spec=run_spec)
     if formal_result is None:
         return base_result
-    if formal_result[2] == 0 or _formal_mode(config) == "required":
-        return formal_result
-    merged_result = dict(base_result[4])
-    merged_result["formal_status"] = formal_result[4].get("formal_status")
-    merged_result["formal_adapter"] = formal_result[4].get("formal_adapter")
-    merged_result["setup_diagnostics"] = formal_result[4].get("setup_diagnostics", [])
-    merged_result["command_artifacts"] = {
-        **dict(base_result[4].get("command_artifacts", {})),
-        **dict(formal_result[4].get("command_artifacts", {})),
-    }
-    merged_result["limitations"] = [
-        *list(base_result[4].get("limitations", [])),
-        "optional formal validation did not pass; rerun with generation.sva.formal.mode=required to gate on formal results",
-    ]
-    return base_result[0], base_result[1], base_result[2], base_result[3], merged_result
+    return _merge_formal_result(base_result, formal_result, required=_formal_mode(config) == "required")
+
+
+def _merge_formal_result(
+    base_result: tuple[str, list[str], int, str, dict[str, object]],
+    formal_result: tuple[str, list[str], int, str, dict[str, object]],
+    *,
+    required: bool,
+) -> tuple[str, list[str], int, str, dict[str, object]]:
+    base_validator, base_command, base_returncode, base_output, base_tool_result = base_result
+    formal_validator, formal_command, formal_returncode, formal_output, formal_tool_result = formal_result
+    merged_result = dict(base_tool_result)
+    merged_result.update(
+        {
+            "formal_status": formal_tool_result.get("formal_status", "not_run"),
+            "proof_status": formal_tool_result.get("proof_status", "not_attempted"),
+            "formal_adapter": formal_tool_result.get("formal_adapter"),
+            "setup_diagnostics": formal_tool_result.get("setup_diagnostics", []),
+            "adapter_result": formal_tool_result.get("adapter_result"),
+            "command_artifacts": {
+                **dict(base_tool_result.get("command_artifacts", {})),
+                **dict(formal_tool_result.get("command_artifacts", {})),
+            },
+        }
+    )
+    formal_status = str(merged_result["formal_status"])
+    if formal_returncode == 0:
+        merged_result.update(
+            {
+                "status": "passed",
+                "validation_mode": "formal_run",
+                "validator": formal_validator,
+                "overall_status": "passed",
+            }
+        )
+        return formal_validator, formal_command, 0, formal_output or base_output, merged_result
+    if required:
+        merged_result.update(
+            {
+                "status": "failed",
+                "validation_mode": "formal_run",
+                "validator": formal_validator,
+                "overall_status": "failed",
+            }
+        )
+        return formal_validator, formal_command, formal_returncode, formal_output or base_output, merged_result
+    if formal_status == "failed":
+        merged_result.update(
+            {
+                "status": "passed",
+                "overall_status": "passed_with_warnings",
+                "limitations": [
+                    *list(base_tool_result.get("limitations", [])),
+                    "optional formal validation failed; required artifact validation passed, but no formal proof was established",
+                ],
+            }
+        )
+        combined = "\n".join(item for item in (base_output, formal_output) if item)
+        return base_validator, base_command, base_returncode, combined, merged_result
+    merged_result.update({"status": "passed", "overall_status": "passed"})
+    return base_validator, base_command, base_returncode, base_output, merged_result
 
 
 def _run_adapter_validation(
@@ -373,12 +430,17 @@ def _run_adapter_validation(
             "validator": adapter_name,
             "adapter_validation_mode": adapter.validation_mode,
             "checks": {**builtin_checks, "adapter": adapter_name},
+            "structural_status": "passed",
+            "syntax_status": "passed" if execution.exit_code == 0 else "failed",
+            "adapter_status": "passed" if execution.exit_code == 0 else "failed",
             "limitations": [
                 "adapter-backed validation checks parser/lint acceptance, not assertion semantic correctness",
                 "formal/simulation proof is still required for protocol confidence",
             ],
             "adapter_result": execution.result,
             "formal_status": "not_run",
+            "proof_status": "not_attempted",
+            "overall_status": "passed" if execution.exit_code == 0 else "failed",
             "formal_adapter": None,
             "command_artifacts": dict(execution.artifacts),
             "setup_diagnostics": [],
@@ -471,9 +533,14 @@ def _run_formal_validation(
         "validation_mode": "formal_run",
         "validator": adapter.name,
         "formal_status": "passed" if execution.exit_code == 0 else "failed",
+        "proof_status": "not_proved",
         "formal_adapter": adapter.name,
         "checks": {**builtin_checks, "formal_adapter": adapter.name},
         "limitations": ["bounded formal smoke depth is not a complete protocol proof"],
+        "structural_status": "passed",
+        "syntax_status": "not_run",
+        "adapter_status": "not_run",
+        "overall_status": "passed" if execution.exit_code == 0 else "failed",
         "adapter_result": execution.result,
         "command_artifacts": {"sby_file": str(sby_path), **execution.artifacts},
         "setup_diagnostics": [],
@@ -506,6 +573,7 @@ def _formal_setup_result(adapter_name: str, diagnostics: list[str], *, required:
                 "status": "skipped",
                 "validation_mode": "formal_run",
                 "formal_status": "skipped",
+                "proof_status": "not_attempted",
                 "formal_adapter": adapter_name,
                 "checks": {},
                 "limitations": ["formal execution skipped because required tooling is unavailable"],
@@ -521,8 +589,9 @@ def _formal_setup_result(adapter_name: str, diagnostics: list[str], *, required:
         combined,
         {
             "status": "failed",
-            "validation_mode": "formal_run",
-            "formal_status": "failed",
+                "validation_mode": "formal_run",
+                "formal_status": "failed",
+                "proof_status": "not_proved",
             "formal_adapter": adapter_name,
             "checks": {},
             "limitations": [],
@@ -660,8 +729,10 @@ def _sv_identifier_tokens(value: str) -> list[str]:
     return [token for token in re.findall(r"\b[A-Za-z_][A-Za-z0-9_]*\b", value) if token.lower() not in keywords]
 
 
-def _validation_summary(exit_code: int, combined: str, validator_name: str) -> str:
+def _validation_summary(exit_code: int, combined: str, validator_name: str, tool_result: dict[str, object]) -> str:
     if exit_code == 0:
+        if tool_result.get("overall_status") == "passed_with_warnings":
+            return f"{validator_name} required validation passed with formal-validation warnings"
         return f"{validator_name} validation passed"
     first_line = next((line.strip() for line in combined.splitlines() if line.strip()), "")
     if first_line:

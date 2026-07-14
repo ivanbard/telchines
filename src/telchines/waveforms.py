@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import shutil
+from difflib import SequenceMatcher
 from pathlib import Path
 
 from telchines.config import ProjectConfig
@@ -13,6 +14,7 @@ NATIVE_WAVEFORM_EXTENSIONS = {".vcd"}
 KNOWN_WAVEFORM_EXTENSIONS = {".vcd", ".fst"}
 GENERIC_SIGNAL_TOKENS = {"clk", "clock", "rst", "rst_n", "reset", "reset_n"}
 LOW_VALUE_MATCH_TOKENS = {"dut", "tb", "test", "rtl", "sv", "v", "top", "module", "uart"}
+TIME_UNITS_IN_FS = {"s": 10**15, "ms": 10**12, "us": 10**9, "ns": 10**6, "ps": 10**3, "fs": 1}
 
 
 def ingest_waveform(config: ProjectConfig, store: RunStore, path: Path) -> WaveformSummary:
@@ -138,16 +140,24 @@ def summarize_for_cluster(
 
 
 def select_signal(summary: WaveformSummary, signal_name: str) -> WaveformSample:
+    return match_signal(summary, signal_name)[0]
+
+
+def match_signal(summary: WaveformSummary, signal_name: str) -> tuple[WaveformSample, str]:
+    """Resolve an exact, hierarchical, or unambiguous fuzzy waveform signal name."""
     lowered = signal_name.lower()
     full_matches = [sample for sample in summary.sampled_signals if sample.full_name.lower() == lowered]
     if full_matches:
-        return full_matches[0]
+        return full_matches[0], "full_name"
     leaf_matches = [sample for sample in summary.sampled_signals if sample.signal_name.lower() == lowered]
     if len(leaf_matches) == 1:
-        return leaf_matches[0]
+        return leaf_matches[0], "leaf_name"
     if len(leaf_matches) > 1:
         full_names = ", ".join(sample.full_name for sample in leaf_matches[:8])
         raise ValueError(f"signal name is ambiguous: {signal_name}; matches: {full_names}")
+    fuzzy = _fuzzy_signal_matches(summary, signal_name)
+    if fuzzy and (len(fuzzy) == 1 or fuzzy[0][0] > fuzzy[1][0] + 0.12):
+        return fuzzy[0][1], "fuzzy_hierarchy"
     available = ", ".join(sample.full_name for sample in _signal_suggestions(summary, signal_name))
     detail = f"; available signals: {available}" if available else ""
     raise ValueError(f"signal was not found in waveform: {signal_name}{detail}")
@@ -165,6 +175,119 @@ def _signal_suggestions(summary: WaveformSummary, signal_name: str) -> list[Wave
         candidates.append((score, sample))
     candidates.sort(key=lambda item: (-item[0], item[1].full_name))
     return [sample for _, sample in candidates[:8]]
+
+
+def _fuzzy_signal_matches(summary: WaveformSummary, signal_name: str) -> list[tuple[float, WaveformSample]]:
+    query_parts = _hierarchy_parts(signal_name)
+    query_tokens = _expanded_tokens(signal_name)
+    if not query_parts or not query_tokens or query_tokens <= GENERIC_SIGNAL_TOKENS:
+        return []
+    matches: list[tuple[float, WaveformSample]] = []
+    for sample in summary.sampled_signals:
+        candidate_parts = _hierarchy_parts(sample.full_name)
+        candidate_tokens = _expanded_tokens(sample.full_name)
+        token_overlap = len(query_tokens & candidate_tokens)
+        suffix_overlap = _common_suffix_length(query_parts, candidate_parts)
+        leaf_similarity = SequenceMatcher(None, query_parts[-1], candidate_parts[-1]).ratio() if candidate_parts else 0.0
+        score = (0.45 * token_overlap) + (0.35 * suffix_overlap) + (0.2 * leaf_similarity)
+        # A one-token partial name such as "rx" is too weak to select automatically.
+        if (token_overlap >= 2 or suffix_overlap >= 2 or leaf_similarity >= 0.84) and score >= 0.8:
+            matches.append((score, sample))
+    matches.sort(key=lambda item: (-item[0], item[1].full_name))
+    return matches
+
+
+def _hierarchy_parts(name: str) -> list[str]:
+    return [part.lower() for part in re.split(r"[./\\]+", name) if part]
+
+
+def _common_suffix_length(left: list[str], right: list[str]) -> int:
+    count = 0
+    for left_part, right_part in zip(reversed(left), reversed(right)):
+        if left_part != right_part:
+            break
+        count += 1
+    return count
+
+
+def summarize_signal_window(
+    summary: WaveformSummary,
+    sample: WaveformSample,
+    *,
+    start_time: int | None = None,
+    end_time: int | None = None,
+) -> dict[str, object]:
+    """Return a bounded, serializable activity summary for one VCD signal."""
+    if start_time is not None and end_time is not None and end_time < start_time:
+        raise ValueError("waveform window end must be greater than or equal to start")
+    transitions = [
+        transition
+        for transition in sample.transitions
+        if (start_time is None or transition.timestamp >= start_time) and (end_time is None or transition.timestamp <= end_time)
+    ]
+    signal = next((item for item in summary.signals if item.full_name == sample.full_name), None)
+    width = signal.width if signal else 1
+    return {
+        "start_time": start_time,
+        "end_time": end_time,
+        "transition_count": len(transitions),
+        "first_timestamp": transitions[0].timestamp if transitions else None,
+        "last_timestamp": transitions[-1].timestamp if transitions else None,
+        "duration": (transitions[-1].timestamp - transitions[0].timestamp) if len(transitions) > 1 else 0,
+        "toggle_count": max(len(transitions) - 1, 0),
+        "value_summary": [_decoded_value(transition.value, width) for transition in transitions],
+    }
+
+
+def correlate_log_timestamps(summary: WaveformSummary, log_text: str, *, tolerance_ticks: int = 0) -> list[dict[str, object]]:
+    """Relate common simulator log time annotations to the VCD timebase when possible."""
+    if tolerance_ticks < 0:
+        raise ValueError("waveform correlation tolerance must be non-negative")
+    tick_fs = _timescale_to_fs(summary.timescale)
+    if tick_fs is None:
+        return []
+    correlations: list[dict[str, object]] = []
+    for line_number, raw_line in enumerate(log_text.splitlines(), start=1):
+        match = re.search(r"(?:@|\[|\btime\s*[=:])\s*(\d+(?:\.\d+)?)\s*(fs|ps|ns|us|ms|s)\b", raw_line, flags=re.IGNORECASE)
+        if not match:
+            continue
+        value, unit = match.groups()
+        timestamp = round((float(value) * TIME_UNITS_IN_FS[unit.lower()]) / tick_fs)
+        correlations.append(
+            {
+                "line": line_number,
+                "log_time": f"{value}{unit}",
+                "waveform_timestamp": timestamp,
+                "window_start": max(timestamp - tolerance_ticks, 0),
+                "window_end": timestamp + tolerance_ticks,
+                "text": raw_line.strip(),
+            }
+        )
+    return correlations
+
+
+def _timescale_to_fs(timescale: str) -> int | None:
+    match = re.fullmatch(r"\s*(\d+(?:\.\d+)?)\s*(fs|ps|ns|us|ms|s)\s*", timescale, flags=re.IGNORECASE)
+    if not match:
+        return None
+    value, unit = match.groups()
+    return round(float(value) * TIME_UNITS_IN_FS[unit.lower()])
+
+
+def _decoded_value(value: str, width: int) -> dict[str, object]:
+    decoded: dict[str, object] = {"raw": value}
+    if width <= 1 or not value or any(bit.lower() in {"x", "z"} for bit in value):
+        return decoded
+    normalized = value.zfill(width)
+    if not set(normalized) <= {"0", "1"}:
+        return decoded
+    numeric = int(normalized, 2)
+    decoded.update({"binary": normalized, "unsigned": numeric, "hex": f"0x{numeric:0{max((width + 3) // 4, 1)}X}"})
+    if width % 8 == 0:
+        bytes_value = numeric.to_bytes(width // 8, byteorder="big")
+        if all(32 <= byte <= 126 for byte in bytes_value):
+            decoded["ascii"] = bytes_value.decode("ascii")
+    return decoded
 
 
 def _expanded_tokens(text: str) -> set[str]:
@@ -292,7 +415,7 @@ def _parse_vcd(config: ProjectConfig, path: Path) -> WaveformSummary:
             full_name=signal.full_name,
             transitions=transition_map.get(signal.identifier, [])[:16],
         )
-        for signal in ordered_signals[:64]
+        for signal in ordered_signals
     ]
     relative_path = relative_to(path, config.project_root)
     return WaveformSummary(

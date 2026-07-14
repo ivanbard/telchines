@@ -214,8 +214,32 @@ def test_formal_validation_records_sby_artifact(work_root: Path, monkeypatch) ->
     assert command[0] == "sby"
     assert returncode == 0
     assert tool_result["validation_mode"] == "formal_run"
+    assert tool_result["structural_status"] == "passed"
+    assert tool_result["syntax_status"] == "not_run"
+    assert tool_result["adapter_status"] == "not_run"
     assert tool_result["formal_status"] == "passed"
+    assert tool_result["proof_status"] == "not_proved"
+    assert tool_result["overall_status"] == "passed"
     assert Path(str(tool_result["command_artifacts"]["sby_file"])).exists()
+
+
+def test_optional_formal_failure_is_an_explicit_validation_warning(work_root: Path, monkeypatch) -> None:
+    config = _write_project(work_root)
+    config.generation["sva"]["formal"]["mode"] = "auto"
+    config.save()
+    monkeypatch.setattr(gen_sva, "AdapterRegistry", lambda: FakeRegistry(MatrixFormalAdapter(available=True, supported=True, exit_code=1)))
+
+    validator, _, returncode, _, tool_result = gen_sva._run_validation(config, work_root, _candidate())
+
+    assert validator == "builtin_sva_syntax"
+    assert returncode == 0
+    assert tool_result["status"] == "passed"
+    assert tool_result["structural_status"] == "passed"
+    assert tool_result["syntax_status"] == "not_run"
+    assert tool_result["adapter_status"] == "not_run"
+    assert tool_result["formal_status"] == "failed"
+    assert tool_result["proof_status"] == "not_proved"
+    assert tool_result["overall_status"] == "passed_with_warnings"
 
 
 def test_sva_adapter_validation_records_command_artifacts(work_root: Path, monkeypatch) -> None:

@@ -709,9 +709,22 @@ def waveforms_inspect(
     target: str = typer.Argument(...),
     signal: str = typer.Option(..., "--signal"),
     window: int = typer.Option(8, "--window"),
+    start_time: int | None = typer.Option(None, "--start-time", help="First VCD timestamp to include."),
+    end_time: int | None = typer.Option(None, "--end-time", help="Last VCD timestamp to include."),
+    log_path: str | None = typer.Option(None, "--log", help="Project-relative simulator log to correlate by time."),
+    tolerance_ticks: int = typer.Option(0, "--tolerance-ticks", help="Timestamp tolerance in VCD ticks for log correlation."),
 ) -> None:
     try:
-        payload = inspect_waveform_op(None, target, signal=signal, window=window)
+        payload = inspect_waveform_op(
+            None,
+            target,
+            signal=signal,
+            window=window,
+            start_time=start_time,
+            end_time=end_time,
+            log_path=log_path,
+            tolerance_ticks=tolerance_ticks,
+        )
     except ConfigError as exc:
         _fail(f"config error: {exc}")
     except ValueError as exc:

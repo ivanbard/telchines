@@ -5,6 +5,7 @@ from typing import Any
 
 from telchines.adapters.base import AdapterRunSpec
 from telchines.adapters.registry import AdapterRegistry
+from telchines.agent_runtime import runtime_capability
 from telchines.config import ProjectConfig
 from telchines.models import AgentTask, VerificationRun
 from telchines.providers import build_generation_provider, build_repair_provider
@@ -486,6 +487,7 @@ def _execute_agent_repair(
     store.save_run(base_run)
     provider = build_repair_provider(config, provider_name=provider_name)
     proposal, validation_run, context = execute_repair(config, store, retrieval, provider, base_run, apply_patch=apply_patch)
+    runtime_details = _provider_runtime_details(provider, proposal)
     workflow_status = _repair_workflow_status(proposal.status if proposal else "no_patch", validation_run.status if validation_run else None, apply_patch=apply_patch)
     validation_mode = _validation_mode(validation_run)
     payload = {
@@ -501,9 +503,7 @@ def _execute_agent_repair(
         "proposal_explanation": proposal.explanation if proposal else None,
         "evidence_paths": proposal.evidence_paths if proposal else [],
         "replay_artifacts": proposal.replay_artifacts if proposal else {},
-        "runtime_mode": proposal.runtime_mode if proposal else None,
-        "runtime_available": proposal.runtime_available if proposal else None,
-        "runtime_reason": proposal.runtime_reason if proposal else None,
+        **runtime_details,
         "validation_run_id": validation_run.run_id if validation_run else None,
         "validation_status": validation_run.status if validation_run else None,
         "validation_summary": validation_run.summary if validation_run else None,
@@ -539,6 +539,31 @@ def _execute_agent_repair(
             "validation_run_id": payload["validation_run_id"],
             "replay_artifacts": payload["replay_artifacts"],
         },
+    }
+
+
+def _provider_runtime_details(provider: object, proposal: object | None) -> dict[str, object]:
+    proposal_mode = getattr(proposal, "runtime_mode", "") if proposal is not None else ""
+    proposal_available = getattr(proposal, "runtime_available", None) if proposal is not None else None
+    proposal_reason = getattr(proposal, "runtime_reason", "") if proposal is not None else ""
+    if not hasattr(provider, "config") or getattr(provider, "config", {}).get("kind") != "agent_runtime":
+        return {
+            "runtime_mode": proposal_mode,
+            "runtime_available": proposal_available,
+            "runtime_reason": proposal_reason,
+            "runtime_implementation": None,
+            "runtime_install_remedy": None,
+        }
+    runtime = runtime_capability()
+    mode = str(proposal_mode or runtime["runtime_mode"])
+    available = proposal_available if isinstance(proposal_available, bool) else bool(runtime["runtime_available"])
+    reason = str(proposal_reason or runtime["runtime_reason"])
+    return {
+        "runtime_mode": mode,
+        "runtime_available": available,
+        "runtime_reason": reason,
+        "runtime_implementation": "langgraph_stategraph_single_repair_node" if mode == "langgraph" else "bounded_retry_loop",
+        "runtime_install_remedy": None if mode == "langgraph" else 'install optional runtime support with: pip install "telchines[agentic]"',
     }
 
 

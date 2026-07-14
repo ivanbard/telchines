@@ -86,12 +86,15 @@ def _run_default_suite(config: ProjectConfig, store: RunStore) -> dict[str, obje
         elif case.task_type == "provider_response":
             results.append(_run_provider_response_case(config, case))
     passed = sum(1 for result in results if result["passed"])
+    warning_count = sum(1 for result in results if result.get("benchmark_status") == "passed_with_warnings")
     report = {
         "suite": "default",
         "ran_at": utc_now(),
         "cases": results,
+        "status": "failed" if passed != len(results) else ("passed_with_warnings" if warning_count else "passed"),
         "passed": passed,
         "total": len(results),
+        "warning_count": warning_count,
         "metrics": _aggregate_metrics(results),
     }
     store.save_report("latest_eval", report)
@@ -349,6 +352,11 @@ def _run_sva_case(config: ProjectConfig, case: BenchmarkCase) -> dict[str, objec
         validation_status = validation_run.status if validation_run else "not_run"
         validation_mode = str(validation_run.tool_result.get("validation_mode", "")) if validation_run else "not_run"
         formal_status = str(validation_run.tool_result.get("formal_status", "not_run")) if validation_run else "not_run"
+        structural_status = str(validation_run.tool_result.get("structural_status", "not_run")) if validation_run else "not_run"
+        syntax_status = str(validation_run.tool_result.get("syntax_status", "not_run")) if validation_run else "not_run"
+        adapter_status = str(validation_run.tool_result.get("adapter_status", "not_run")) if validation_run else "not_run"
+        proof_status = str(validation_run.tool_result.get("proof_status", "not_attempted")) if validation_run else "not_attempted"
+        overall_status = str(validation_run.tool_result.get("overall_status", validation_status)) if validation_run else "not_run"
         passed = (
             generated_candidate
             and artifact_exists
@@ -361,6 +369,7 @@ def _run_sva_case(config: ProjectConfig, case: BenchmarkCase) -> dict[str, objec
             "benchmark_id": case.benchmark_id,
             "task_type": case.task_type,
             "passed": passed,
+            "benchmark_status": _benchmark_status(passed, overall_status),
             "benchmark_scope": _case_scope(case),
             "execution_backing": _case_execution_backing(case, _validation_backing(validation_mode, formal_status=formal_status)),
             "provider": provider.name,
@@ -370,7 +379,12 @@ def _run_sva_case(config: ProjectConfig, case: BenchmarkCase) -> dict[str, objec
             "validation_run_id": validation_run.run_id if validation_run else None,
             "validation_status": validation_status,
             "validation_mode": validation_mode,
+            "structural_status": structural_status,
+            "syntax_status": syntax_status,
+            "adapter_status": adapter_status,
             "formal_status": formal_status,
+            "proof_status": proof_status,
+            "overall_status": overall_status,
             "artifact_generated": artifact_exists,
             "artifact_path": candidate.file_path if candidate else None,
             "property_count": property_count,
@@ -417,6 +431,8 @@ def _run_cocotb_case(config: ProjectConfig, case: BenchmarkCase) -> dict[str, ob
         validation_status = validation_run.status if validation_run else "not_run"
         validation_mode = str(validation_run.tool_result.get("validation_mode", "")) if validation_run else "not_run"
         executable_status = str(validation_run.tool_result.get("executable_status", "not_run")) if validation_run else "not_run"
+        executable_contract = str(validation_run.tool_result.get("executable_contract", "not_evaluated")) if validation_run else "not_evaluated"
+        executable_expectation = str(case.scoring.get("expected_executable", "ignore"))
         artifact_exists = bool(candidate and (temp_root / candidate.file_path).exists())
         manifest_exists = bool(candidate and (temp_root / candidate.manifest_path).exists())
         passed = (
@@ -427,6 +443,7 @@ def _run_cocotb_case(config: ProjectConfig, case: BenchmarkCase) -> dict[str, ob
             and manifest_exists
             and assumption_count >= int(case.scoring.get("min_assumptions", 1))
             and identifier_match_rate >= float(case.scoring.get("min_identifier_match_rate", 1.0))
+            and _cocotb_executable_expectation_met(executable_expectation, executable_contract, executable_status)
         )
         return {
             "benchmark_id": case.benchmark_id,
@@ -442,6 +459,8 @@ def _run_cocotb_case(config: ProjectConfig, case: BenchmarkCase) -> dict[str, ob
             "validation_status": validation_status,
             "validation_mode": validation_mode,
             "executable_status": executable_status,
+            "executable_contract": executable_contract,
+            "executable_expectation": executable_expectation,
             "artifact_generated": artifact_exists,
             "manifest_generated": manifest_exists,
             "artifact_path": candidate.file_path if candidate else None,
@@ -561,6 +580,14 @@ def _run_import_case(config: ProjectConfig, case: BenchmarkCase) -> dict[str, ob
         }
     finally:
         remove_tree(temp_root)
+
+
+def _cocotb_executable_expectation_met(expectation: str, contract: str, status: str) -> bool:
+    if expectation == "ignore":
+        return True
+    if expectation == "when_supported":
+        return (contract == "supported" and status == "passed") or (contract == "unsupported" and status == "skipped")
+    return status == expectation
 
 
 def _run_coverage_import_case(config: ProjectConfig, case: BenchmarkCase) -> dict[str, object]:
@@ -709,7 +736,14 @@ def _aggregate_metrics(results: list[dict[str, object]]) -> dict[str, object]:
                 3,
             ),
             "validation_modes": _count_values(sva_results, "validation_mode"),
+            "structural_statuses": _count_values(sva_results, "structural_status"),
+            "syntax_statuses": _count_values(sva_results, "syntax_status"),
+            "adapter_statuses": _count_values(sva_results, "adapter_status"),
             "formal_statuses": _count_values(sva_results, "formal_status"),
+            "proof_statuses": _count_values(sva_results, "proof_status"),
+            "overall_statuses": _count_values(sva_results, "overall_status"),
+            "formal_failure_count": sum(1 for result in sva_results if result["formal_status"] == "failed"),
+            "benchmark_statuses": _count_values(sva_results, "benchmark_status"),
             "artifact_generation_rate": round(
                 sum(1 for result in sva_results if bool(result["artifact_generated"])) / len(sva_results),
                 3,
@@ -820,6 +854,8 @@ def _readiness_metrics(results: list[dict[str, object]]) -> dict[str, object]:
         "execution_backing_counts": _count_values(results, "execution_backing"),
         "validation_status_counts": _count_present_values(results, "validation_status"),
         "validation_mode_counts": _count_present_values(results, "validation_mode"),
+        "overall_status_counts": _count_present_values(results, "overall_status"),
+        "benchmark_status_counts": _count_present_values(results, "benchmark_status"),
         "tool_backed_case_count": sum(1 for result in results if str(result.get("execution_backing")) in tool_backed_values),
         "structure_or_fixture_only_case_count": sum(
             1
@@ -859,6 +895,14 @@ def _validation_backing(validation_mode: str, *, formal_status: str | None = Non
     if validation_mode in {"syntax_plus_structure", "structure_only", "builtin_sva_syntax"}:
         return "structure_only"
     return validation_mode or "not_run"
+
+
+def _benchmark_status(passed: bool, overall_status: str) -> str:
+    if not passed:
+        return "failed"
+    if overall_status == "passed_with_warnings":
+        return "passed_with_warnings"
+    return "passed"
 
 
 def _resolve_runtime_placeholders(value: Any) -> Any:

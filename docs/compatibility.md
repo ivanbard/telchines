@@ -30,6 +30,9 @@ than assuming a fixed suite size or tool-backed execution.
 - additional providers or adapters
 - expanded benchmark coverage
 - richer shell presentation and formatting
+- additional waveform-inspection fields and optional `waveforms inspect` flags;
+  existing exact signal selection, transition lists, and command arguments
+  remain supported
 
 ## What Requires Explicit Deprecation
 

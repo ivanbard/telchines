@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import fnmatch
+import re
 from collections import defaultdict
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -10,19 +11,21 @@ from telchines.models import RetrievalContext, RetrievalHit
 from telchines.utils import load_text, read_json, remove_tree, sha256_file, stable_id, tokenize, utc_now, write_json
 
 INDEX_FILENAME = "index.json"
-INDEX_FORMAT_VERSION = 2
-SUPPORTED_EXTENSIONS = {".sv", ".svh", ".v", ".vh", ".md", ".txt", ".log", ".out", ".err", ".py"}
+INDEX_FORMAT_VERSION = 3
+RTL_EXTENSIONS = {".sv", ".svh", ".v", ".vh"}
+BUILD_EXTENSIONS = {".f", ".flist", ".lst", ".tcl", ".mk", ".sdc", ".xdc", ".pdc"}
+SUPPORTED_EXTENSIONS = RTL_EXTENSIONS | BUILD_EXTENSIONS | {".md", ".txt", ".log", ".out", ".err", ".py"}
 SKIP_DIR_NAMES = {".git", ".venv", ".tel", ".tel-scratch", ".pytest_tmp", ".test-work", "__pycache__"}
 LOG_MARKERS = ("error", "warning", "fail", "timeout", "assert")
 MODE_KIND_BOOSTS = {
-    "general": {"rtl": 0.15, "doc": 0.1, "log": 0.1, "script": 0.05},
-    "repair": {"rtl": 0.45, "doc": 0.2, "log": 0.05, "script": 0.0},
-    "triage": {"log": 0.45, "rtl": 0.25, "doc": 0.15, "script": 0.0},
-    "uvm_triage": {"log": 0.5, "script": 0.2, "rtl": 0.2, "doc": 0.18},
-    "vendor_build": {"log": 0.5, "rtl": 0.28, "doc": 0.12, "script": 0.04},
-    "regression": {"log": 0.5, "rtl": 0.2, "doc": 0.15, "script": 0.08},
-    "generation": {"doc": 0.45, "rtl": 0.35, "log": 0.0, "script": 0.0},
-    "coverage": {"doc": 0.35, "rtl": 0.35, "log": 0.05, "script": 0.0},
+    "general": {"rtl": 0.15, "doc": 0.1, "log": 0.1, "script": 0.05, "build": 0.12},
+    "repair": {"rtl": 0.45, "doc": 0.2, "log": 0.05, "script": 0.0, "build": 0.32},
+    "triage": {"log": 0.45, "rtl": 0.25, "doc": 0.15, "script": 0.0, "build": 0.2},
+    "uvm_triage": {"log": 0.5, "script": 0.2, "rtl": 0.2, "doc": 0.18, "build": 0.12},
+    "vendor_build": {"log": 0.5, "rtl": 0.28, "doc": 0.12, "script": 0.04, "build": 0.42},
+    "regression": {"log": 0.5, "rtl": 0.2, "doc": 0.15, "script": 0.08, "build": 0.18},
+    "generation": {"doc": 0.45, "rtl": 0.35, "log": 0.0, "script": 0.0, "build": 0.08},
+    "coverage": {"doc": 0.35, "rtl": 0.35, "log": 0.05, "script": 0.0, "build": 0.1},
 }
 MODE_DOMAIN_BOOSTS = {
     "general": {"project": 0.12, "external": 0.0},
@@ -48,6 +51,172 @@ class IndexedChunk:
     source_label: str = "project"
     source_uri: str = ""
     ingested_at: str = ""
+
+
+def analyze_filelists(project_root: Path, filelists: list[str]) -> dict[str, object]:
+    """Expand common filelist directives and surface actionable build-context problems.
+
+    This intentionally analyzes rather than executes vendor syntax. It supports the
+    portable subset used by most simulators: nested ``-f`` lists, include dirs,
+    defines, source ordering, and quoted SystemVerilog includes.
+    """
+    root = project_root.resolve()
+    sources: list[Path] = []
+    include_dirs: list[Path] = []
+    defines: list[str] = []
+    visited: set[Path] = set()
+    diagnostics: list[dict[str, object]] = []
+
+    def display(path: Path) -> str:
+        try:
+            return str(path.resolve().relative_to(root)).replace("\\", "/")
+        except ValueError:
+            return str(path.resolve())
+
+    def diagnostic(code: str, message: str, path: Path, line: int = 0, severity: str = "error") -> None:
+        diagnostics.append({"code": code, "severity": severity, "message": message, "path": display(path), "line": line})
+
+    def resolve(value: str, base: Path) -> Path:
+        candidate = Path(value)
+        return candidate.resolve() if candidate.is_absolute() else (base / candidate).resolve()
+
+    def visit(value: str, parent: Path) -> None:
+        path = resolve(value, parent)
+        if not path.exists() or not path.is_file():
+            diagnostic("missing_filelist", f"Filelist is missing: {value}", path)
+            return
+        if path in visited:
+            diagnostic("filelist_cycle", f"Filelist was already expanded: {display(path)}", path, severity="warning")
+            return
+        visited.add(path)
+        for line_number, raw_line in enumerate(path.read_text(encoding="utf-8", errors="replace").splitlines(), start=1):
+            line = _strip_build_comment(raw_line).strip()
+            if not line:
+                continue
+            nested = _nested_filelist_value(line)
+            if nested is not None:
+                visit(nested, path.parent)
+                continue
+            if line.startswith("+incdir+"):
+                for value in (item for item in line.split("+")[2:] if item):
+                    include_dir = resolve(value, path.parent)
+                    if include_dir.is_dir():
+                        include_dirs.append(include_dir)
+                    else:
+                        diagnostic("missing_include_dir", f"Include directory does not exist: {value}", path, line_number)
+                continue
+            if line.startswith("+define+"):
+                defines.extend(item for item in line.split("+")[2:] if item)
+                continue
+            if line.startswith("-I") and len(line) > 2:
+                include_dir = resolve(line[2:], path.parent)
+                if include_dir.is_dir():
+                    include_dirs.append(include_dir)
+                else:
+                    diagnostic("missing_include_dir", f"Include directory does not exist: {line[2:]}", path, line_number)
+                continue
+            if line.startswith("-D") and len(line) > 2:
+                defines.append(line[2:])
+                continue
+            source = resolve(line, path.parent)
+            if source.is_file():
+                sources.append(source)
+            else:
+                diagnostic("missing_source", f"Source file does not exist: {line}", path, line_number)
+
+    for filelist in filelists:
+        visit(filelist, root)
+
+    unique_sources = _unique_paths(sources)
+    unique_include_dirs = _unique_paths(include_dirs)
+    _validate_source_includes(unique_sources, unique_include_dirs, diagnostics, display)
+    _validate_package_order(unique_sources, diagnostics, display)
+    generated_sources = [path for path in unique_sources if "generated" in {part.lower() for part in path.parts} or "generated" in path.name.lower()]
+    return {
+        "filelists": [display(path) for path in visited],
+        "source_files": [display(path) for path in unique_sources],
+        "include_dirs": [display(path) for path in unique_include_dirs],
+        "defines": _unique_strings(defines),
+        "generated_sources": [display(path) for path in generated_sources],
+        "diagnostics": diagnostics,
+        "error_count": sum(item["severity"] == "error" for item in diagnostics),
+        "warning_count": sum(item["severity"] == "warning" for item in diagnostics),
+    }
+
+
+def _nested_filelist_value(line: str) -> str | None:
+    match = re.fullmatch(r"-(?:f|F)\s*(.+)", line)
+    return match.group(1).strip() if match else None
+
+
+def _strip_build_comment(line: str) -> str:
+    stripped = line.strip()
+    if stripped.startswith(("#", "//")):
+        return ""
+    for marker in (" #", "\t#", " //", "\t//"):
+        if marker in line:
+            return line.split(marker, 1)[0]
+    return line
+
+
+def _unique_paths(paths: list[Path]) -> list[Path]:
+    return list(dict.fromkeys(path.resolve() for path in paths))
+
+
+def _unique_strings(values: list[str]) -> list[str]:
+    return list(dict.fromkeys(value for value in values if value.strip()))
+
+
+def _validate_source_includes(
+    sources: list[Path], include_dirs: list[Path], diagnostics: list[dict[str, object]], display,
+) -> None:  # type: ignore[no-untyped-def]
+    include_pattern = re.compile(r"`include\s+\"([^\"]+)\"")
+    for source in sources:
+        if source.suffix.lower() not in RTL_EXTENSIONS:
+            continue
+        for line_number, line in enumerate(source.read_text(encoding="utf-8", errors="replace").splitlines(), start=1):
+            match = include_pattern.search(line)
+            if not match:
+                continue
+            include_name = match.group(1)
+            candidates = [source.parent / include_name, *(directory / include_name for directory in include_dirs)]
+            if not any(candidate.is_file() for candidate in candidates):
+                diagnostics.append(
+                    {
+                        "code": "unresolved_include",
+                        "severity": "error",
+                        "message": f"Cannot resolve `{include_name}`; add its directory with +incdir+ or -I.",
+                        "path": display(source),
+                        "line": line_number,
+                    }
+                )
+
+
+def _validate_package_order(sources: list[Path], diagnostics: list[dict[str, object]], display) -> None:  # type: ignore[no-untyped-def]
+    packages: dict[str, int] = {}
+    imports: list[tuple[str, int, Path, int]] = []
+    for source_index, source in enumerate(sources):
+        if source.suffix.lower() not in RTL_EXTENSIONS:
+            continue
+        for line_number, line in enumerate(source.read_text(encoding="utf-8", errors="replace").splitlines(), start=1):
+            package_match = re.search(r"\bpackage\s+([A-Za-z_][A-Za-z0-9_$]*)", line)
+            if package_match:
+                packages.setdefault(package_match.group(1), source_index)
+            import_match = re.search(r"\bimport\s+([A-Za-z_][A-Za-z0-9_$]*)::", line)
+            if import_match:
+                imports.append((import_match.group(1), source_index, source, line_number))
+    for package, source_index, source, line_number in imports:
+        package_index = packages.get(package)
+        if package_index is not None and package_index > source_index:
+            diagnostics.append(
+                {
+                    "code": "compile_order_package",
+                    "severity": "error",
+                    "message": f"Package `{package}` is compiled after this import; move its source earlier in the filelist.",
+                    "path": display(source),
+                    "line": line_number,
+                }
+            )
 
 
 class RetrievalService:
@@ -167,6 +336,7 @@ class RetrievalService:
                 "focus_paths": focus_paths,
                 "query_aliases": self._matched_aliases(query),
                 "expanded_query_tokens": sorted(query_tokens),
+                "build_context": self._focused_build_context(focus_paths),
             },
         )
 
@@ -374,13 +544,19 @@ class RetrievalService:
 
     def _kind_for_path(self, path: Path) -> str:
         suffix = path.suffix.lower()
-        if suffix in {".sv", ".svh", ".v", ".vh"}:
+        if suffix in RTL_EXTENSIONS:
             return "rtl"
+        if suffix in BUILD_EXTENSIONS:
+            return "build"
         if suffix in {".log", ".out", ".err"}:
             return "log"
         if suffix == ".py":
             return "script"
         return "doc"
+
+    def _focused_build_context(self, focus_paths: list[str]) -> dict[str, object] | None:
+        filelists = [path for path in focus_paths if Path(path).suffix.lower() in {".f", ".flist", ".lst"}]
+        return analyze_filelists(self.config.project_root, filelists) if filelists else None
 
     def _build_chunks(
         self,

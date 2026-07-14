@@ -40,7 +40,7 @@ from telchines.workflows.gen_cocotb import execute_cocotb_generation
 from telchines.workflows.gen_sva import execute_generation
 from telchines.workflows.repair import execute_repair
 from telchines.workflows.triage import triage_logs
-from telchines.waveforms import ingest_waveform, select_signal
+from telchines.waveforms import correlate_log_timestamps, ingest_waveform, match_signal, summarize_signal_window
 
 ARTIFACT_PURGE_SCOPES = ("generated", "task-artifacts", "patches", "generations", "waveforms", "reports")
 ENV_VAR_NAME_RE = re.compile(r"^[A-Z_][A-Z0-9_]*$")
@@ -425,22 +425,32 @@ def show_run(root: Path | None, run_id: str) -> dict[str, object]:
 
 def replay_run(root: Path | None, run_id: str, *, confirm: bool = False) -> dict[str, object]:
     config, store, _ = load_services(root)
-    run = store.load_run(run_id)
+    try:
+        run = store.load_run(run_id)
+    except FileNotFoundError as exc:
+        raise ValueError(f"run {run_id} does not exist") from exc
+    replayability = _replayability(run)
     if not run.replay_command:
-        raise ValueError("run does not have a replay command")
+        raise ValueError(f"run {run.run_id} is not replayable: {replayability['reason']}")
     if not confirm:
         return {
             "status": "confirmation_required",
             "run_id": run.run_id,
             "workflow_type": run.workflow_type,
+            "replayability": replayability,
             "replay_command": run.replay_command,
             "summary": "replay command was not executed; rerun with --yes to execute stored command",
         }
-    result = subprocess.run(run.replay_command, cwd=config.project_root, capture_output=True, text=True, check=False)
+    try:
+        result = subprocess.run(run.replay_command, cwd=config.project_root, capture_output=True, text=True, check=False)
+    except FileNotFoundError as exc:
+        executable = run.replay_command[0]
+        raise ValueError(f"run {run.run_id} replay command is unavailable: executable `{executable}` was not found") from exc
     return {
         "status": "executed",
         "run_id": run.run_id,
         "workflow_type": run.workflow_type,
+        "replayability": replayability,
         "replay_command": run.replay_command,
         "exit_code": result.returncode,
         "stdout": result.stdout,
@@ -450,7 +460,19 @@ def replay_run(root: Path | None, run_id: str, *, confirm: bool = False) -> dict
 
 def import_runs(root: Path | None, manifest: Path, *, dry_run: bool = False) -> dict[str, object]:
     config, store, _ = load_services(root)
-    return import_regression_manifest(config, store, manifest, dry_run=dry_run)
+    payload = import_regression_manifest(config, store, manifest, dry_run=dry_run)
+    for item in payload.get("runs", []):
+        if not isinstance(item, dict):
+            continue
+        if dry_run:
+            run_payload = item.get("run")
+            command = run_payload.get("replay_command", []) if isinstance(run_payload, dict) else []
+            item["replayability"] = _replayability_from_command(command, imported=True)
+        else:
+            run_id = item.get("run_id")
+            if isinstance(run_id, str):
+                item["replayability"] = _replayability(store.load_run(run_id))
+    return payload
 
 
 def import_runs_from_ci(root: Path | None, source: Path, *, importer: str, dry_run: bool = False) -> dict[str, object]:
@@ -631,12 +653,13 @@ def gen_sva(
     )
     candidate, validation_run, context = execute_generation(config, store, retrieval, provider, spec_path, rtl_path, output_path=output_path, run_spec=run_spec)
     validation_mode = _validation_mode(validation_run)
+    workflow_status = _sva_workflow_status(candidate.status if candidate else "no_generation", validation_run)
     return {
         "context_id": context.context_id,
         "candidate_id": candidate.candidate_id if candidate else None,
         "provider": candidate.provider if candidate else getattr(provider, "name", ""),
-        "status": candidate.status if candidate else "no_generation",
-        "workflow_status": candidate.status if candidate else "no_generation",
+        "status": workflow_status,
+        "workflow_status": workflow_status,
         "initial_tool_status": None,
         "candidate_status": candidate.status if candidate else "no_generation",
         "review_status": "pending_review" if candidate and candidate.status == "validated" else "not_available",
@@ -654,8 +677,14 @@ def gen_sva(
         "validation_summary": validation_run.summary if validation_run else None,
         "validation_mode": validation_mode,
         "validation_scope": validation_mode,
+        "structural_status": validation_run.tool_result.get("structural_status") if validation_run else None,
+        "syntax_status": validation_run.tool_result.get("syntax_status") if validation_run else None,
+        "adapter_status": validation_run.tool_result.get("adapter_status") if validation_run else None,
         "validation_limitations": validation_run.tool_result.get("limitations", []) if validation_run else [],
+        "validation_stages": validation_run.tool_result.get("stages", {}) if validation_run else {},
         "formal_status": validation_run.tool_result.get("formal_status") if validation_run else None,
+        "proof_status": validation_run.tool_result.get("proof_status") if validation_run else None,
+        "overall_status": validation_run.tool_result.get("overall_status") if validation_run else None,
         "formal_adapter": validation_run.tool_result.get("formal_adapter") if validation_run else None,
         "command_artifacts": validation_run.tool_result.get("command_artifacts", {}) if validation_run else {},
         "setup_diagnostics": validation_run.tool_result.get("setup_diagnostics", []) if validation_run else [],
@@ -736,7 +765,9 @@ def gen_cocotb(
         "validation_scope": validation_mode,
         "validation_limitations": validation_run.tool_result.get("limitations", []) if validation_run else [],
         "executable_status": validation_run.tool_result.get("executable_status") if validation_run else None,
+        "executable_contract": validation_run.tool_result.get("executable_contract") if validation_run else None,
         "simulator": validation_run.tool_result.get("simulator") if validation_run else None,
+        "validation_stages": validation_run.tool_result.get("stages", {}) if validation_run else {},
         "command_artifacts": validation_run.tool_result.get("command_artifacts", {}) if validation_run else {},
         "setup_diagnostics": validation_run.tool_result.get("setup_diagnostics", []) if validation_run else [],
     }
@@ -1121,20 +1152,48 @@ def waveform_signals(root: Path | None, target: str, signal_filter: str | None =
     }
 
 
-def inspect_waveform(root: Path | None, target: str, signal: str, window: int = 8) -> dict[str, object]:
+def inspect_waveform(
+    root: Path | None,
+    target: str,
+    signal: str,
+    window: int = 8,
+    *,
+    start_time: int | None = None,
+    end_time: int | None = None,
+    log_path: str | None = None,
+    tolerance_ticks: int = 0,
+) -> dict[str, object]:
     config, store, _ = load_services(root)
     summary = _resolve_waveform_summary(config, store, root or config.project_root, target)
-    sample = select_signal(summary, signal)
-    transitions = sample.transitions[: max(window, 1)]
+    sample, match_type = match_signal(summary, signal)
+    window_summary = summarize_signal_window(summary, sample, start_time=start_time, end_time=end_time)
+    transitions = [
+        transition
+        for transition in sample.transitions
+        if (start_time is None or transition.timestamp >= start_time) and (end_time is None or transition.timestamp <= end_time)
+    ][: max(window, 1)]
+    correlations: list[dict[str, object]] = []
+    if log_path:
+        candidate = Path(log_path)
+        resolved_log = candidate.resolve() if candidate.is_absolute() else (config.project_root / candidate).resolve()
+        try:
+            resolved_log.relative_to(config.project_root.resolve())
+        except ValueError as exc:
+            raise ValueError("waveform correlation log must be inside the project root") from exc
+        if not resolved_log.is_file():
+            raise ValueError(f"waveform correlation log does not exist: {resolved_log}")
+        correlations = correlate_log_timestamps(summary, resolved_log.read_text(encoding="utf-8", errors="replace"), tolerance_ticks=tolerance_ticks)
     return {
         "waveform_id": summary.waveform_id,
         "source_path": summary.source_path,
         "signal_name": sample.signal_name,
         "full_name": sample.full_name,
-        "match_type": "full_name" if sample.full_name.lower() == signal.lower() else "leaf_name",
+        "match_type": match_type,
         "timescale": summary.timescale,
         "transition_count": len(sample.transitions),
         "transitions": [dataclass_to_dict(item) for item in transitions],
+        "window_summary": window_summary,
+        "log_correlations": correlations,
     }
 
 
@@ -1298,6 +1357,29 @@ def _validation_mode(validation_run: VerificationRun | None) -> str | None:
         return None
     mode = str(validation_run.tool_result.get("validation_mode", "")).strip()
     return mode or None
+
+
+def _sva_workflow_status(candidate_status: str, validation_run: VerificationRun | None) -> str:
+    if candidate_status != "validated" or validation_run is None:
+        return candidate_status
+    if validation_run.tool_result.get("overall_status") == "passed_with_warnings":
+        return "validated_with_warnings"
+    return "validated"
+
+
+def _replayability(run: VerificationRun) -> dict[str, str]:
+    stored = run.tool_result.get("replayability")
+    if isinstance(stored, dict) and isinstance(stored.get("status"), str) and isinstance(stored.get("reason"), str):
+        return {"status": stored["status"], "reason": stored["reason"]}
+    return _replayability_from_command(run.replay_command, imported=run.workflow_type == "regression_import")
+
+
+def _replayability_from_command(command: object, *, imported: bool) -> dict[str, str]:
+    if isinstance(command, list) and command:
+        return {"status": "replayable", "reason": "stored replay command is available"}
+    if imported:
+        return {"status": "not_replayable", "reason": "imported run did not include a replay command"}
+    return {"status": "not_recorded", "reason": "workflow did not record a replay command"}
 
 
 def _adapter_run_spec(

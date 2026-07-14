@@ -77,7 +77,9 @@ def test_cocotb_executable_smoke_mode_matrix(
     monkeypatch.setattr(gen_cocotb, "_select_cocotb_simulator", lambda preferred: ("icarus", []) if simulator_available else (None, ["no simulator"]))
     monkeypatch.setattr(gen_cocotb, "_cocotb_common_missing", lambda: [])
     monkeypatch.setattr(gen_cocotb, "_cocotb_makefiles_dir", lambda: (Path("/opt/cocotb/makefiles"), []))
+    monkeypatch.setattr(gen_cocotb, "_cocotb_execution_contract", lambda simulator: ("supported", []))
     monkeypatch.setattr(gen_cocotb.subprocess, "run", fake_run)
+    monkeypatch.setattr(gen_cocotb, "_run_cocotb_smoke_command", lambda command, **kwargs: fake_run(command, **kwargs))
 
     validation_run = gen_cocotb.validate_cocotb_candidate(config, store, _candidate())
 
@@ -108,8 +110,10 @@ def test_cocotb_smoke_makefile_records_compile_context(sample_project: Path, mon
     monkeypatch.setattr(gen_cocotb, "_select_cocotb_simulator", lambda preferred: ("icarus", []))
     monkeypatch.setattr(gen_cocotb, "_cocotb_common_missing", lambda: [])
     monkeypatch.setattr(gen_cocotb, "_cocotb_makefiles_dir", lambda: (Path("/opt/cocotb/makefiles"), []))
+    monkeypatch.setattr(gen_cocotb, "_cocotb_execution_contract", lambda simulator: ("supported", []))
     monkeypatch.setattr(gen_cocotb.shutil, "which", lambda name: "C:/msys64/usr/bin/make.exe" if name == "make" else None)
     monkeypatch.setattr(gen_cocotb.subprocess, "run", fake_run)
+    monkeypatch.setattr(gen_cocotb, "_run_cocotb_smoke_command", lambda command, **kwargs: fake_run(command, **kwargs))
 
     validation_run = gen_cocotb.validate_cocotb_candidate(
         config,
@@ -133,9 +137,11 @@ def test_cocotb_smoke_makefile_records_compile_context(sample_project: Path, mon
     assert "VERILOG_SOURCES" in makefile_text
     assert "COMPILE_ARGS += -Irtl/include -DSIM=1 -Wall" in makefile_text
     assert "cocotb/makefiles/Makefile.sim" in makefile_text
-    assert log_path.read_text(encoding="utf-8") == "smoke passed\n"
+    assert log_path.read_text(encoding="utf-8") == "smoke passed\n\nsmoke passed\n"
+    assert Path(validation_run.tool_result["command_artifacts"]["cocotb_compile_log"]).read_text(encoding="utf-8") == "smoke passed\n"
+    assert Path(validation_run.tool_result["command_artifacts"]["cocotb_run_log"]).read_text(encoding="utf-8") == "smoke passed\n"
     make_call = next(call for call in calls if call["command"][0] == "make")
-    assert "PYTHON_BIN=" in make_call["command"][-1]
+    assert any(argument.startswith("PYTHON_BIN=") for argument in make_call["command"])
     assert make_call["env"]["PATH"].startswith(str(Path("C:/msys64/usr/bin").resolve()))
     assert make_call["env"]["API_KEY"] == "secret"
     assert validation_run.tool_result["environment_summary"]["API_KEY"] == "<redacted>"
@@ -183,6 +189,84 @@ def test_cocotb_python_syntax_failure_skips_executable_smoke(sample_project: Pat
 
     assert validation_run.status == "failed"
     assert validation_run.tool_result["executable_status"] == "skipped"
+    assert validation_run.tool_result["stages"]["python_syntax"]["status"] == "failed"
+    assert validation_run.tool_result["stages"]["simulator_compile"]["status"] == "skipped"
+
+
+def test_cocotb_windows_embedding_failure_is_reported_as_init_failure(sample_project: Path) -> None:
+    stages = gen_cocotb._smoke_stages_after_run(
+        1,
+        "C:\\iverilog\\bin\\vvp.exe\nUnexpected sys.executable value: got C:\\iverilog\\bin\\vvp.exe\nRuntimeError: No simulator available!\n",
+        ["make", "results.xml"],
+        sample_project / "missing_results.xml",
+    )
+
+    assert stages["simulator_launch"]["status"] == "passed"
+    assert stages["cocotb_init"]["status"] == "failed"
+    assert stages["test_results"]["status"] == "skipped"
+    summary = gen_cocotb._validation_summary(1, "", stages=stages, executable_status="failed")
+    assert summary.startswith("cocotb initialization failed:")
+    assert "py_compile" not in summary
+
+
+def test_cocotb_execution_contract_skips_missing_vvp(monkeypatch) -> None:
+    monkeypatch.setattr(gen_cocotb.shutil, "which", lambda name: None if name == "vvp" else f"/usr/bin/{name}")
+    monkeypatch.setattr(gen_cocotb, "_make_uses_msys", lambda: False)
+
+    class Result:
+        returncode = 0
+        stdout = "/opt/cocotb/libs/cocotbvpi_icarus.vpl\n"
+        stderr = ""
+
+    monkeypatch.setattr(gen_cocotb.subprocess, "run", lambda *args, **kwargs: Result())
+    status, diagnostics = gen_cocotb._cocotb_execution_contract("icarus")
+
+    assert status == "unsupported"
+    assert diagnostics == ["simulator launch prerequisite missing: vvp is not available on PATH"]
+
+
+def test_cocotb_execution_contract_rejects_msys_make_with_native_icarus(monkeypatch) -> None:
+    monkeypatch.setattr(gen_cocotb.os, "name", "nt")
+    monkeypatch.setattr(gen_cocotb, "_make_uses_msys", lambda: True)
+    monkeypatch.setattr(gen_cocotb.shutil, "which", lambda name: f"C:/tools/{name}.exe")
+
+    class Result:
+        returncode = 0
+        stdout = "C:/python313/Lib/site-packages/cocotb/libs/cocotbvpi_icarus.vpl\n"
+        stderr = ""
+
+    monkeypatch.setattr(gen_cocotb.subprocess, "run", lambda *args, **kwargs: Result())
+    status, diagnostics = gen_cocotb._cocotb_execution_contract("icarus")
+
+    assert status == "unsupported"
+    assert any("Windows/MSYS/native-Icarus" in diagnostic for diagnostic in diagnostics)
+
+
+def test_cocotb_smoke_timeout_terminates_process_tree(monkeypatch, sample_project: Path) -> None:
+    class Process:
+        pid = 1234
+        returncode = None
+        calls = 0
+
+        def communicate(self, timeout=None):  # noqa: ANN001
+            self.calls += 1
+            if self.calls == 1:
+                raise subprocess.TimeoutExpired(["make"], timeout, output=b"compile output\n", stderr=b"compile error\n")
+            self.returncode = -9
+            return "", ""
+
+    import subprocess
+
+    process = Process()
+    terminated: list[int] = []
+    monkeypatch.setattr(gen_cocotb.subprocess, "Popen", lambda *args, **kwargs: process)
+    monkeypatch.setattr(gen_cocotb, "_terminate_cocotb_process_tree", lambda value: terminated.append(value.pid))
+
+    result = gen_cocotb._run_cocotb_smoke_command(["make"], cwd=sample_project, env={}, timeout=7)
+
+    assert result.returncode == 124
+    assert terminated == [1234]
+    assert "terminated the process tree" in result.stderr
 
 
 def test_cocotb_makefiles_dir_falls_back_to_python_module(monkeypatch) -> None:

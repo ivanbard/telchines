@@ -1,0 +1,2 @@
+[10 ns] INFO received byte A
+time=20ns ERROR scoreboard expected 0x41, observed 0x42

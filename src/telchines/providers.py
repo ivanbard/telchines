@@ -21,6 +21,7 @@ from telchines.models import CocotbCandidate, CocotbPort, Observation, PatchProp
 from telchines.utils import stable_id
 
 DEFAULT_LOCAL_COMMAND_OUTPUT_LIMIT_CHARS = 65536
+PROVIDER_PROBE_MAX_OUTPUT_TOKENS = 64
 
 
 @dataclass(slots=True)
@@ -665,6 +666,7 @@ class ProviderRegistry:
             )
         if not live:
             checks["transport"] = {"status": "skipped", "reason": "offline check requested", **_transport_model_fields(model_fields)}
+            checks["workflow"] = {"status": "skipped", "reason": "offline check requested"}
             return ProviderCheck(
                 name=provider_name,
                 kind=kind,
@@ -679,6 +681,11 @@ class ProviderRegistry:
         if kind == "agent_runtime":
             transport = _agent_runtime_transport(provider_config)
             checks["transport"] = transport
+            checks["workflow"] = {
+                "status": "passed",
+                "mode": "agent_runtime_routing",
+                "summary": "agent workflow readiness depends on the base provider probe and the selected runtime mode",
+            }
             base_provider_name = str(provider_config.get("base_provider"))
             base_provider_config = self.providers.get(base_provider_name)
             if not isinstance(base_provider_config, dict):
@@ -699,7 +706,7 @@ class ProviderRegistry:
                     **model_fields,
                 )
             try:
-                base_transport = _check_provider_transport(base_provider_name, base_provider_config, self.config.project_root)
+                base_transport = _provider_transport_readiness(base_provider_name, base_provider_config, self.config.project_root)
             except ProviderError as exc:
                 checks["base_provider_transport"] = {"status": "failed", "provider": base_provider_name, "error": str(exc)}
                 return ProviderCheck(
@@ -714,9 +721,28 @@ class ProviderRegistry:
                     **model_fields,
                 )
             checks["base_provider_transport"] = {"provider": base_provider_name, **base_transport}
+            try:
+                base_workflow = _probe_provider_workflow(base_provider_name, base_provider_config, self.config.project_root)
+            except ProviderError as exc:
+                if _is_transport_execution_error(base_provider_config, exc):
+                    checks["base_provider_transport"] = {"status": "failed", "provider": base_provider_name, "error": str(exc)}
+                checks["base_provider_workflow"] = {"status": "failed", "provider": base_provider_name, "error": str(exc)}
+                return ProviderCheck(
+                    name=provider_name,
+                    kind=kind,
+                    status="failed",
+                    allowed=True,
+                    summary=f"base provider {base_provider_name} check failed during minimal probe: {exc}",
+                    capabilities=capabilities,
+                    default_for=default_for,
+                    checks=checks,
+                    **model_fields,
+                )
+            checks["base_provider_workflow"] = {"provider": base_provider_name, **base_workflow}
+            checks["base_provider_transport"]["parsed_keys"] = base_workflow.get("parsed_keys", [])
         else:
             try:
-                transport = _check_provider_transport(provider_name, provider_config, self.config.project_root)
+                transport = _provider_transport_readiness(provider_name, provider_config, self.config.project_root)
             except ProviderError as exc:
                 checks["transport"] = {"status": "failed", "error": str(exc)}
                 return ProviderCheck(
@@ -731,12 +757,36 @@ class ProviderRegistry:
                     **model_fields,
                 )
             checks["transport"] = transport
+            try:
+                checks["workflow"] = _probe_provider_workflow(provider_name, provider_config, self.config.project_root)
+            except ProviderError as exc:
+                if _is_transport_execution_error(provider_config, exc):
+                    checks["transport"] = {"status": "failed", "error": str(exc)}
+                checks["workflow"] = {"status": "failed", "error": str(exc)}
+                return ProviderCheck(
+                    name=provider_name,
+                    kind=kind,
+                    status="failed",
+                    allowed=True,
+                    summary=f"minimal provider probe failed: {exc}",
+                    capabilities=capabilities,
+                    default_for=default_for,
+                    checks=checks,
+                    **model_fields,
+                )
+            checks["transport"]["parsed_keys"] = checks["workflow"].get("parsed_keys", [])
+        summary = "provider check passed"
+        if kind == "agent_runtime" and not bool(checks["transport"].get("runtime_available", False)):
+            summary = (
+                f"provider check passed; actual runtime is {checks['transport']['runtime_mode']}: "
+                f"{checks['transport']['runtime_reason']}; {checks['transport']['runtime_install_remedy']}"
+            )
         return ProviderCheck(
             name=provider_name,
             kind=kind,
             status="passed",
             allowed=True,
-            summary="provider check passed",
+            summary=summary,
             capabilities=capabilities,
             default_for=default_for,
             checks=checks,
@@ -1074,8 +1124,7 @@ def _post_json(provider_name: str, url: str, payload: dict[str, Any], headers: d
         with request.urlopen(http_request, timeout=timeout) as response:
             body = response.read().decode("utf-8")
     except error.HTTPError as exc:
-        hint = "; check base_url, endpoint, and model configuration" if exc.code == 404 else ""
-        raise ProviderError(f"provider {provider_name} returned HTTP {exc.code} from {_safe_url_for_error(url)}{hint}") from exc
+        raise ProviderError(_http_error_guidance(provider_name, url, payload, exc.code)) from exc
     except error.URLError as exc:
         raise ProviderError(f"provider {provider_name} request failed: {exc.reason}") from exc
     except TimeoutError as exc:
@@ -1132,6 +1181,13 @@ def _invoke_local_command(provider_name: str, config: dict[str, Any], project_ro
 
 
 def _check_provider_transport(provider_name: str, config: dict[str, Any], project_root: Path) -> dict[str, Any]:
+    """Backward-compatible full live check used by older callers."""
+    transport = _provider_transport_readiness(provider_name, config, project_root)
+    workflow = _probe_provider_workflow(provider_name, config, project_root)
+    return {**transport, "workflow_probe": workflow}
+
+
+def _provider_transport_readiness(provider_name: str, config: dict[str, Any], project_root: Path) -> dict[str, Any]:
     kind = config.get("kind")
     model_metadata = provider_model_metadata(provider_name, config)
     model_readiness = _provider_model_readiness(provider_name, config)
@@ -1144,22 +1200,10 @@ def _check_provider_transport(provider_name: str, config: dict[str, Any], projec
         resolved = shutil.which(command) if command else None
         if resolved is None:
             raise ProviderError(f"provider {provider_name} command was not found: {command}")
-        payload = _attach_provider_metadata(
-            {
-                "provider": provider_name,
-                "workflow_type": "provider_check",
-                "instructions": "Return any valid JSON object to confirm the local command provider can run.",
-            },
-            provider_name,
-            config,
-        )
-        response = _invoke_local_command(provider_name, config, project_root, payload)
-        parsed = response.get("parsed", {})
         return {
             "status": "passed",
             "mode": "local_command",
             "command": [command, *config.get("args", [])],
-            "parsed_keys": sorted(parsed.keys()) if isinstance(parsed, dict) else [],
             **_transport_model_fields(model_metadata),
         }
     if kind == "openai_compatible":
@@ -1167,9 +1211,6 @@ def _check_provider_transport(provider_name: str, config: dict[str, Any], projec
         auth = str(config.get("auth", "bearer"))
         if auth == "bearer" and not os.environ.get(api_key_env):
             raise ProviderError(f"provider {provider_name} is missing credentials: set {api_key_env}")
-        payload = _build_openai_compatible_payload(config, "Return only valid JSON.", {"instructions": 'Return exactly {"status":"ok"} as JSON.'})
-        response = _invoke_openai_compatible(provider_name, config, payload)
-        parsed = _extract_openai_response_content(response, provider_name)
         return {
             "status": "passed",
             "mode": "openai_compatible",
@@ -1179,16 +1220,12 @@ def _check_provider_transport(provider_name: str, config: dict[str, Any], projec
             "api_key_env": api_key_env if auth == "bearer" else None,
             "auth_mode": auth,
             "network_scope": _provider_network_scope(config, {}),
-            "parsed_keys": sorted(parsed.keys()),
             **_transport_model_fields(model_metadata),
         }
     if kind == "anthropic":
         api_key_env = str(config.get("api_key_env", "ANTHROPIC_API_KEY"))
         if not os.environ.get(api_key_env):
             raise ProviderError(f"provider {provider_name} is missing credentials: set {api_key_env}")
-        payload = _build_anthropic_message_payload(config, "Return only valid JSON.", {"instructions": 'Return exactly {"status":"ok"} as JSON.'})
-        response = _invoke_anthropic(provider_name, config, payload)
-        parsed = _extract_anthropic_response_content(response, provider_name)
         return {
             "status": "passed",
             "mode": "anthropic",
@@ -1198,12 +1235,93 @@ def _check_provider_transport(provider_name: str, config: dict[str, Any], projec
             "api_key_env": api_key_env,
             "anthropic_version": config.get("anthropic_version", "2023-06-01"),
             "network_scope": _provider_network_scope(config, {}),
-            "parsed_keys": sorted(parsed.keys()),
             **_transport_model_fields(model_metadata),
         }
     if kind == "agent_runtime":
         return {**_agent_runtime_transport(config), **_transport_model_fields(model_metadata)}
     raise ProviderError(f"provider {provider_name} has unsupported kind: {kind}")
+
+
+def _probe_provider_workflow(provider_name: str, config: dict[str, Any], project_root: Path) -> dict[str, Any]:
+    """Run a small, bounded request that proves the provider response contract."""
+    kind = config.get("kind")
+    model_metadata = provider_model_metadata(provider_name, config)
+    if kind == "heuristic":
+        return {
+            "status": "passed",
+            "mode": "builtin_probe",
+            "probe": "provider_probe_v1",
+            "bounded_output_tokens": 0,
+            **_transport_model_fields(model_metadata),
+        }
+    request_payload = _attach_provider_metadata(_minimal_probe_request(provider_name), provider_name, config)
+    if kind == "local_command":
+        response = _invoke_local_command(provider_name, config, project_root, request_payload)
+        parsed = response.get("parsed")
+    elif kind == "openai_compatible":
+        payload = _bounded_openai_probe_payload(config, request_payload)
+        response = _invoke_openai_compatible(provider_name, config, payload)
+        parsed = _extract_openai_response_content(response, provider_name)
+    elif kind == "anthropic":
+        payload = _bounded_anthropic_probe_payload(config, request_payload)
+        response = _invoke_anthropic(provider_name, config, payload)
+        parsed = _extract_anthropic_response_content(response, provider_name)
+    else:
+        raise ProviderError(f"provider {provider_name} cannot run a workflow probe for kind: {kind}")
+    _validate_probe_response(provider_name, parsed)
+    return {
+        "status": "passed",
+        "mode": f"{kind}_probe",
+        "probe": "provider_probe_v1",
+        "bounded_output_tokens": PROVIDER_PROBE_MAX_OUTPUT_TOKENS if kind != "local_command" else 0,
+        "parsed_keys": sorted(parsed.keys()),
+        **_transport_model_fields(model_metadata),
+    }
+
+
+def _minimal_probe_request(provider_name: str) -> dict[str, Any]:
+    return {
+        "provider": provider_name,
+        # provider_check is retained for existing local wrappers; probe_type makes
+        # this request distinguishable without asking them to implement a new mode.
+        "workflow_type": "provider_check",
+        "probe_type": "provider_probe",
+        "probe_version": 1,
+        "instructions": 'Return exactly {"status":"ok","workflow_type":"provider_check"}.',
+    }
+
+
+def _bounded_openai_probe_payload(config: dict[str, Any], request_payload: dict[str, Any]) -> dict[str, Any]:
+    payload = _build_openai_compatible_payload(config, "Return only the requested JSON object.", request_payload)
+    endpoint = str(config.get("endpoint", "chat/completions")).strip("/")
+    if endpoint.endswith("responses"):
+        payload["max_output_tokens"] = PROVIDER_PROBE_MAX_OUTPUT_TOKENS
+    else:
+        payload["max_tokens"] = PROVIDER_PROBE_MAX_OUTPUT_TOKENS
+    return payload
+
+
+def _bounded_anthropic_probe_payload(config: dict[str, Any], request_payload: dict[str, Any]) -> dict[str, Any]:
+    probe_config = {**config, "max_tokens": PROVIDER_PROBE_MAX_OUTPUT_TOKENS}
+    return _build_anthropic_message_payload(probe_config, "Return only the requested JSON object.", request_payload)
+
+
+def _validate_probe_response(provider_name: str, parsed: Any) -> None:
+    if not isinstance(parsed, dict):
+        raise ProviderError(f"provider {provider_name} minimal probe returned a non-object JSON response")
+    workflow_type = parsed.get("workflow_type")
+    if parsed.get("status") != "ok" or workflow_type not in {None, "provider_check", "provider_probe"}:
+        raise ProviderError(
+            f"provider {provider_name} minimal probe did not satisfy the provider_probe contract "
+            "(expected status='ok'; workflow_type may be provider_check or provider_probe)"
+        )
+
+
+def _is_transport_execution_error(config: dict[str, Any], exc: ProviderError) -> bool:
+    message = str(exc)
+    if config.get("kind") == "local_command":
+        return "command failed" in message
+    return "request failed:" in message or "timed out after" in message
 
 
 def _transport_model_fields(metadata: dict[str, Any]) -> dict[str, Any]:
@@ -1259,13 +1377,17 @@ def _model_env_suggestion(config: dict[str, Any]) -> str:
 
 def _agent_runtime_transport(config: dict[str, Any]) -> dict[str, Any]:
     runtime_info = runtime_capability()
+    runtime_mode = str(runtime_info["runtime_mode"])
+    uses_langgraph = runtime_mode == "langgraph"
     return {
         "status": "passed",
         "mode": "agent_runtime",
         "runtime": config.get("runtime", "langgraph"),
-        "runtime_mode": runtime_info["runtime_mode"],
+        "runtime_mode": runtime_mode,
         "runtime_available": runtime_info["runtime_available"],
         "runtime_reason": runtime_info["runtime_reason"],
+        "runtime_implementation": "langgraph_stategraph_single_repair_node" if uses_langgraph else "bounded_retry_loop",
+        "runtime_install_remedy": None if uses_langgraph else 'install optional runtime support with: pip install "telchines[agentic]"',
         "base_provider": config.get("base_provider"),
         "max_iterations": int(config.get("max_iterations", 3)),
     }
@@ -1291,6 +1413,47 @@ def _safe_url_for_error(url: str) -> str:
     if not parsed.scheme or not parsed.netloc:
         return url.split("?", 1)[0].split("#", 1)[0]
     return f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+
+
+def _http_error_guidance(provider_name: str, url: str, payload: dict[str, Any], status_code: int) -> str:
+    endpoint = _safe_url_for_error(url)
+    model = _safe_diagnostic_value(payload.get("model"), fallback="<unset>")
+    payload_fields = ", ".join(sorted(str(key) for key in payload if key not in {"input", "messages", "system"}))
+    message = (
+        f"provider {provider_name} returned HTTP {status_code} from {endpoint}; "
+        f"model={model}; payload fields=[{payload_fields}]"
+    )
+    if status_code == 400:
+        return f"{message}; {_http_400_remedy(url, payload)}"
+    if status_code == 404:
+        return f"{message}; check base_url, endpoint, and model configuration"
+    return message
+
+
+def _http_400_remedy(url: str, payload: dict[str, Any]) -> str:
+    path = urlparse(url).path.rstrip("/")
+    reasoning_field = "reasoning" if "reasoning" in payload else "reasoning_effort" if "reasoning_effort" in payload else "none"
+    if path.endswith("/responses") or "input" in payload:
+        return (
+            "request schema was rejected: verify this model supports the Responses endpoint and accepts "
+            f"instructions/input (reasoning field: {reasoning_field}); try endpoint=chat/completions only when the provider documents it"
+        )
+    if path.endswith("/messages") or "anthropic-version" in {str(key).lower() for key in payload}:
+        return (
+            "request schema was rejected: verify this model supports the Anthropic Messages endpoint, max_tokens, and the configured "
+            f"thinking mode (reasoning field: {reasoning_field})"
+        )
+    return (
+        "request schema was rejected: verify the model, endpoint, and payload dialect; Chat Completions expects messages, "
+        f"and reasoning_effort is valid only when this provider documents it (reasoning field: {reasoning_field})"
+    )
+
+
+def _safe_diagnostic_value(value: Any, *, fallback: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        return fallback
+    # Keep diagnostics useful without allowing control characters or large echoed values into logs.
+    return re.sub(r"[\r\n\t]", " ", value.strip())[:120]
 
 
 def _extract_openai_response_content(response_payload: dict[str, Any], provider_name: str) -> dict[str, Any]:

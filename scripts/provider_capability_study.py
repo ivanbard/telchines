@@ -79,6 +79,7 @@ def build_plan(
 ) -> dict[str, Any]:
     if repeat_count < 1:
         raise MatrixError("repeat-count must be at least 1")
+    providers = _with_delegated_model_providers(providers)
     commands: list[dict[str, Any]] = []
     provider_summaries: list[dict[str, Any]] = []
     skip_reasons: dict[str, str] = {}
@@ -97,7 +98,7 @@ def build_plan(
                 "name": provider["name"],
                 "kind": provider["kind"],
                 "capabilities": provider.get("capabilities", []),
-                "status": "skipped" if reason else "planned",
+                "status": "skipped" if reason else "dependency" if provider.get("_study_dependency") else "planned",
                 "reason": reason,
                 **_provider_model_fields(provider),
             }
@@ -114,7 +115,8 @@ def build_plan(
                 }
             )
             continue
-        commands.extend(_provider_commands(provider, repeat_count=repeat_count))
+        if not provider.get("_study_dependency"):
+            commands.extend(_provider_commands(provider, repeat_count=repeat_count))
     return {
         "matrix": matrix["name"],
         "scratch_root": str(scratch_root / _safe_name(matrix["name"])),
@@ -186,7 +188,9 @@ def _selected_providers(matrix: dict[str, Any], provider_name: str | None) -> li
     for provider in selected:
         base_provider = provider.get("base_provider")
         if isinstance(base_provider, str) and base_provider in by_name and by_name[base_provider] not in expanded:
-            expanded.insert(0, by_name[base_provider])
+            # The base provider is required configuration for the selected agent,
+            # not an additional workflow target selected by surprise.
+            expanded.insert(0, {**by_name[base_provider], "_study_dependency": True})
     return expanded
 
 
@@ -257,6 +261,14 @@ def _provider_commands(provider: dict[str, Any], *, repeat_count: int = 1) -> li
 
 def _active_providers(providers: list[dict[str, Any]], commands: list[dict[str, Any]]) -> list[dict[str, Any]]:
     active_names = {str(command.get("provider")) for command in commands if command.get("status") == "planned"}
+    by_name = {str(provider["name"]): provider for provider in providers}
+    pending = list(active_names)
+    while pending:
+        provider = by_name.get(pending.pop())
+        base_provider = provider.get("base_provider") if isinstance(provider, dict) else None
+        if isinstance(base_provider, str) and base_provider not in active_names:
+            active_names.add(base_provider)
+            pending.append(base_provider)
     return [provider for provider in providers if provider["name"] in active_names]
 
 
@@ -278,16 +290,32 @@ def _command(provider: str, label: str, args: list[str]) -> dict[str, Any]:
 
 
 def _provider_model_fields(provider: dict[str, Any]) -> dict[str, Any]:
+    effective = provider.get("_delegated_model_provider") if provider.get("kind") == "agent_runtime" else None
+    if not isinstance(effective, dict):
+        effective = provider
     return {
         "provider_kind": provider.get("kind"),
-        "model": provider.get("model") or provider.get("model_default"),
-        "reasoning_level": provider.get("reasoning_level", "auto"),
-        "reasoning_summary": provider.get("reasoning_summary"),
-        "reasoning_wire_format": provider.get("reasoning_wire_format"),
-        "model_source": provider.get("model_source") or ("configured" if provider.get("model") else "default" if provider.get("model_default") else "preset"),
-        "supports_reasoning_effort": provider.get("supports_reasoning_effort"),
-        "model_warnings": provider.get("model_warnings", []),
+        "model": effective.get("model") or effective.get("model_default"),
+        "reasoning_level": effective.get("reasoning_level", "auto"),
+        "reasoning_summary": effective.get("reasoning_summary"),
+        "reasoning_wire_format": effective.get("reasoning_wire_format"),
+        "model_source": "delegated" if effective is not provider else effective.get("model_source") or ("configured" if effective.get("model") else "default" if effective.get("model_default") else "preset"),
+        "supports_reasoning_effort": effective.get("supports_reasoning_effort"),
+        "model_warnings": effective.get("model_warnings", []),
     }
+
+
+def _with_delegated_model_providers(providers: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    by_name = {str(provider["name"]): provider for provider in providers}
+    resolved: list[dict[str, Any]] = []
+    for provider in providers:
+        if provider.get("kind") == "agent_runtime":
+            base = by_name.get(str(provider.get("base_provider")))
+            if isinstance(base, dict):
+                resolved.append({**provider, "_delegated_model_provider": base})
+                continue
+        resolved.append(provider)
+    return resolved
 
 
 def _prepare_scratch_project(scratch: Path, matrix: dict[str, Any], providers: list[dict[str, Any]]) -> None:
@@ -455,7 +483,7 @@ from pathlib import Path
 payload = json.loads(sys.stdin.read())
 workflow = payload.get("workflow_type")
 
-if workflow == "provider_check":
+if workflow in {"provider_check", "provider_probe"}:
     print("local fixture provider log")
     print(json.dumps({"status": "ok", "workflow_type": workflow}))
     raise SystemExit(0)
@@ -752,9 +780,38 @@ def _semantic_fingerprint(command: dict[str, Any], parsed: dict[str, Any]) -> st
         material["result_status"] = result.get("status")
         material["file_path"] = result.get("artifact_path") or result.get("file_path") or result.get("path")
     if label in {"provider_check", "provider_check_offline"}:
-        material["provider_check_status"] = parsed.get("status")
+        material["provider_check"] = _provider_check_fingerprint_material(parsed)
     encoded = json.dumps(material, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:16]
+
+
+def _provider_check_fingerprint_material(parsed: dict[str, Any]) -> dict[str, Any]:
+    providers = parsed.get("providers")
+    if not isinstance(providers, list) or not providers or not isinstance(providers[0], dict):
+        return {"status": parsed.get("status")}
+    checks = providers[0].get("checks")
+    if not isinstance(checks, dict):
+        return {"status": providers[0].get("status")}
+
+    def readiness(name: str) -> dict[str, Any]:
+        value = checks.get(name)
+        if not isinstance(value, dict):
+            return {"status": None}
+        return {
+            "status": value.get("status"),
+            "mode": value.get("mode"),
+            "runtime_mode": value.get("runtime_mode"),
+            "runtime_implementation": value.get("runtime_implementation"),
+            "probe": value.get("probe"),
+        }
+
+    return {
+        "status": providers[0].get("status"),
+        "transport": readiness("transport"),
+        "workflow": readiness("workflow"),
+        "base_transport": readiness("base_provider_transport"),
+        "base_workflow": readiness("base_provider_workflow"),
+    }
 
 
 def _parse_last_json(stdout: str) -> dict[str, Any]:
@@ -818,6 +875,12 @@ def _stability_metrics(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
             int(item.get("json_repair_attempt_count", 0)) for item in items if isinstance(item.get("json_repair_attempt_count"), int)
         ]
         validation_deltas = [item.get("validation_delta") for item in items if isinstance(item.get("validation_delta"), dict)]
+        validation_delta_fingerprints = sorted(
+            {
+                hashlib.sha256(json.dumps(delta, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()[:12]
+                for delta in validation_deltas
+            }
+        )
         final_validation_statuses = sorted(
             {
                 str(delta.get("final_validation_status"))
@@ -834,7 +897,7 @@ def _stability_metrics(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "runs": len(items),
                 "statuses": statuses,
                 "fingerprints": fingerprints,
-                "stable": len(statuses) == 1 and len(fingerprints) <= 1,
+                "stable": len(statuses) == 1 and len(fingerprints) <= 1 and len(validation_delta_fingerprints) <= 1,
                 "latency_seconds_min": min(latencies) if latencies else None,
                 "latency_seconds_max": max(latencies) if latencies else None,
                 "latency_seconds_avg": round(sum(latencies) / len(latencies), 3) if latencies else None,
@@ -843,6 +906,9 @@ def _stability_metrics(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "json_repair_attempt_count_max": max(json_repair_counts) if json_repair_counts else 0,
                 "validation_final_statuses": final_validation_statuses,
                 "validation_delta_stable": len(final_validation_statuses) <= 1,
+                "validation_drift_detected": len(validation_delta_fingerprints) > 1,
+                "validation_delta_fingerprints": validation_delta_fingerprints,
+                "retry_drift_detected": len(set(retry_counts)) > 1,
             }
         )
     return metrics
@@ -913,8 +979,8 @@ def _markdown_report(summary: dict[str, Any]) -> str:
             f"{item.get('json_repair_attempt_count') if item.get('json_repair_attempt_count') is not None else ''} | "
             f"`{item.get('semantic_fingerprint') or ''}` |"
         )
-    lines.extend(["", "## Stability", "", "| Provider | Scenario | Model | Reasoning | Runs | Stable | Statuses | Validation | Retry range | JSON repair max | Fingerprints |"])
-    lines.append("| --- | --- | --- | --- | ---: | --- | --- | --- | --- | ---: | --- |")
+    lines.extend(["", "## Stability", "", "| Provider | Scenario | Model | Reasoning | Runs | Stable | Statuses | Validation | Retry drift | Validation drift | JSON repair max | Fingerprints |"])
+    lines.append("| --- | --- | --- | --- | ---: | --- | --- | --- | --- | --- | ---: | --- |")
     for item in summary.get("metrics", {}).get("stability", []):
         retry_range = ""
         if item.get("retry_count_min") is not None and item.get("retry_count_max") is not None:
@@ -930,6 +996,8 @@ def _markdown_report(summary: dict[str, Any]) -> str:
             f"`{','.join(item.get('statuses', []))}` | "
             f"`{','.join(item.get('validation_final_statuses', []))}` | "
             f"`{retry_range}` | "
+            f"{item.get('retry_drift_detected', False)} | "
+            f"{item.get('validation_drift_detected', False)} | "
             f"{item.get('json_repair_attempt_count_max', 0)} | "
             f"`{','.join(item.get('fingerprints', []))}` |"
         )

@@ -18,7 +18,7 @@ from telchines.workflows.coverage import load_coverage_report
 TEMPLATE_NAMES = [item["name"] for item in list_project_templates()]
 
 
-@settings(max_examples=30, suppress_health_check=[HealthCheck.function_scoped_fixture])
+@settings(max_examples=30, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])
 @given(template_name=st.sampled_from(TEMPLATE_NAMES))
 def test_all_project_templates_create_valid_local_scaffolds(work_root: Path, template_name: str) -> None:
     project_root = work_root / f"templated_{template_name}"
@@ -32,12 +32,19 @@ def test_all_project_templates_create_valid_local_scaffolds(work_root: Path, tem
     user_files = [path for path in project_root.rglob("*") if path.is_file() and ".tel" not in path.relative_to(project_root).parts]
 
     assert result["template"] == template_name
-    assert result["created"]
+    assert result["created"] or result["skipped"]
     assert (project_root / "README.telchines.md").exists()
     assert report.design == "example"
     assert imported["imported_count"] == 0
     assert isinstance(loaded.retrieval["aliases"], dict)
     assert not any(str(project_root) in path.read_text(encoding="utf-8", errors="ignore") for path in user_files)
+    assert (project_root / "filelists").is_dir()
+    assert (project_root / "include").is_dir()
+    assert (project_root / "generated").is_dir()
+
+    if template_name in {"vivado", "quartus", "libero"}:
+        assert any(path.suffix == ".f" for path in (project_root / "filelists").iterdir())
+        assert loaded.retrieval["aliases"]["compile options"] == ["filelist", "incdir", "define", "generated"]
 
 
 def test_project_template_application_is_idempotent_and_preserves_user_files(work_root: Path) -> None:

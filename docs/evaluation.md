@@ -39,10 +39,28 @@ Inside an initialized Telchines project, `tel eval run` runs with that project's
 The report includes `metrics.readiness` plus per-case `benchmark_scope` and
 `execution_backing` fields. Treat these as calibration labels: most default
 cases are deterministic fixtures, and generated-code pass rates should be read
-with `validation_status`, `validation_mode`, `formal_status`, and
-`executable_status`. A passing fixture row is not evidence that a production
+with `validation_status`, `validation_mode`, `structural_status`,
+`syntax_status`, `adapter_status`, `formal_status`, `proof_status`, and
+`overall_status`. A passing fixture row is not evidence that a production
 simulator, formal engine, or vendor build flow ran unless the backing field says
 so.
+
+For SVA rows, `benchmark_status` is separate from the boolean `passed` score.
+When required benchmark criteria pass but optional formal execution fails, the
+row is `passed_with_warnings`, the report `status` is also
+`passed_with_warnings`, and `metrics.sva.formal_failure_count` is nonzero. This
+prevents a benchmark score from being read as a hidden formal or proof pass.
+`proof_status: not_proved` remains expected for the shipped bounded-BMC formal
+smoke, including when `formal_status: passed`.
+
+## Imported Run Replay
+
+Imported regression records explicitly carry replayability evidence. A manifest
+run with a `command` is `replayable`; one without it is
+`not_replayable` with the reason preserved in the stored run and import output.
+`tel runs replay RUN_ID` rejects non-replayable imports as a normal CLI input
+error. It also reports a missing replay executable cleanly instead of exposing a
+`FileNotFoundError` traceback.
 
 ## Release Gate Expectations
 

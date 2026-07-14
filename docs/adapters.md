@@ -116,6 +116,6 @@ python -m pip install -e ".[cocotb-smoke]"
 python scripts/tool_smoke.py --adapters iverilog --cocotb
 ```
 
-The cocotb lane creates a tiny counter DUT, validates a generated cocotb test with `generation.cocotb.executable_smoke=required`, and reports setup diagnostics when cocotb, its makefiles, `make`, Icarus, or `vvp` are missing. Telchines accepts cocotb makefile discovery through `cocotb-config` or `python -m cocotb_tools.config`, which helps Python 3.13 environments where the console script shim is absent.
+The cocotb lane creates a tiny counter DUT, validates a generated cocotb test with `generation.cocotb.executable_smoke=required`, and reports setup diagnostics when cocotb, its makefiles, `make`, Icarus, `vvp`, or the cocotb simulator binding are unavailable. It records separate Python, structure, simulator-compile, simulator-launch, cocotb-init, and test-result stages. Telchines accepts cocotb makefile discovery through `cocotb-config` or `python -m cocotb_tools.config`, which helps Python 3.13 environments where the console script shim is absent.
 
 There is also a manual GitHub Actions workflow, `.github/workflows/tool-smoke.yml`, that installs Verilator and Icarus on Ubuntu and runs the same script. It is intentionally `workflow_dispatch` so normal CI remains lightweight while real-tool checks are available before releases.

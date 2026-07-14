@@ -403,6 +403,76 @@ def test_invoke_anthropic_404_error_is_sanitized_and_actionable(monkeypatch: pyt
     assert "test-token" not in message
 
 
+def test_openai_400_error_includes_model_endpoint_payload_guidance_without_secret(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_urlopen(http_request, timeout: int):
+        raise url_error.HTTPError(http_request.full_url, 400, "Bad Request", {}, None)
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-token")
+    monkeypatch.setattr(providers_module.request, "urlopen", fake_urlopen)
+
+    with pytest.raises(ProviderError) as exc_info:
+        _invoke_openai_compatible(
+            "mock-openai",
+            {"base_url": "https://api.openai.com/v1", "endpoint": "responses", "model": "gpt-test"},
+            {"model": "gpt-test", "instructions": "secret prompt", "input": "secret payload", "reasoning": {"effort": "low"}},
+        )
+
+    message = str(exc_info.value)
+    assert "HTTP 400" in message
+    assert "model=gpt-test" in message
+    assert "Responses endpoint" in message
+    assert "payload fields=[instructions, model, reasoning]" in message
+    assert "test-token" not in message
+    assert "secret payload" not in message
+
+
+def test_live_provider_check_uses_bounded_probe_and_reports_workflow_readiness(sample_project: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: dict[str, object] = {}
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self) -> bytes:
+            return b'{"output_text":"{\\"status\\":\\"ok\\",\\"workflow_type\\":\\"provider_probe\\"}"}'
+
+    def fake_urlopen(http_request, timeout: int):
+        seen["body"] = json.loads(http_request.data.decode("utf-8"))
+        return Response()
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-token")
+    monkeypatch.setattr(providers_module.request, "urlopen", fake_urlopen)
+    config = ProjectConfig.load(sample_project)
+    config.project.model_policy = {
+        "default_provider_by_capability": {"repair": "openai"},
+        "providers": {
+            "openai": {
+                "kind": "openai_compatible",
+                "capabilities": ["repair"],
+                "base_url": "https://api.openai.com/v1",
+                "endpoint": "responses",
+                "model": "gpt-test",
+                "api_key_env": "OPENAI_API_KEY",
+            }
+        },
+    }
+
+    check = ProviderRegistry(config).check("openai", live=True)
+
+    body = seen["body"]
+    assert check.status == "passed"
+    assert check.checks["transport"]["status"] == "passed"
+    assert check.checks["workflow"]["probe"] == "provider_probe_v1"
+    assert check.checks["workflow"]["bounded_output_tokens"] == 64
+    assert isinstance(body, dict)
+    assert body["max_output_tokens"] == 64
+    assert json.loads(body["input"])["workflow_type"] == "provider_check"
+    assert json.loads(body["input"])["probe_type"] == "provider_probe"
+
+
 def test_provider_check_missing_model_reports_default_and_env_without_secret(sample_project: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "super-secret-token")
     config = ProjectConfig.load(sample_project)
@@ -530,6 +600,9 @@ def test_agent_runtime_live_check_validates_base_provider_reachability(sample_pr
 
     assert check.status == "failed"
     assert check.checks["transport"]["mode"] == "agent_runtime"
+    assert check.checks["transport"]["runtime_implementation"] in {"langgraph_stategraph_single_repair_node", "bounded_retry_loop"}
+    if not check.checks["transport"]["runtime_available"]:
+        assert "telchines[agentic]" in check.checks["transport"]["runtime_install_remedy"]
     assert check.checks["base_provider_transport"]["status"] == "failed"
     assert "local-base" in check.summary
 

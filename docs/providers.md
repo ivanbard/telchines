@@ -86,7 +86,7 @@ Install the optional LangChain/LangGraph dependencies with:
 pip install "telchines[agentic]"
 ```
 
-The runtime is intentionally opt-in and does not replace Telchines retrieval, run storage, policy checks, or validation gates. It inherits policy blocking from its base provider, so `no_egress=true`, `model_mode=local`, and `model_mode=remote` still apply through the delegated provider.
+The runtime is intentionally opt-in and does not replace Telchines retrieval, run storage, policy checks, or validation gates. It inherits policy blocking from its base provider, so `no_egress=true`, `model_mode=local`, and `model_mode=remote` still apply through the delegated provider. `tel providers check` and agent results report the actual runtime mode: `langgraph` currently uses a single `StateGraph` repair node around the bounded repair loop; `bounded_loop_no_langgraph` uses the same bounded retry loop directly. When the fallback is active, the output includes the remedy `pip install "telchines[agentic]"`.
 
 ## Example Config
 
@@ -171,7 +171,7 @@ tel providers setup local-openai \
 
 Set the referenced environment variable in your shell or an ignored local `.env` file, then run `tel providers check NAME`. Do not paste API key values into `.tel/config.json`; `tel providers setup` rejects values that are not valid environment variable names. For hosted defaults, override the model later with `tel providers set-model NAME MODEL` or an external matrix env var such as `TELCHINES_OPENAI_MODEL` or `TELCHINES_ANTHROPIC_MODEL`.
 
-Use `tel providers check [NAME]` to validate one provider, or omit `NAME` to check all providers. By default this performs a live transport check for `openai_compatible` and `local_command` providers and reports `agent_runtime` routing metadata. Add `--offline` to validate only configuration and policy:
+Use `tel providers check [NAME]` to validate one provider, or omit `NAME` to check all providers. By default it reports transport readiness separately from workflow readiness. Live HTTP and local-command checks run one bounded minimal request with `probe_type: provider_probe` and require `status: ok`; agent-runtime checks show the actual runtime plus transport/probe readiness for the delegated base provider. Add `--offline` to validate only configuration and policy:
 
 ```bash
 tel providers check heuristic

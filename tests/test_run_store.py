@@ -124,6 +124,16 @@ def test_import_manifest_persists_runs_and_triage_matches_history(sample_project
     assert failed.artifacts["waveform_ids"]
     assert failed.artifacts["spec"] == "docs/uart.md"
     assert failed.replay_command == ["make", "regress", "SEED=1"]
+    assert failed.tool_result["replayability"] == {
+        "status": "replayable",
+        "reason": "stored replay command is available",
+    }
+
+    passed = store.load_run(str(payload["runs"][1]["run_id"]))
+    assert passed.tool_result["replayability"] == {
+        "status": "not_replayable",
+        "reason": "imported run did not include a replay command",
+    }
 
     current_log_dir = sample_project / "logs" / "current"
     current_log_dir.mkdir(parents=True, exist_ok=True)

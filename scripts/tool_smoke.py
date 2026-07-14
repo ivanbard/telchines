@@ -203,6 +203,10 @@ async def test_smoke_counter(dut):
         candidate,
         run_spec=AdapterRunSpec(files=["rtl/smoke_counter.sv"], top_module="smoke_counter"),
     )
+    if validation.tool_result.get("executable_contract") == "unsupported" and allow_missing:
+        diagnostics = validation.tool_result.get("setup_diagnostics", [])
+        print(f"SKIP cocotb: {'; '.join(str(item) for item in diagnostics)}")
+        return
     status = "PASS" if validation.status == "passed" else "FAIL"
     print(f"{status} cocotb: {validation.summary}")
     if validation.status != "passed":

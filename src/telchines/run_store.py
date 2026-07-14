@@ -40,9 +40,29 @@ class RunStore:
         self.reports_dir = ensure_directory(self.root / "reports")
 
     def save_run(self, run: VerificationRun) -> None:
+        self._record_replayability(run)
         payload = dataclass_to_dict(run)
         payload["tool"] = asdict(run.tool)
         write_json(self.runs_dir / f"{run.run_id}.json", payload)
+
+    @staticmethod
+    def _record_replayability(run: VerificationRun) -> None:
+        if run.replay_command:
+            replayability = {
+                "status": "replayable",
+                "reason": "stored replay command is available",
+            }
+        elif run.workflow_type == "regression_import":
+            replayability = {
+                "status": "not_replayable",
+                "reason": "imported run did not include a replay command",
+            }
+        else:
+            replayability = {
+                "status": "not_recorded",
+                "reason": "workflow did not record a replay command",
+            }
+        run.tool_result = {**run.tool_result, "replayability": replayability}
 
     def load_run(self, run_id: str) -> VerificationRun:
         payload = read_json(self.runs_dir / f"{run_id}.json")

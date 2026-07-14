@@ -16,6 +16,18 @@ Expected outcome:
 - evidence citations point at logs, docs, or RTL
 - nearby waveforms are attached when present; waveform evidence includes `evidence_status` (`strong`, `weak`, or `unrelated`) plus `reason`, so generic or unrelated traces are disclosed instead of treated as root-cause evidence
 
+For a targeted VCD investigation, keep the existing exact signal path or use a
+clear hierarchy fragment, then constrain the timestamp window and correlate a
+simulator log when it carries time annotations:
+
+```bash
+tel waveforms inspect logs/regressions/failure.vcd --signal u_rx.data_byte --start-time 120 --end-time 180 --log logs/regressions/failure.log --tolerance-ticks 2
+```
+
+The result keeps the original transition list and adds a time-window summary,
+binary/hex bus values where VCD values are known, and project-local log-time
+correlations.
+
 ## Example 2: Spec To SVA
 
 ```bash

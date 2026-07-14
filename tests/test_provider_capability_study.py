@@ -67,6 +67,22 @@ def test_provider_capability_matrix_expands_agent_base_dependency() -> None:
     assert [provider["name"] for provider in selected] == ["matrix-local-base", "matrix-agent"]
 
 
+def test_agent_provider_filter_keeps_base_as_dependency_not_a_second_study_target(work_root: Path) -> None:
+    matrix = provider_capability_study.load_matrix(REPO_ROOT / "docs" / "provider-matrices" / "agent_runtime.json")
+    selected = provider_capability_study._selected_providers(matrix, "matrix-agent")
+    plan = provider_capability_study.build_plan(matrix, selected, work_root, include_live=False, dry_run=True)
+
+    assert selected[0]["_study_dependency"] is True
+    assert next(item for item in plan["providers"] if item["name"] == "matrix-local-base")["status"] == "dependency"
+    agent_summary = next(item for item in plan["providers"] if item["name"] == "matrix-agent")
+    assert agent_summary["model_source"] == "delegated"
+    assert {command["provider"] for command in plan["commands"]} == {"matrix-agent"}
+    assert [provider["name"] for provider in provider_capability_study._active_providers(selected, plan["commands"])] == [
+        "matrix-local-base",
+        "matrix-agent",
+    ]
+
+
 def test_provider_capability_matrix_accepts_anthropic_preset() -> None:
     matrix = provider_capability_study.load_matrix(REPO_ROOT / "docs" / "provider-matrices" / "anthropic.json")
     assert matrix["providers"][0]["kind"] == "anthropic"
@@ -284,6 +300,38 @@ def test_provider_capability_stability_records_retries_json_repair_and_validatio
     assert metrics[0]["retry_count_max"] == 1
     assert metrics[0]["json_repair_attempt_count_max"] == 1
     assert metrics[0]["validation_final_statuses"] == ["passed"]
+
+
+def test_provider_capability_stability_flags_validation_and_retry_drift() -> None:
+    results = [
+        {
+            "provider": "remote",
+            "label": "agent_repair",
+            "model": "configured-model",
+            "reasoning_level": "high",
+            "status": "passed",
+            "semantic_fingerprint": "first",
+            "retry_count": 0,
+            "validation_delta": {"first_validation_status": "passed", "final_validation_status": "passed"},
+        },
+        {
+            "provider": "remote",
+            "label": "agent_repair",
+            "model": "configured-model",
+            "reasoning_level": "high",
+            "status": "passed",
+            "semantic_fingerprint": "second",
+            "retry_count": 2,
+            "validation_delta": {"first_validation_status": "failed", "final_validation_status": "passed"},
+        },
+    ]
+
+    metrics = provider_capability_study._stability_metrics(results)
+
+    assert metrics[0]["stable"] is False
+    assert metrics[0]["retry_drift_detected"] is True
+    assert metrics[0]["validation_drift_detected"] is True
+    assert len(metrics[0]["validation_delta_fingerprints"]) == 2
 
 
 def test_provider_capability_semantic_fingerprint_ignores_volatile_ids() -> None:

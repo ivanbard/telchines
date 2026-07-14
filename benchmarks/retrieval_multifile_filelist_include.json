@@ -1,24 +1,24 @@
 {
   "benchmark_id": "retrieval_multifile_filelist_include",
   "task_type": "retrieval",
-  "title": "Retrieve multi-file design context with filelist and include hints",
+  "title": "Retrieve medium RTL and vendor compile context with nested filelists",
   "fixture_root": "benchmarks/assets/retrieval_multifile_filelist_include",
   "config": {
-    "query": "UART top filelist include baud divisor package macro",
-    "mode": "repair",
+    "query": "SoC UART package filelist include macro vendor generated compile options",
+    "mode": "vendor_build",
     "focus_paths": [
-      "rtl/top.sv",
-      "filelists/uart.f"
+      "rtl/soc_top.sv",
+      "vendor/vendor_compile.f"
     ],
-    "limit": 8
+    "limit": 10
   },
   "scoring": {
     "expected_paths": [
-      "filelists/uart.f",
-      "include/uart_defs.svh",
+      "vendor/vendor_compile.f",
+      "filelists/soc.f",
+      "generated/vendor_pll_wrapper.sv",
       "rtl/uart_pkg.sv",
-      "rtl/uart_core.sv",
-      "docs/integration.md"
+      "rtl/uart_core.sv"
     ],
     "min_recall": 0.8,
     "min_citation_coverage": 1.0,

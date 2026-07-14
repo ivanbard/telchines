@@ -10,7 +10,7 @@ from telchines.cli import app
 from telchines.config import ProjectConfig
 from telchines.models import CocotbCandidate
 from telchines.run_store import RunStore
-from telchines.workflows.gen_cocotb import _cocotb_makefiles_dir, validate_cocotb_candidate
+from telchines.workflows.gen_cocotb import _cocotb_execution_contract, _cocotb_makefiles_dir, validate_cocotb_candidate
 
 try:
     runner = CliRunner(mix_stderr=False)
@@ -33,6 +33,9 @@ def test_generated_cocotb_scaffold_runs_with_icarus_when_tools_are_available(sam
     _require_executable("iverilog")
     _require_executable("vvp")
     _require_executable("make")
+    contract, diagnostics = _cocotb_execution_contract("icarus")
+    if contract != "supported":
+        pytest.skip("; ".join(diagnostics))
 
     monkeypatch.chdir(sample_project)
     index_result = runner.invoke(app, ["index"])
