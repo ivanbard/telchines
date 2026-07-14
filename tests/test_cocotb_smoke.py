@@ -66,6 +66,7 @@ def test_cocotb_required_executable_smoke_fails_when_tools_missing(sample_projec
     )
     monkeypatch.setattr("telchines.workflows.gen_cocotb._select_cocotb_simulator", lambda preferred: (None, ["no simulator"]))
     monkeypatch.setattr("telchines.workflows.gen_cocotb._cocotb_common_missing", lambda: [])
+    monkeypatch.setattr("telchines.workflows.gen_cocotb._cocotb_makefiles_dir", lambda: (Path(), []))
 
     validation_run = validate_cocotb_candidate(config, store, candidate)
 

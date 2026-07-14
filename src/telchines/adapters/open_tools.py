@@ -307,7 +307,7 @@ def _verilator_command(project_root: Path, args: list[str]) -> list[str]:
     if shutil.which("verilator"):
         return ["verilator", *args]
     wrapper = _extensionless_verilator_wrapper()
-    bash = _msys_bash(wrapper)
+    bash = _msys_bash(wrapper) if wrapper else ""
     if wrapper and bash:
         project = _msys_path(project_root.resolve())
         command = "export PATH=/ucrt64/bin:/usr/bin:/bin"

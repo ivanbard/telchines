@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.1.1 - 2026-07-13
+
+### Fixed
+
+- Handle absent optional cocotb modules during clean-wheel evaluation instead of raising `ModuleNotFoundError`.
+- Avoid dereferencing a missing MSYS Verilator wrapper when open-tool binaries are unavailable.
+- Isolate missing-tool tests from runner-specific optional dependencies.
+
 ## 1.1.0 - 2026-07-13
 
 Verification execution, diagnostics, and release-readiness expansion.
