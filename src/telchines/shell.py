@@ -162,6 +162,10 @@ SHELL_COMMAND_OPTIONS = {
 }
 REPEATABLE_OPTIONS = {"--file", "--extra-arg", "--adapter-arg", "--filelist", "--include-dir", "--define", "--logs", "--waveform", "--rtl", "--spec"}
 
+# prompt_toolkit waits this long before treating a lone Escape byte as a key.
+# Its 500 ms default makes full-screen shell input feel unresponsive.
+ESCAPE_FLUSH_TIMEOUT_SECONDS = 0.01
+
 
 @dataclass(slots=True)
 class ShellSession:
@@ -501,7 +505,7 @@ def _build_fullscreen_shell_app(session: ShellSession, **app_kwargs: Any) -> App
             input_area.text = session.history[view_state.history_index]
         input_area.buffer.cursor_position = len(input_area.text)
 
-    @kb.add("escape", filter=Condition(lambda: view_state.help_visible))
+    @kb.add("escape", filter=Condition(lambda: view_state.help_visible), eager=True)
     @kb.add("q", filter=Condition(lambda: view_state.help_visible))
     def _(event) -> None:  # noqa: ANN001
         hide_help_overlay()
@@ -517,6 +521,7 @@ def _build_fullscreen_shell_app(session: ShellSession, **app_kwargs: Any) -> App
         event.app.exit()
 
     app = Application(layout=layout, key_bindings=kb, full_screen=True, mouse_support=False, style=style, **app_kwargs)
+    app.ttimeoutlen = ESCAPE_FLUSH_TIMEOUT_SECONDS
     app.layout.focus(input_area)
     return app
 
