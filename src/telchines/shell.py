@@ -27,6 +27,7 @@ from rich.table import Table
 from rich.text import Text
 
 from telchines.config import ProjectConfig
+from telchines.setup import UserSetup, run_setup
 from telchines.errors import AdapterExecutionError, ConfigError, ProviderError, TelchinesError
 from telchines.operations import (
     agent,
@@ -71,6 +72,7 @@ from telchines.operations import (
 
 SHELL_COMMAND_HELP = [
     ("/help", "Show command reference"),
+    ("/setup", "Configure user-level provider and privacy defaults"),
     ("/project init [path] [--name NAME] [--template NAME]", "Initialize a Telchines project"),
     ("/project templates", "List built-in project templates"),
     ("/index [status|clean]", "Build, inspect, or clean retrieval indexes"),
@@ -279,6 +281,9 @@ class ShellCompleter(Completer):
 
 def run_shell(initial_cwd: Path | None = None, mode: str = "auto") -> None:
     session = ShellSession(cwd=(initial_cwd or Path.cwd()).resolve())
+    if session.project_config() is None and UserSetup.load() is None:
+        typer.echo(run_setup())
+        return
     session.add_transcript("Telchines", render_welcome(session))
     if _supports_fullscreen_shell(mode):
         _run_fullscreen_shell(session)
@@ -545,6 +550,8 @@ def _dispatch_slash_command(session: ShellSession, command_line: str) -> tuple[b
         return True, "leaving Telchines shell"
     if command == "help":
         return False, render_help()
+    if command == "setup":
+        return False, run_setup()
     if command == "pwd":
         return False, str(session.cwd)
     if command == "clear":

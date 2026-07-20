@@ -144,6 +144,14 @@ tel --version
 telchines --help
 ```
 
+On the first `tel` launch outside a project, Telchines opens a one-time setup wizard for provider defaults and privacy choices. It never initializes a repository. After setup, move to a repository and run:
+
+```bash
+tel project init .
+```
+
+Run `tel setup` or `/setup` later to update the global defaults used by newly initialized projects. Provider credentials are referenced by environment-variable name and are never saved in Telchines configuration.
+
 Initialize and index a project:
 
 ```bash

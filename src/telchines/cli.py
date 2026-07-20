@@ -51,6 +51,7 @@ from telchines.operations import (
     waveform_signals as waveform_signals_op,
 )
 from telchines.shell import run_shell
+from telchines.setup import run_setup
 
 app = typer.Typer(help="Telchines CLI", invoke_without_command=True, add_completion=False)
 project_app = typer.Typer(no_args_is_help=True)
@@ -112,6 +113,15 @@ def shell_command(
         _fail("--plain and --fullscreen cannot be used together")
     mode = "plain" if plain else "fullscreen" if fullscreen else "auto"
     run_shell(Path.cwd(), mode=mode)
+
+
+@app.command("setup")
+def setup_command() -> None:
+    """Configure user-level provider and privacy defaults without creating a project."""
+    try:
+        typer.echo(run_setup())
+    except ConfigError as exc:
+        _fail(f"setup error: {exc}")
 
 
 @project_app.command("init")

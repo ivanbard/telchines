@@ -820,6 +820,8 @@ class ProviderRegistry:
                 return "model_mode=local blocks remote providers"
             return None
         if kind == "local_command":
+            if not self.config.allow_local_commands:
+                return "local-command providers are disabled by setup policy"
             if self.config.model_mode == "remote":
                 return "model_mode=remote blocks local command providers"
             return None

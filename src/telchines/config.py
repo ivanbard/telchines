@@ -64,6 +64,7 @@ class ProjectConfig:
     artifacts_dir: str = ".tel/artifacts"
     model_mode: str = "hybrid"
     no_egress: bool = False
+    allow_local_commands: bool = True
     adapters: list[str] = field(default_factory=lambda: ["verilator", "iverilog", "slang", "verible", "symbiyosys"])
     retrieval: dict[str, Any] = field(
         default_factory=lambda: {
@@ -94,6 +95,7 @@ class ProjectConfig:
             "artifacts_dir": self.artifacts_dir,
             "model_mode": self.model_mode,
             "no_egress": self.no_egress,
+            "allow_local_commands": self.allow_local_commands,
             "adapters": self.adapters,
             "retrieval": self.retrieval,
             "generation": self.generation,
@@ -125,6 +127,7 @@ class ProjectConfig:
             artifacts_dir=payload["artifacts_dir"],
             model_mode=payload["model_mode"],
             no_egress=payload["no_egress"],
+            allow_local_commands=payload.get("allow_local_commands", True),
             adapters=payload["adapters"],
             retrieval=payload.get(
                 "retrieval",
@@ -149,12 +152,15 @@ class ProjectConfig:
         ensure_directory(root)
         ensure_directory(root / ".tel")
         project_name = name or root.name
+        from telchines.setup import global_project_defaults
+
+        defaults = global_project_defaults() or {}
         project = VerificationProject(
             project_id=stable_id("proj", str(root)),
             name=project_name,
             root_path=str(root),
             created_at=utc_now(),
-            model_policy={
+            model_policy=defaults.get("model_policy", {
                 "default_provider_by_capability": {
                     "repair": "heuristic",
                     "generation": "heuristic",
@@ -165,9 +171,14 @@ class ProjectConfig:
                         "capabilities": ["repair", "generation"],
                     }
                 },
-            },
+            }),
         )
-        config = cls(project=project)
+        config = cls(
+            project=project,
+            model_mode=str(defaults.get("model_mode", "hybrid")),
+            no_egress=bool(defaults.get("no_egress", False)),
+            allow_local_commands=bool(defaults.get("allow_local_commands", True)),
+        )
         config.save()
         return config
 
@@ -199,6 +210,8 @@ class ProjectConfig:
             raise ConfigError(f"model_mode must be one of: {', '.join(sorted(SUPPORTED_MODEL_MODES))}")
         if not isinstance(self.no_egress, bool):
             raise ConfigError("no_egress must be a boolean")
+        if not isinstance(self.allow_local_commands, bool):
+            raise ConfigError("allow_local_commands must be a boolean")
         if not isinstance(self.adapters, list) or not self.adapters:
             raise ConfigError("adapters must be a non-empty list")
         invalid_adapters = [adapter for adapter in self.adapters if adapter not in SUPPORTED_ADAPTERS]
