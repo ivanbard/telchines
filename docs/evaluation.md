@@ -22,7 +22,7 @@ tel eval run
 tel eval report
 ```
 
-Inside an initialized Telchines project, `tel eval run` runs with that project's policy/configuration and persists `latest_eval` for `tel eval report`. Outside a project, `tel eval run` creates a temporary scratch project, uses local `benchmarks/` when present or bundled benchmarks otherwise, prints the report, and marks it with `project_context: "scratch"` and `report_persisted: false`. Scratch reports are intentionally not available through `tel eval report`.
+Inside an initialized Telchines project, `tel eval run` preserves that project's provider, egress, and model policy and persists `latest_eval` for `tel eval report`. Benchmark fixtures run only in disposable copied evaluation projects; Telchines enables their fixture-local commands there so the offline suite can exercise its agent and provider cases without changing the project's normal local-command policy. The report identifies this isolated fixture execution. Outside a project, `tel eval run` creates a temporary scratch project, uses local `benchmarks/` when present or bundled benchmarks otherwise, prints the report, and marks it with `project_context: "scratch"` and `report_persisted: false`. Scratch reports are intentionally not available through `tel eval report`.
 
 ## What The Suite Validates
 

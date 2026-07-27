@@ -35,30 +35,36 @@ def load_benchmark_cases(root: Path) -> list[BenchmarkCase]:
 
 def run_default_suite(config: ProjectConfig, store: RunStore) -> dict[str, object]:
     local_benchmarks_root = config.project_root / "benchmarks"
-    if _has_benchmark_cases(local_benchmarks_root):
-        return _run_default_suite(config, store)
-
-    bundled_benchmarks_root = _bundled_benchmarks_root()
+    benchmarks_root = local_benchmarks_root if _has_benchmark_cases(local_benchmarks_root) else _bundled_benchmarks_root()
     temp_project_root = Path(tempfile.mkdtemp(prefix="telchines-eval-"))
     try:
-        shutil.copytree(bundled_benchmarks_root, temp_project_root / "benchmarks")
+        # Benchmarks may use deterministic local-command providers to exercise
+        # copied fixture tools.  Run all cases in a disposable project so this
+        # narrow policy exception cannot change the caller's project policy.
+        shutil.copytree(benchmarks_root, temp_project_root / "benchmarks")
         temp_config = ProjectConfig.init_project(temp_project_root, name=f"{config.project.name}-eval")
         temp_config.project.project_id = config.project.project_id
         temp_config.project.model_policy = deepcopy(config.project.model_policy)
         temp_config.model_mode = config.model_mode
         temp_config.no_egress = config.no_egress
+        temp_config.allow_local_commands = True
         temp_config.retrieval = deepcopy(config.retrieval)
         temp_config.generation = deepcopy(config.generation)
         temp_config.adapters = list(config.adapters)
         temp_config.save()
-        report = _run_default_suite(temp_config, RunStore(temp_config))
+        report = _run_default_suite(temp_config, RunStore(temp_config), isolated_fixture_commands=True)
         store.save_report("latest_eval", report)
         return report
     finally:
         remove_tree(temp_project_root)
 
 
-def _run_default_suite(config: ProjectConfig, store: RunStore) -> dict[str, object]:
+def _run_default_suite(
+    config: ProjectConfig,
+    store: RunStore,
+    *,
+    isolated_fixture_commands: bool = False,
+) -> dict[str, object]:
     benchmarks_root = config.project_root / "benchmarks"
     cases = load_benchmark_cases(benchmarks_root)
     retrieval = RetrievalService(config)
@@ -97,6 +103,12 @@ def _run_default_suite(config: ProjectConfig, store: RunStore) -> dict[str, obje
         "warning_count": warning_count,
         "metrics": _aggregate_metrics(results),
     }
+    if isolated_fixture_commands:
+        report["evaluation_environment"] = {
+            "type": "disposable_benchmark_project",
+            "fixture_local_commands_enabled": True,
+            "policy_scope": "copied benchmark fixtures only",
+        }
     store.save_report("latest_eval", report)
     return report
 
@@ -112,16 +124,26 @@ def _bundled_benchmarks_root() -> Path:
     return root
 
 
+def _init_fixture_project(root: Path, source_config: ProjectConfig) -> ProjectConfig:
+    """Initialize a copied fixture with the evaluation project's runtime policy."""
+    config = ProjectConfig.init_project(root)
+    config.project.project_id = source_config.project.project_id
+    config.project.model_policy = deepcopy(source_config.project.model_policy)
+    config.model_mode = source_config.model_mode
+    config.no_egress = source_config.no_egress
+    config.allow_local_commands = source_config.allow_local_commands
+    config.retrieval = deepcopy(source_config.retrieval)
+    config.generation = deepcopy(source_config.generation)
+    config.adapters = list(source_config.adapters)
+    config.save()
+    return config
+
+
 def _run_repair_case(config: ProjectConfig, store: RunStore, retrieval: RetrievalService, case: BenchmarkCase) -> dict[str, object]:
     fixture_root = config.project_root / case.fixture_root
     temp_root = copy_tree_to_temp(fixture_root)
     try:
-        temp_config = ProjectConfig.init_project(temp_root)
-        temp_config.project.project_id = config.project.project_id
-        temp_config.model_mode = config.model_mode
-        temp_config.no_egress = config.no_egress
-        temp_config.retrieval = deepcopy(config.retrieval)
-        temp_config.adapters = list(config.adapters)
+        temp_config = _init_fixture_project(temp_root, config)
         model_policy = _resolve_runtime_placeholders(deepcopy(case.config.get("model_policy", {})))
         if model_policy:
             temp_config.project.model_policy = model_policy
@@ -178,12 +200,7 @@ def _run_agent_case(config: ProjectConfig, store: RunStore, retrieval: Retrieval
     fixture_root = config.project_root / case.fixture_root
     temp_root = copy_tree_to_temp(fixture_root)
     try:
-        temp_config = ProjectConfig.init_project(temp_root)
-        temp_config.project.project_id = config.project.project_id
-        temp_config.model_mode = config.model_mode
-        temp_config.no_egress = config.no_egress
-        temp_config.retrieval = deepcopy(config.retrieval)
-        temp_config.adapters = list(config.adapters)
+        temp_config = _init_fixture_project(temp_root, config)
         model_policy = _resolve_runtime_placeholders(deepcopy(case.config.get("model_policy", {})))
         if model_policy:
             temp_config.project.model_policy = model_policy
@@ -265,7 +282,7 @@ def _run_retrieval_case(config: ProjectConfig, case: BenchmarkCase) -> dict[str,
     fixture_root = config.project_root / case.fixture_root
     temp_root = copy_tree_to_temp(fixture_root)
     try:
-        temp_config = ProjectConfig.init_project(temp_root)
+        temp_config = _init_fixture_project(temp_root, config)
         retrieval_overrides = case.config.get("retrieval", {})
         if isinstance(retrieval_overrides, dict) and retrieval_overrides:
             temp_config.retrieval.update(retrieval_overrides)
@@ -313,7 +330,7 @@ def _run_sva_case(config: ProjectConfig, case: BenchmarkCase) -> dict[str, objec
     fixture_root = config.project_root / case.fixture_root
     temp_root = copy_tree_to_temp(fixture_root)
     try:
-        temp_config = ProjectConfig.init_project(temp_root)
+        temp_config = _init_fixture_project(temp_root, config)
         model_policy = _resolve_runtime_placeholders(deepcopy(case.config.get("model_policy", {})))
         if model_policy:
             temp_config.project.model_policy = model_policy
@@ -401,7 +418,7 @@ def _run_cocotb_case(config: ProjectConfig, case: BenchmarkCase) -> dict[str, ob
     fixture_root = config.project_root / case.fixture_root
     temp_root = copy_tree_to_temp(fixture_root)
     try:
-        temp_config = ProjectConfig.init_project(temp_root)
+        temp_config = _init_fixture_project(temp_root, config)
         model_policy = _resolve_runtime_placeholders(deepcopy(case.config.get("model_policy", {})))
         if model_policy:
             temp_config.project.model_policy = model_policy
@@ -477,7 +494,7 @@ def _run_coverage_case(config: ProjectConfig, case: BenchmarkCase) -> dict[str, 
     fixture_root = config.project_root / case.fixture_root
     temp_root = copy_tree_to_temp(fixture_root)
     try:
-        temp_config = ProjectConfig.init_project(temp_root)
+        temp_config = _init_fixture_project(temp_root, config)
         temp_store = RunStore(temp_config)
         retrieval = RetrievalService(temp_config)
         retrieval.build_index()
@@ -551,7 +568,7 @@ def _run_import_case(config: ProjectConfig, case: BenchmarkCase) -> dict[str, ob
     fixture_root = config.project_root / case.fixture_root
     temp_root = copy_tree_to_temp(fixture_root)
     try:
-        temp_config = ProjectConfig.init_project(temp_root)
+        temp_config = _init_fixture_project(temp_root, config)
         temp_store = RunStore(temp_config)
         importer = str(case.config["importer"])
         source = temp_root / str(case.config["source_path"])
@@ -594,7 +611,7 @@ def _run_coverage_import_case(config: ProjectConfig, case: BenchmarkCase) -> dic
     fixture_root = config.project_root / case.fixture_root
     temp_root = copy_tree_to_temp(fixture_root)
     try:
-        temp_config = ProjectConfig.init_project(temp_root)
+        temp_config = _init_fixture_project(temp_root, config)
         temp_store = RunStore(temp_config)
         retrieval = RetrievalService(temp_config)
         retrieval.build_index()
@@ -634,7 +651,7 @@ def _run_provider_response_case(config: ProjectConfig, case: BenchmarkCase) -> d
     temp_root = copy_tree_to_temp(fixture_root)
     workflow = str(case.config.get("workflow", "sva"))
     try:
-        temp_config = ProjectConfig.init_project(temp_root)
+        temp_config = _init_fixture_project(temp_root, config)
         model_policy = _resolve_runtime_placeholders(deepcopy(case.config.get("model_policy", {})))
         if model_policy:
             temp_config.project.model_policy = model_policy

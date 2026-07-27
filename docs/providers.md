@@ -9,7 +9,7 @@ Telchines routes model-backed work by capability. In `v1`, the relevant capabili
 
 ### `heuristic`
 
-Built-in deterministic provider used by default for benchmarkable local behavior.
+Built-in deterministic provider used by default for benchmarkable local behavior. It can propose conservative repairs, generate a reviewable Cocotb starter, and generate a grounded first-pass SVA draft from the DUT ports, configured clock/reset conventions, and retrieved specification context. Generated SVA is not a proof and must be reviewed like every other generated artifact.
 
 ### `openai_compatible`
 

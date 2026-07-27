@@ -313,12 +313,27 @@ class HeuristicGenerationProvider(GenerationProvider):
 
     def generate_sva(self, request_value: GenerationRequest) -> GenerationProviderResult:
         request_payload = _build_generation_request_payload(request_value, self.name)
+        generation_inputs = _load_sva_generation_inputs(request_value)
+        candidate = _build_heuristic_sva_candidate(self.name, request_value, generation_inputs)
         return GenerationProviderResult(
             provider_name=self.name,
             request_payload=request_payload,
-            response_payload={"provider": self.name, "status": "no_generation", "summary": "heuristic provider has no SVA generator"},
-            candidate=None,
-            summary="heuristic provider has no SVA generator",
+            response_payload={
+                "provider": self.name,
+                "status": "proposed",
+                "file_path": candidate.file_path,
+                "properties": [
+                    {
+                        "name": property_value.name,
+                        "summary": property_value.summary,
+                        "rationale": property_value.rationale,
+                        "source_citation": property_value.source_citation,
+                    }
+                    for property_value in candidate.properties
+                ],
+            },
+            candidate=candidate,
+            summary="heuristic SVA draft generated from a grounded DUT assignment and retrieved context",
         )
 
     def generate_cocotb(self, request_value: CocotbGenerationRequest) -> CocotbGenerationProviderResult:
@@ -1853,6 +1868,190 @@ def _load_cocotb_generation_inputs(request_value: CocotbGenerationRequest) -> di
         "manifest_path": manifest_path,
         "assumptions": assumptions,
     }
+
+
+def _load_sva_generation_inputs(request_value: GenerationRequest) -> dict[str, Any]:
+    """Load only the grounded interface facts needed for a deterministic SVA draft."""
+    spec = request_value.project_root / request_value.spec_path
+    rtl = request_value.project_root / request_value.rtl_path
+    if not spec.exists():
+        raise WorkflowInputError(f"spec file does not exist: {request_value.spec_path}")
+    if not rtl.exists():
+        raise WorkflowInputError(f"rtl file does not exist: {request_value.rtl_path}")
+    rtl_content = rtl.read_text(encoding="utf-8")
+    conventions = _sva_conventions(request_value)
+    module_name = _extract_module_name(rtl_content)
+    if not module_name:
+        raise ProviderError(
+            f"heuristic SVA generation requires a SystemVerilog module header in `{request_value.rtl_path}`; "
+            "select an RTL file with a concrete DUT module or use a model-backed provider"
+        )
+    ports = _extract_cocotb_ports(rtl_content, conventions)
+    clock_port = next((port.name for port in ports if port.role == "clock"), None)
+    reset_port = next((port.name for port in ports if port.role == "reset"), None)
+    if not clock_port:
+        raise ProviderError(
+            "heuristic SVA generation could not infer a clock input; configure generation.sva.clock_names "
+            "or use a model-backed provider"
+        )
+    relation = _find_heuristic_sva_relation(rtl_content, ports, clock_port, excluded_signals={reset_port} if reset_port else set())
+    if relation is None:
+        raise ProviderError(
+            "heuristic SVA generation could not find a simple clocked conditional assignment between DUT ports; "
+            "provide a DUT with an `if`-guarded output assignment or use a model-backed provider"
+        )
+    return {
+        "module_name": module_name,
+        "ports": ports,
+        "clock_port": clock_port,
+        "reset_port": reset_port,
+        "reset_active_low": bool(reset_port and _is_active_low_reset_name(reset_port, conventions)),
+        "relation": relation,
+    }
+
+
+def _sva_conventions(request_value: GenerationRequest) -> dict[str, Any]:
+    conventions = _default_cocotb_conventions()
+    configured = request_value.conventions.get("sva") if isinstance(request_value.conventions, dict) else None
+    if isinstance(configured, dict):
+        conventions.update(configured)
+    return conventions
+
+
+def _find_heuristic_sva_relation(
+    rtl_content: str,
+    ports: list[CocotbPort],
+    clock_port: str,
+    excluded_signals: set[str] | None = None,
+) -> tuple[str, str, str] | None:
+    """Return (condition, output, assigned_value) for a port-grounded sequential rule.
+
+    This intentionally accepts only simple if guards and literal assignments.  A
+    draft based on a more complicated expression would look grounded while
+    quietly inventing an assertion semantics the heuristic cannot justify.
+    """
+    input_names = {port.name for port in ports if port.direction == "input"}
+    output_names = {port.name for port in ports if port.direction in {"output", "inout"}}
+    excluded_signals = excluded_signals or set()
+    pattern = re.compile(
+        r"\bif\s*\(\s*(?P<condition>!?\s*[A-Za-z_][A-Za-z0-9_]*)\s*\)"
+        r"\s*(?:begin\s*)?(?P<output>[A-Za-z_][A-Za-z0-9_]*)\s*<=\s*(?P<value>1'b[01]|1'bx|1'bz|[01])\s*;",
+        re.IGNORECASE | re.DOTALL,
+    )
+    for match in pattern.finditer(rtl_content):
+        condition = re.sub(r"\s+", "", match.group("condition"))
+        condition_signal = condition.lstrip("!")
+        output = match.group("output")
+        value = match.group("value").lower()
+        if condition_signal not in input_names or condition_signal == clock_port or condition_signal in excluded_signals or output not in output_names:
+            continue
+        if value in {"1'bx", "1'bz"}:
+            continue
+        return condition, output, "1'b1" if value == "1" else "1'b0" if value == "0" else value
+    return None
+
+
+def _build_heuristic_sva_candidate(
+    provider_name: str,
+    request_value: GenerationRequest,
+    generation_inputs: dict[str, Any],
+) -> SvaCandidate:
+    module_name = str(generation_inputs["module_name"])
+    ports: list[CocotbPort] = list(generation_inputs["ports"])
+    clock_port = str(generation_inputs["clock_port"])
+    reset_port = generation_inputs["reset_port"]
+    condition, output, assigned_value = generation_inputs["relation"]
+    checker_name = f"{module_name}_assertions"
+    property_name = f"p_{output}_follows_{condition.lstrip('!')}"
+    citation = _heuristic_sva_citation(request_value)
+    evidence_paths = _unique_paths([request_value.spec_path, request_value.rtl_path, *[hit.path for hit in request_value.retrieval_context.hits]])
+    content = _render_heuristic_sva(
+        checker_name=checker_name,
+        module_name=module_name,
+        ports=ports,
+        clock_port=clock_port,
+        reset_port=str(reset_port) if reset_port else None,
+        reset_active_low=bool(generation_inputs["reset_active_low"]),
+        property_name=property_name,
+        condition=condition,
+        output=output,
+        assigned_value=assigned_value,
+    )
+    return SvaCandidate(
+        candidate_id=stable_id("sva", request_value.task_id, request_value.output_file),
+        task_id=request_value.task_id,
+        spec_path=request_value.spec_path,
+        rtl_path=request_value.rtl_path,
+        file_path=request_value.output_file,
+        candidate_content=content,
+        explanation=(
+            f"Generated a conservative review-gated assertion from the `{condition}` conditional assignment "
+            f"to `{output}` in `{request_value.rtl_path}`. It is a starter draft, not a proof of functional correctness."
+        ),
+        status="proposed",
+        provider=provider_name,
+        evidence_paths=evidence_paths,
+        properties=[
+            SvaProperty(
+                name=property_name,
+                summary=f"When `{condition}` is sampled on `{clock_port}`, `{output}` is expected to become {assigned_value} on the next cycle.",
+                rationale=f"Grounded in the simple conditional nonblocking assignment to `{output}` in the DUT.",
+                source_citation=citation,
+            )
+        ],
+    )
+
+
+def _heuristic_sva_citation(request_value: GenerationRequest) -> str:
+    for hit in request_value.retrieval_context.hits:
+        if hit.path == request_value.spec_path:
+            return Path(hit.citation or request_value.spec_path).as_posix()
+    return Path(request_value.spec_path).as_posix()
+
+
+def _unique_paths(paths: list[str]) -> list[str]:
+    return list(dict.fromkeys(path for path in paths if path))
+
+
+def _render_heuristic_sva(
+    *,
+    checker_name: str,
+    module_name: str,
+    ports: list[CocotbPort],
+    clock_port: str,
+    reset_port: str | None,
+    reset_active_low: bool,
+    property_name: str,
+    condition: str,
+    output: str,
+    assigned_value: str,
+) -> str:
+    declarations = []
+    for port in ports:
+        width = "" if port.width <= 1 else f" [{port.width - 1}:0]"
+        declarations.append(f"  {port.direction} logic{width} {port.name}")
+    disable_iff = ""
+    if reset_port:
+        reset_condition = f"!{reset_port}" if reset_active_low else reset_port
+        disable_iff = f" disable iff ({reset_condition})"
+    connections = ", ".join(f".{port.name}({port.name})" for port in ports)
+    return "\n".join(
+        [
+            "// Review-gated deterministic SVA starter draft generated by Telchines.",
+            f"module {checker_name}(",
+            ",\n".join(declarations),
+            ");",
+            f"  property {property_name};",
+            f"    @(posedge {clock_port}){disable_iff}",
+            f"      ({condition}) |=> ({output} == {assigned_value});",
+            "  endproperty",
+            f"  assert property ({property_name});",
+            "endmodule",
+            "",
+            f"bind {module_name} {checker_name} u_{checker_name} ({connections});",
+            "",
+        ]
+    )
 
 
 def _build_heuristic_cocotb_candidate(

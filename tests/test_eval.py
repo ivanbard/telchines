@@ -12,6 +12,7 @@ from telchines.errors import ConfigError
 from telchines.eval import _aggregate_metrics, _benchmark_status, _cocotb_executable_expectation_met, run_default_suite
 from telchines.operations import load_eval_report, run_eval
 from telchines.run_store import RunStore
+from telchines.setup import UserSetup, default_model_policy
 
 
 DIR_NAME = st.from_regex(r"[A-Za-z][A-Za-z0-9_-]{0,12}", fullmatch=True)
@@ -138,6 +139,33 @@ def test_eval_default_suite_uses_bundled_benchmarks(work_root: Path) -> None:
     assert report["passed"] == report["total"]
     assert report["total"] == 30
     assert store.load_report("latest_eval")["total"] == 30
+
+
+def test_eval_uses_isolated_fixture_commands_without_relaxing_project_policy(work_root: Path, monkeypatch) -> None:
+    monkeypatch.setenv("TELCHINES_CONFIG_DIR", str(work_root / "settings"))
+    UserSetup(
+        completed=True,
+        model_mode="local",
+        no_egress=True,
+        allow_local_commands=False,
+        artifact_storage_acknowledged=True,
+        model_policy=default_model_policy(),
+    ).save()
+    project_root = work_root / "offline_eval_project"
+    project_root.mkdir()
+    config = ProjectConfig.init_project(project_root)
+    assert config.allow_local_commands is False
+
+    report = run_default_suite(config, RunStore(config))
+
+    assert report["passed"] == report["total"] == 30
+    assert report["evaluation_environment"] == {
+        "type": "disposable_benchmark_project",
+        "fixture_local_commands_enabled": True,
+        "policy_scope": "copied benchmark fixtures only",
+    }
+    assert ProjectConfig.load(project_root).allow_local_commands is False
+    assert RunStore(ProjectConfig.load(project_root)).load_report("latest_eval")["evaluation_environment"] == report["evaluation_environment"]
 
 
 def test_eval_operation_uses_project_context_and_persists_report(work_root: Path) -> None:

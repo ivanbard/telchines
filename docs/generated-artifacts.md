@@ -9,6 +9,8 @@ tel gen-cocotb --dut rtl/uart_rx.sv --spec docs/uart.md
 
 The generated files are drafts. The JSON output includes `validation_status`, `validation_mode`, `validation_summary`, `validation_limitations`, and real-tool fields such as `executable_status`, `simulator`, `formal_status`, `formal_adapter`, `command_artifacts`, and `setup_diagnostics` when applicable. Human shell views surface these limitations under `did not prove` so a syntax/structure pass is not mistaken for behavioral signoff.
 
+The built-in heuristic provider can generate a conservative SVA starter without a configured model. It infers only documented clock/reset conventions and DUT ports, includes its evidence citations, and is deliberately limited to a reviewable first pass. Configure a model-backed provider when the design needs richer temporal or protocol-specific assertions.
+
 ### SVA Status Contract
 
 `gen-sva` reports independent status fields so a green artifact gate cannot be confused with a proof result:

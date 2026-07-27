@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import threading
 import time
 from pathlib import Path
@@ -20,6 +21,7 @@ from telchines.shell import (
     ShellCompleter,
     ShellSession,
     _ascii_safe_boxes,
+    _cp1252_safe_text,
     _build_fullscreen_shell_app,
     _dispatch_slash_command,
     _header_fragments,
@@ -46,6 +48,7 @@ from telchines.shell import (
     render_sva_payload,
     render_welcome,
 )
+from telchines.operations import dump_json
 from telchines.utils import read_json, write_json
 
 
@@ -575,6 +578,46 @@ def test_ascii_safe_boxes_removes_box_characters_and_is_cp1252_safe(text: str) -
     translated.encode("cp1252", errors="strict")
 
 
+@settings(max_examples=60)
+@given(text=st.text(max_size=120))
+def test_human_render_boundary_replaces_unencodable_unicode(text: str) -> None:
+    rendered = _cp1252_safe_text(text)
+
+    rendered.encode("cp1252", errors="strict")
+
+
+def _assert_human_renderer_cp1252(rendered: str) -> None:
+    """Shared assertion for shell renderers; raw JSON is intentionally excluded."""
+    rendered.encode("cp1252", errors="strict")
+
+
+@settings(max_examples=50)
+@given(
+    formal_status=st.text(max_size=40),
+    limitations=st.lists(st.text(max_size=40), max_size=4),
+)
+def test_sva_renderer_sanitizes_arbitrary_provider_text_but_json_stays_lossless(
+    formal_status: str,
+    limitations: list[str],
+) -> None:
+    payload = {
+        "provider": "heuristic",
+        "status": "validated",
+        "artifact_path": ".tel/artifacts/generated/demo.sv",
+        "validation_status": "passed",
+        "validation_mode": "structure_only",
+        "formal_status": formal_status,
+        "validation_limitations": limitations,
+        "explanation": "",
+        "attempts": [],
+        "rejected_candidate_ids": [],
+        "property_summaries": [],
+    }
+
+    _assert_human_renderer_cp1252(render_sva_payload(payload))
+    assert json.loads(dump_json(payload))["formal_status"] == formal_status
+
+
 def test_shell_replay_confirmation_rendering() -> None:
     rendered = render_replay_payload(
         {
@@ -857,7 +900,7 @@ def test_sva_renderer_property_handles_optional_validation_fields(
 
     _assert_limitation_rendering(rendered, limitations)
     assert ("formal status:" in rendered) is bool(formal_status)
-    rendered.encode("cp1252", errors="strict")
+    _assert_human_renderer_cp1252(rendered)
 
 
 @settings(max_examples=50)
@@ -888,7 +931,7 @@ def test_cocotb_renderer_property_handles_optional_validation_fields(
 
     _assert_limitation_rendering(rendered, limitations)
     assert ("executable status:" in rendered) is bool(executable_status)
-    rendered.encode("cp1252", errors="strict")
+    _assert_human_renderer_cp1252(rendered)
 
 
 @settings(max_examples=50)
@@ -919,7 +962,7 @@ def test_agent_renderer_property_handles_nested_validation_limitations(
 
     _assert_limitation_rendering(rendered, limitations)
     assert ("executable status:" in rendered) is bool(executable_status)
-    rendered.encode("cp1252", errors="strict")
+    _assert_human_renderer_cp1252(rendered)
 
 
 @settings(max_examples=50)
@@ -951,7 +994,7 @@ def test_run_show_renderer_property_handles_validation_limitations(
     _assert_limitation_rendering(rendered, limitations)
     assert ("formal status:" in rendered) is bool(formal_status)
     assert ("executable status:" in rendered) is bool(executable_status)
-    rendered.encode("cp1252", errors="strict")
+    _assert_human_renderer_cp1252(rendered)
 
 
 def test_render_run_show_includes_cocotb_generation_details() -> None:

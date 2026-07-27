@@ -2111,6 +2111,53 @@ def test_cli_gen_sva_with_local_command_provider(sample_project: Path, monkeypat
     assert "assert property" in artifact_path.read_text(encoding="utf-8")
 
 
+def test_cli_gen_sva_with_default_heuristic_provider(sample_project: Path, monkeypatch) -> None:
+    _set_model_policy(
+        sample_project,
+        {
+            "default_provider_by_capability": {"repair": "heuristic", "generation": "heuristic"},
+            "providers": {"heuristic": {"kind": "heuristic", "capabilities": ["repair", "generation"]}},
+        },
+    )
+    _set_generation_config(sample_project, {"sva": {"validation_adapters": []}})
+    monkeypatch.chdir(sample_project)
+    assert runner.invoke(app, ["index"]).exit_code == 0
+
+    result = runner.invoke(app, ["gen-sva", "--spec", "docs/uart.md", "--rtl", "rtl/uart_rx.sv"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["provider"] == "heuristic"
+    assert payload["status"] in {"validated", "validated_with_warnings"}
+    assert payload["candidate_status"] == "validated"
+    assert payload["validation_status"] == "passed"
+    assert payload["property_summaries"][0]["name"] == "p_start_seen_follows_serial_i"
+    assert payload["property_summaries"][0]["source_citation"] == "docs/uart.md"
+    artifact = sample_project / payload["artifact_path"]
+    rendered = artifact.read_text(encoding="utf-8")
+    assert "(!serial_i) |=> (start_seen == 1'b1);" in rendered
+    assert "bind uart_rx uart_rx_assertions" in rendered
+
+
+def test_cli_gen_sva_heuristic_reports_actionable_missing_clock(sample_project: Path, monkeypatch) -> None:
+    (sample_project / "rtl" / "comb.sv").write_text(
+        """module comb(input logic enable, output logic active);\nalways_comb active = enable;\nendmodule\n""",
+        encoding="utf-8",
+    )
+    _set_model_policy(
+        sample_project,
+        {
+            "default_provider_by_capability": {"repair": "heuristic", "generation": "heuristic"},
+            "providers": {"heuristic": {"kind": "heuristic", "capabilities": ["repair", "generation"]}},
+        },
+    )
+    monkeypatch.chdir(sample_project)
+    result = runner.invoke(app, ["gen-sva", "--spec", "docs/uart.md", "--rtl", "rtl/comb.sv"])
+
+    assert result.exit_code == 2
+    assert "provider error: heuristic SVA generation could not infer a clock input" in result.stderr
+
+
 def test_cli_gen_sva_forwards_compile_context_options(sample_project: Path, monkeypatch) -> None:
     captured: dict[str, object] = {}
 

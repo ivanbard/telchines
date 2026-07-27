@@ -186,8 +186,8 @@ class ShellSession:
     def prompt(self) -> str:
         config = self.project_config()
         if config:
-            return f"tel[{config.project.name}] {self.cwd.name}> "
-        return f"tel {self.cwd.name}> "
+            return _cp1252_safe_text(f"tel[{config.project.name}] {self.cwd.name}> ")
+        return _cp1252_safe_text(f"tel {self.cwd.name}> ")
 
     def active_provider(self) -> str:
         config = self.project_config()
@@ -212,7 +212,7 @@ class ShellSession:
         self.recent_run_ids = self.recent_run_ids[:5]
 
     def add_transcript(self, label: str, body: str) -> None:
-        entry = f"{label}\n{body}".strip()
+        entry = _cp1252_safe_text(f"{label}\n{body}".strip())
         self.transcript.append(entry)
 
     def indexed(self) -> bool:
@@ -282,7 +282,7 @@ class ShellCompleter(Completer):
 def run_shell(initial_cwd: Path | None = None, mode: str = "auto") -> None:
     session = ShellSession(cwd=(initial_cwd or Path.cwd()).resolve())
     if session.project_config() is None and UserSetup.load() is None:
-        typer.echo(run_setup())
+        typer.echo(_cp1252_safe_text(run_setup()))
         return
     session.add_transcript("Telchines", render_welcome(session))
     if _supports_fullscreen_shell(mode):
@@ -316,7 +316,7 @@ def _run_basic_shell(session: ShellSession) -> None:
         if not user_input:
             continue
         session.history.append(user_input)
-        session.transcript.append(f"{session.prompt()}{user_input}")
+        session.transcript.append(_cp1252_safe_text(f"{session.prompt()}{user_input}"))
         progress = render_command_progress(user_input)
         if progress:
             session.transcript.append(progress)
@@ -324,10 +324,10 @@ def _run_basic_shell(session: ShellSession) -> None:
         try:
             should_exit, rendered = dispatch_input(session, user_input)
         except (ConfigError, ProviderError, AdapterExecutionError, ValueError, KeyError) as exc:
-            typer.echo(f"error: {exc}")
+            typer.echo(_cp1252_safe_text(f"error: {exc}"))
             continue
         except TelchinesError as exc:
-            typer.echo(f"error: {exc}")
+            typer.echo(_cp1252_safe_text(f"error: {exc}"))
             continue
         if rendered:
             if not _is_transcript_command(user_input):
@@ -465,13 +465,13 @@ def _build_fullscreen_shell_app(session: ShellSession, **app_kwargs: Any) -> App
             input_area.text = ""
             input_area.prompt = session.prompt()
             return
-        session.transcript.append(f"{session.prompt()}{user_input}")
+        session.transcript.append(_cp1252_safe_text(f"{session.prompt()}{user_input}"))
         progress = render_command_progress(user_input)
         append_rendered(progress)
         try:
             should_exit, rendered = dispatch_input(session, user_input)
         except (ConfigError, ProviderError, AdapterExecutionError, ValueError, KeyError, TelchinesError) as exc:
-            append_rendered(f"[error] {exc}")
+            append_rendered(_cp1252_safe_text(f"[error] {exc}"))
             input_area.text = ""
             input_area.prompt = session.prompt()
             app.invalidate()
@@ -1529,7 +1529,7 @@ def _header_fragments(session: ShellSession) -> list[tuple[str, str]]:
         f" Telchines | {project} | cwd: {cwd} | "
         f"repair: {_active_model_summary(session, 'repair')} | gen: {_active_model_summary(session, 'generation')} "
     )
-    return [("class:header", text)]
+    return [("class:header", _cp1252_safe_text(text))]
 
 
 def _sidebar_text(session: ShellSession) -> str:
@@ -1549,7 +1549,7 @@ def _sidebar_text(session: ShellSession) -> str:
         lines.extend(f"- {run_id}" for run_id in session.recent_run_ids)
     else:
         lines.append("- none")
-    return "\n".join(lines)
+    return _cp1252_safe_text("\n".join(lines))
 
 
 def _active_model_summary(session: ShellSession, capability: str) -> str:
@@ -1568,7 +1568,7 @@ def _active_model_summary(session: ShellSession, capability: str) -> str:
 
 def _hint_fragments(session: ShellSession) -> list[tuple[str, str]]:
     hint = " /help for commands | Enter executes | Ctrl-C exits "
-    return [("class:subtle", f" {hint}")]
+    return [("class:subtle", _cp1252_safe_text(f" {hint}"))]
 
 
 def _parse_project_init(parts: list[str]) -> tuple[Path, str | None, str | None]:
@@ -1903,7 +1903,18 @@ def _default_logs_path(cwd: Path) -> Path | None:
 def _render_rich(renderable, width: int = 100) -> str:
     console = Console(record=True, width=width, soft_wrap=True, file=io.StringIO(), legacy_windows=True)
     console.print(renderable)
-    return _ascii_safe_boxes(console.export_text(styles=False).rstrip())
+    return _cp1252_safe_text(console.export_text(styles=False).rstrip())
+
+
+def _cp1252_safe_text(text: str) -> str:
+    """Return human shell text that legacy Windows consoles can encode strictly.
+
+    JSON responses deliberately bypass this boundary so integrations retain their
+    original Unicode. Human renderers, including Rich tables and panels, all
+    funnel through it before text reaches a terminal or fullscreen transcript.
+    """
+    normalized = _ascii_safe_boxes(text)
+    return normalized.encode("cp1252", errors="replace").decode("cp1252")
 
 
 def _ascii_safe_boxes(text: str) -> str:
