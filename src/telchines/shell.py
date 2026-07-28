@@ -36,7 +36,7 @@ from telchines.presentation import (
     render_run_show as render_run_show_shared,
     render_runs_payload as render_runs_payload_shared,
 )
-from telchines.setup import UserSetup, run_setup
+from telchines.setup import UserSetup, append_shell_history, load_shell_history, run_setup
 from telchines.errors import AdapterExecutionError, ConfigError, ProviderError, TelchinesError
 from telchines.operations import (
     agent,
@@ -187,6 +187,14 @@ class ShellSession:
     history: list[str] = field(default_factory=list)
     transcript: list[str] = field(default_factory=list)
 
+    def record_history(self, command: str) -> None:
+        command = command.strip()
+        if not command:
+            return
+        if not self.history or self.history[-1] != command:
+            self.history.append(command)
+        append_shell_history(command)
+
     def project_config(self) -> ProjectConfig | None:
         try:
             return ProjectConfig.discover(self.cwd)
@@ -298,6 +306,7 @@ def run_shell(initial_cwd: Path | None = None, mode: str = "auto") -> None:
         else:
             typer.echo("No project files were created. Run `tel get-started` when you are ready.")
         return
+    session.history.extend(load_shell_history())
     session.add_transcript("Telchines", render_welcome(session))
     if _supports_fullscreen_shell(mode):
         _run_fullscreen_shell(session)
@@ -329,7 +338,7 @@ def _run_basic_shell(session: ShellSession) -> None:
         user_input = line.strip()
         if not user_input:
             continue
-        session.history.append(user_input)
+        session.record_history(user_input)
         session.transcript.append(_cp1252_safe_text(f"{session.prompt()}{user_input}"))
         progress = render_command_progress(user_input)
         if progress:
@@ -366,6 +375,8 @@ def _build_fullscreen_shell_app(session: ShellSession, **app_kwargs: Any) -> App
         wrap_lines=True,
     )
     input_history = InMemoryHistory()
+    for item in session.history:
+        input_history.append_string(item)
     input_area = TextArea(
         height=1,
         prompt=session.prompt(),
@@ -471,7 +482,7 @@ def _build_fullscreen_shell_app(session: ShellSession, **app_kwargs: Any) -> App
         user_input = input_area.text.strip()
         if not user_input:
             return
-        session.history.append(user_input)
+        session.record_history(user_input)
         input_history.append_string(user_input)
         view_state.history_index = None
         if _is_help_command(user_input):

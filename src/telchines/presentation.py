@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import json
 from typing import Any
 
 from rich.console import Console
@@ -121,3 +122,37 @@ def render_runs_payload(payload: list[dict[str, object]]) -> str:
 def render_run_show(payload: dict[str, object]) -> str:
     lines = [f"run: {payload['run_id']}", f"workflow: {payload['workflow_type']}", f"status: {payload['status']}", f"tool: {payload['tool']['name']}", f"summary: {payload['summary']}"]
     return render_action_panel("Run Detail", "\n".join(lines))
+
+
+def render_doctor_summary(payload: dict[str, object]) -> str:
+    if payload.get("status") == "not_initialized":
+        return render_action_panel("Project Health", f"project: not initialized\nnext: {payload['next_action']}")
+    project = payload["project"]
+    index = payload["index"]
+    adapters = payload["adapters"]
+    lines = [
+        f"status: {payload['status']}",
+        f"project: {project['name']}",
+        f"root: {project['root']}",
+        f"index: {'stale' if index['stale'] else 'fresh'} ({index['chunk_count']} chunks)",
+        f"providers: {payload['providers']['status']}",
+        f"adapters: {adapters['available']}/{adapters['total']} available",
+        f"artifacts: {payload['artifacts_dir']}",
+        f"next: {payload['next_action']}",
+    ]
+    return render_action_panel("Project Health", "\n".join(lines))
+
+
+def render_recipe_result(title: str, payload: dict[str, object], next_action: str) -> str:
+    lines = [f"status: {payload.get('status', 'completed')}"]
+    for key in ("run_id", "artifact_path", "validation_status", "provider", "cluster_count"):
+        value = payload.get(key)
+        if value is not None and value != "":
+            lines.append(f"{key.replace('_', ' ')}: {value}")
+    lines.append(f"next: {next_action}")
+    return render_action_panel(title, "\n".join(lines))
+
+
+def render_payload(title: str, payload: object) -> str:
+    """Render an inspection payload consistently for one-shot CLI output."""
+    return render_action_panel(title, json.dumps(payload, indent=2, sort_keys=True, default=str))

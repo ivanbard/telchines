@@ -185,6 +185,15 @@ tel gen-cocotb --dut rtl/uart_rx.sv --spec docs/uart.md --intent "smoke the star
 tel coverage-plan --report cov/coverage.json --rtl rtl/uart_rx.sv --spec docs/uart.md --format human
 ```
 
+For frequent tasks, concise recipes use human-readable output by default:
+
+```bash
+tel diagnose-regressions logs/regressions
+tel fix-compile rtl/broken_counter.sv --tool verilator
+tel draft-assertions --spec docs/uart.md --rtl rtl/uart_rx.sv
+tel scaffold-cocotb --dut rtl/uart_rx.sv --spec docs/uart.md
+```
+
 ## Interactive Shell
 
 Running `tel` with no arguments opens the shell. Use `tel shell --plain` for the stdin/stdout shell or `tel shell --fullscreen` to request the prompt_toolkit full-screen shell explicitly. Slash commands and lightweight plain-text intents are both supported.
@@ -233,6 +242,8 @@ Artifact lifecycle controls:
 - `tel doctor privacy` reports provider egress, local command, and artifact-retention risks
 - `tel artifacts purge` previews artifact cleanup by default
 - `tel artifacts purge --scope task-artifacts --older-than-days 30 --yes` deletes only matching old artifact payloads while preserving run metadata
+
+Shell history is disabled by default. When enabled with `tel history enable`, it is stored beside user-level Telchines settings rather than in a project repository; use `tel history status` and `tel history clear` to manage it.
 
 See [docs/adapters.md](https://github.com/ivanbard/telchines/blob/main/docs/adapters.md), [docs/providers.md](https://github.com/ivanbard/telchines/blob/main/docs/providers.md), and [docs/generated-artifacts.md](https://github.com/ivanbard/telchines/blob/main/docs/generated-artifacts.md) for the exact support contract.
 

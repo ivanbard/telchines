@@ -10,12 +10,15 @@ from telchines.errors import AdapterExecutionError, ConfigError, ProviderError, 
 from telchines.onboarding import initialize_and_index_get_started, inspect_get_started
 from telchines.presentation import (
     render_adapters_payload,
+    render_doctor_summary,
     render_get_started,
     render_index_status_payload,
     render_project_init,
     render_project_templates,
     render_provider_payload,
+    render_payload,
     render_retrieval_payload,
+    render_recipe_result,
     render_run_show,
     render_runs_payload,
 )
@@ -27,6 +30,7 @@ from telchines.operations import (
     clean_index as clean_index_op,
     coverage_import as coverage_import_op,
     coverage_plan as coverage_plan_op,
+    doctor_summary as doctor_summary_op,
     doctor_runs as doctor_runs_op,
     dump_json,
     format_coverage_human,
@@ -64,7 +68,7 @@ from telchines.operations import (
     waveform_signals as waveform_signals_op,
 )
 from telchines.shell import run_shell
-from telchines.setup import run_setup
+from telchines.setup import clear_shell_history, run_setup, set_shell_history_enabled, shell_history_status
 
 app = typer.Typer(
     help=(
@@ -84,7 +88,8 @@ adapters_app = typer.Typer(help="List and check supported verification tools.", 
 providers_app = typer.Typer(help="Configure and inspect model providers.", no_args_is_help=True)
 waveforms_app = typer.Typer(help="Inspect stored or source waveform data.", no_args_is_help=True)
 artifacts_app = typer.Typer(help="Review or safely purge generated artifacts.", no_args_is_help=True)
-doctor_app = typer.Typer(help="Inspect privacy and project diagnostics.", no_args_is_help=True)
+doctor_app = typer.Typer(help="Inspect privacy and project diagnostics.", invoke_without_command=True)
+history_app = typer.Typer(help="Control private, opt-in shell command history.", no_args_is_help=True)
 app.add_typer(project_app, name="project")
 app.add_typer(index_app, name="index")
 app.add_typer(runs_app, name="runs")
@@ -95,6 +100,7 @@ app.add_typer(providers_app, name="providers")
 app.add_typer(waveforms_app, name="waveforms")
 app.add_typer(artifacts_app, name="artifacts")
 app.add_typer(doctor_app, name="doctor")
+app.add_typer(history_app, name="history")
 
 
 def _fail(message: str, exit_code: int = 2) -> None:
@@ -283,6 +289,7 @@ def show_run(run_id: str, output_format: str = typer.Option("json", "--format", 
 def replay_run(
     run_id: str,
     yes: bool = typer.Option(False, "--yes", help="Execute the stored replay command. Without this, only show what would run."),
+    output_format: str = typer.Option("json", "--format", help="Output format: json or human."),
 ) -> None:
     try:
         payload = replay_run_op(None, run_id, confirm=yes)
@@ -290,7 +297,7 @@ def replay_run(
         _fail(f"config error: {exc}")
     except ValueError as exc:
         _fail(str(exc))
-    typer.echo(dump_json(payload))
+    _emit_format(payload, output_format, lambda value: render_payload("Replay", value))
     if payload.get("status") == "confirmation_required":
         raise typer.Exit(code=1)
 
@@ -321,6 +328,7 @@ def repair(
     top_module: str | None = typer.Option(None, "--top"),
     work_library: str | None = typer.Option(None, "--worklib"),
     apply_patch: bool = typer.Option(False, "--apply"),
+    output_format: str = typer.Option("json", "--format", help="Output format: json or human."),
 ) -> None:
     """Propose and validate a minimal adapter-backed repair."""
     try:
@@ -468,7 +476,86 @@ def coverage_plan(
     if output_format == "human":
         typer.echo(format_coverage_human(payload))
         return
-    typer.echo(dump_json(payload))
+    _emit_format(payload, output_format, lambda value: render_payload("Repair Result", value))
+
+
+@app.command("diagnose-regressions")
+def diagnose_regressions(
+    log_path: Path = typer.Argument(..., help="Regression log file or directory."),
+    waveforms: list[Path] = typer.Option([], "--waveform", help="Related waveform path; repeat as needed."),
+    output_format: str = typer.Option("human", "--format", help="Output format: human or json."),
+) -> None:
+    """Triage regression failures with the common inputs exposed directly."""
+    try:
+        payload = triage_op(None, [log_path], waveforms=waveforms or None)
+    except (ConfigError, WorkflowInputError, ValueError) as exc:
+        _fail(f"input error: {exc}")
+    if output_format == "json":
+        typer.echo(dump_json(payload))
+    elif output_format == "human":
+        _echo_human(render_recipe_result("Regression Diagnosis", payload, f"tel runs show {payload['run_id']}"))
+    else:
+        _fail("--format must be json or human")
+
+
+@app.command("fix-compile")
+def fix_compile(
+    file: str = typer.Argument(..., help="Source file to repair."),
+    tool: str = typer.Option(..., "--tool", help="Verification adapter to run."),
+    apply_patch: bool = typer.Option(False, "--apply", help="Apply a validated repair patch."),
+    output_format: str = typer.Option("human", "--format", help="Output format: human or json."),
+) -> None:
+    """Propose a review-gated compile repair with a minimal command surface."""
+    try:
+        payload = repair_op(None, tool=tool, files=[file], apply_patch=apply_patch)
+    except KeyError:
+        _fail(f"unknown adapter: {tool}")
+    except (ConfigError, WorkflowInputError, AdapterExecutionError, ProviderError, ValueError) as exc:
+        _fail(f"repair error: {exc}")
+    if output_format == "json":
+        typer.echo(dump_json(payload))
+    elif output_format == "human":
+        _echo_human(render_recipe_result("Compile Repair", payload, f"tel artifacts review {payload.get('patch_id') or payload['run_id']}"))
+    else:
+        _fail("--format must be json or human")
+
+
+@app.command("draft-assertions")
+def draft_assertions(
+    spec: Path = typer.Option(..., "--spec", help="Specification or design context file."),
+    rtl: Path = typer.Option(..., "--rtl", help="RTL file to target."),
+    output_format: str = typer.Option("human", "--format", help="Output format: human or json."),
+) -> None:
+    """Generate a first assertion draft from a specification and RTL file."""
+    try:
+        payload = gen_sva_op(None, spec=spec, rtl=rtl)
+    except (ConfigError, WorkflowInputError, ProviderError) as exc:
+        _fail(f"generation error: {exc}")
+    if output_format == "json":
+        typer.echo(dump_json(payload))
+    elif output_format == "human":
+        _echo_human(render_recipe_result("Assertion Draft", payload, f"tel artifacts review {payload.get('candidate_id') or payload.get('artifact_path')}"))
+    else:
+        _fail("--format must be json or human")
+
+
+@app.command("scaffold-cocotb")
+def scaffold_cocotb(
+    dut: Path = typer.Option(..., "--dut", help="DUT RTL file."),
+    spec: Path | None = typer.Option(None, "--spec", help="Optional specification or design context file."),
+    output_format: str = typer.Option("human", "--format", help="Output format: human or json."),
+) -> None:
+    """Generate a grounded cocotb starter testbench with common inputs only."""
+    try:
+        payload = gen_cocotb_op(None, dut=dut, spec=spec)
+    except (ConfigError, WorkflowInputError, ProviderError) as exc:
+        _fail(f"generation error: {exc}")
+    if output_format == "json":
+        typer.echo(dump_json(payload))
+    elif output_format == "human":
+        _echo_human(render_recipe_result("Cocotb Scaffold", payload, f"tel artifacts review {payload.get('candidate_id') or payload.get('artifact_path')}"))
+    else:
+        _fail("--format must be json or human")
 
 
 @coverage_app.command("import")
@@ -500,6 +587,7 @@ def gen_sva(
     defines: list[str] = typer.Option([], "--define"),
     top_module: str | None = typer.Option(None, "--top"),
     work_library: str | None = typer.Option(None, "--worklib"),
+    output_format: str = typer.Option("json", "--format", help="Output format: json or human."),
 ) -> None:
     """Generate and validate first-pass assertions from specification and RTL."""
     try:
@@ -522,7 +610,7 @@ def gen_sva(
         _fail(f"input error: {exc}")
     except ProviderError as exc:
         _fail(f"provider error: {exc}")
-    typer.echo(dump_json(payload))
+    _emit_format(payload, output_format, lambda value: render_payload("Spec-to-SVA Result", value))
 
 
 @app.command("gen-cocotb")
@@ -538,6 +626,7 @@ def gen_cocotb(
     defines: list[str] = typer.Option([], "--define"),
     top_module: str | None = typer.Option(None, "--top"),
     work_library: str | None = typer.Option(None, "--worklib"),
+    output_format: str = typer.Option("json", "--format", help="Output format: json or human."),
 ) -> None:
     """Generate a grounded cocotb starter testbench for a DUT."""
     try:
@@ -561,7 +650,7 @@ def gen_cocotb(
         _fail(f"input error: {exc}")
     except ProviderError as exc:
         _fail(f"provider error: {exc}")
-    typer.echo(dump_json(payload))
+    _emit_format(payload, output_format, lambda value: render_payload("DUT-to-Cocotb Result", value))
 
 
 @providers_app.command("list")
@@ -574,12 +663,16 @@ def providers_list(output_format: str = typer.Option("json", "--format", help="O
 
 
 @providers_app.command("check")
-def providers_check(name: Optional[str] = typer.Argument(None), offline: bool = typer.Option(False, "--offline")) -> None:
+def providers_check(
+    name: Optional[str] = typer.Argument(None),
+    offline: bool = typer.Option(False, "--offline"),
+    output_format: str = typer.Option("json", "--format", help="Output format: json or human."),
+) -> None:
     try:
         payload = check_providers_op(None, provider_name=name, live=not offline)
     except ConfigError as exc:
         _fail(f"config error: {exc}")
-    typer.echo(dump_json(payload))
+    _emit_format(payload, output_format, lambda value: render_payload("Provider Checks", value))
     if payload["status"] != "passed":
         raise typer.Exit(code=1)
 
@@ -697,6 +790,7 @@ def artifacts_purge(
     yes: bool = typer.Option(False, "--yes", help="Actually delete artifact files. Without this, only report what would be removed."),
     scope: Optional[list[str]] = typer.Option(None, "--scope", help="Artifact scope to purge; repeat for task-artifacts, reports, waveforms, patches, generations, or generated."),
     older_than_days: Optional[int] = typer.Option(None, "--older-than-days", help="Only purge artifact files at least this many days old."),
+    output_format: str = typer.Option("json", "--format", help="Output format: json or human."),
 ) -> None:
     try:
         payload = purge_artifacts_op(None, dry_run=not yes, scopes=scope, older_than_days=older_than_days)
@@ -704,13 +798,14 @@ def artifacts_purge(
         _fail(f"config error: {exc}")
     except ValueError as exc:
         _fail(f"input error: {exc}")
-    typer.echo(dump_json(payload))
+    _emit_format(payload, output_format, lambda value: render_payload("Artifact Purge", value))
 
 
 @artifacts_app.command("review")
 def artifacts_review(
     reference: str = typer.Argument(..., help="Generation candidate id, validation run id, or generated artifact path."),
     max_diff_lines: int = typer.Option(200, "--max-diff-lines", help="Maximum unified diff lines to include in JSON output."),
+    output_format: str = typer.Option("json", "--format", help="Output format: json or human."),
 ) -> None:
     try:
         payload = review_artifact_op(None, reference=reference, max_diff_lines=max_diff_lines)
@@ -718,7 +813,7 @@ def artifacts_review(
         _fail(f"config error: {exc}")
     except ValueError as exc:
         _fail(str(exc))
-    typer.echo(dump_json(payload))
+    _emit_format(payload, output_format, lambda value: render_payload("Artifact Review", value))
 
 
 @doctor_app.command("privacy")
@@ -728,6 +823,38 @@ def doctor_privacy() -> None:
     except ConfigError as exc:
         _fail(f"config error: {exc}")
     typer.echo(dump_json(payload))
+
+
+@doctor_app.callback()
+def doctor(ctx: typer.Context) -> None:
+    """Show project health when no doctor subcommand is selected."""
+    if ctx.invoked_subcommand is not None:
+        return
+    _echo_human(render_doctor_summary(doctor_summary_op()))
+
+
+@history_app.command("status")
+def history_status() -> None:
+    typer.echo(dump_json(shell_history_status()))
+
+
+@history_app.command("enable")
+def history_enable() -> None:
+    typer.echo(dump_json(set_shell_history_enabled(True)))
+
+
+@history_app.command("disable")
+def history_disable() -> None:
+    typer.echo(dump_json(set_shell_history_enabled(False)))
+
+
+@history_app.command("clear")
+def history_clear(yes: bool = typer.Option(False, "--yes", help="Delete saved private shell history.")) -> None:
+    if not yes and not typer.confirm("Delete saved Telchines shell history?", default=False):
+        typer.echo("History was not deleted.")
+        return
+    clear_shell_history()
+    typer.echo("Saved shell history cleared.")
 
 
 @adapters_app.command("list")
@@ -743,47 +870,51 @@ def adapters_list(
 
 
 @adapters_app.command("check")
-def adapters_check(name: Optional[str] = typer.Argument(None), category: str | None = typer.Option(None, "--category")) -> None:
+def adapters_check(
+    name: Optional[str] = typer.Argument(None),
+    category: str | None = typer.Option(None, "--category"),
+    output_format: str = typer.Option("json", "--format", help="Output format: json or human."),
+) -> None:
     try:
         payload = check_adapters_op(None, adapter_name=name, category=category)
     except ConfigError as exc:
         _fail(f"config error: {exc}")
     except KeyError as exc:
         _fail(f"unknown adapter: {exc.args[0]}")
-    typer.echo(dump_json(payload))
+    _emit_format(payload, output_format, lambda value: render_payload("Adapter Checks", value))
     if any(item["status"] != "passed" for item in payload["adapters"]):
         raise typer.Exit(code=1)
 
 
 @waveforms_app.command("list")
-def waveforms_list() -> None:
+def waveforms_list(output_format: str = typer.Option("json", "--format", help="Output format: json or human.")) -> None:
     try:
         payload = list_waveforms_op()
     except ConfigError as exc:
         _fail(f"config error: {exc}")
-    typer.echo(dump_json(payload))
+    _emit_format(payload, output_format, lambda value: render_payload("Waveforms", value))
 
 
 @waveforms_app.command("show")
-def waveforms_show(target: str = typer.Argument(...)) -> None:
+def waveforms_show(target: str = typer.Argument(...), output_format: str = typer.Option("json", "--format", help="Output format: json or human.")) -> None:
     try:
         payload = show_waveform_op(None, target)
     except ConfigError as exc:
         _fail(f"config error: {exc}")
     except ValueError as exc:
         _fail(str(exc))
-    typer.echo(dump_json(payload))
+    _emit_format(payload, output_format, lambda value: render_payload("Waveform Summary", value))
 
 
 @waveforms_app.command("signals")
-def waveforms_signals(target: str = typer.Argument(...), signal_filter: str | None = typer.Option(None, "--filter")) -> None:
+def waveforms_signals(target: str = typer.Argument(...), signal_filter: str | None = typer.Option(None, "--filter"), output_format: str = typer.Option("json", "--format", help="Output format: json or human.")) -> None:
     try:
         payload = waveform_signals_op(None, target, signal_filter=signal_filter)
     except ConfigError as exc:
         _fail(f"config error: {exc}")
     except ValueError as exc:
         _fail(str(exc))
-    typer.echo(dump_json(payload))
+    _emit_format(payload, output_format, lambda value: render_payload("Waveform Signals", value))
 
 
 @waveforms_app.command("inspect")
@@ -795,6 +926,7 @@ def waveforms_inspect(
     end_time: int | None = typer.Option(None, "--end-time", help="Last VCD timestamp to include."),
     log_path: str | None = typer.Option(None, "--log", help="Project-relative simulator log to correlate by time."),
     tolerance_ticks: int = typer.Option(0, "--tolerance-ticks", help="Timestamp tolerance in VCD ticks for log correlation."),
+    output_format: str = typer.Option("json", "--format", help="Output format: json or human."),
 ) -> None:
     try:
         payload = inspect_waveform_op(
@@ -811,22 +943,22 @@ def waveforms_inspect(
         _fail(f"config error: {exc}")
     except ValueError as exc:
         _fail(str(exc))
-    typer.echo(dump_json(payload))
+    _emit_format(payload, output_format, lambda value: render_payload("Waveform Inspection", value))
 
 
 @eval_app.command("run")
-def eval_run() -> None:
+def eval_run(output_format: str = typer.Option("json", "--format", help="Output format: json or human.")) -> None:
     try:
         payload = run_eval_op()
     except ConfigError as exc:
         _fail(f"config error: {exc}")
-    typer.echo(dump_json(payload))
+    _emit_format(payload, output_format, lambda value: render_payload("Evaluation", value))
 
 
 @eval_app.command("report")
-def eval_report() -> None:
+def eval_report(output_format: str = typer.Option("json", "--format", help="Output format: json or human.")) -> None:
     try:
         payload = load_eval_report()
     except ConfigError as exc:
         _fail(f"config error: {exc}")
-    typer.echo(dump_json(payload))
+    _emit_format(payload, output_format, lambda value: render_payload("Evaluation Report", value))

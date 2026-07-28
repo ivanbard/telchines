@@ -506,7 +506,7 @@ def test_fullscreen_shell_supports_history_navigation(sample_project: Path) -> N
         pipe_input.send_text("/pwd\r\x1b[A\r/exit\r")
         app.run()
 
-    assert session.history == ["/pwd", "/pwd", "/exit"]
+    assert session.history == ["/pwd", "/exit"]
     assert sum(1 for item in session.transcript if str(sample_project) in item) >= 2
 
 

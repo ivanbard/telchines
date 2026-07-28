@@ -16,6 +16,7 @@ from telchines.utils import ensure_directory, read_json, write_json
 SETUP_VERSION = 1
 ENV_VAR_NAME = "TELCHINES_CONFIG_DIR"
 API_KEY_ENV_RE = re.compile(r"^[A-Z_][A-Z0-9_]*$")
+SHELL_HISTORY_LIMIT = 500
 
 
 def settings_path() -> Path:
@@ -28,6 +29,10 @@ def settings_path() -> Path:
     else:
         base = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
     return base / "telchines" / "settings.json"
+
+
+def shell_history_path() -> Path:
+    return settings_path().with_name("shell_history.txt")
 
 
 def default_model_policy() -> dict[str, Any]:
@@ -44,6 +49,7 @@ class UserSetup:
     no_egress: bool = True
     allow_local_commands: bool = False
     artifact_storage_acknowledged: bool = False
+    shell_history_enabled: bool = False
     model_policy: dict[str, Any] | None = None
     version: int = SETUP_VERSION
 
@@ -61,6 +67,7 @@ class UserSetup:
             no_egress=bool(payload.get("no_egress", True)),
             allow_local_commands=bool(payload.get("allow_local_commands", False)),
             artifact_storage_acknowledged=bool(payload.get("artifact_storage_acknowledged", False)),
+            shell_history_enabled=bool(payload.get("shell_history_enabled", False)),
             model_policy=payload.get("model_policy") if isinstance(payload.get("model_policy"), dict) else None,
             version=int(payload.get("version", SETUP_VERSION)),
         )
@@ -95,6 +102,7 @@ class UserSetup:
                 "no_egress": self.no_egress,
                 "allow_local_commands": self.allow_local_commands,
                 "artifact_storage_acknowledged": self.artifact_storage_acknowledged,
+                "shell_history_enabled": self.shell_history_enabled,
                 "model_policy": self.model_policy,
             },
         )
@@ -112,6 +120,49 @@ class UserSetup:
 def global_project_defaults() -> dict[str, Any] | None:
     setup = UserSetup.load()
     return setup.project_defaults() if setup and setup.completed else None
+
+
+def shell_history_status() -> dict[str, object]:
+    setup = UserSetup.load()
+    path = shell_history_path()
+    enabled = bool(setup and setup.shell_history_enabled)
+    entries = load_shell_history() if enabled else []
+    return {"enabled": enabled, "path": str(path), "entry_count": len(entries), "limit": SHELL_HISTORY_LIMIT}
+
+
+def set_shell_history_enabled(enabled: bool) -> dict[str, object]:
+    setup = UserSetup.load()
+    if setup is None:
+        raise ConfigError("run `tel setup` before enabling shell history")
+    setup.shell_history_enabled = enabled
+    setup.save()
+    return shell_history_status()
+
+
+def load_shell_history() -> list[str]:
+    setup = UserSetup.load()
+    path = shell_history_path()
+    if not setup or not setup.shell_history_enabled or not path.exists():
+        return []
+    return [line.strip() for line in path.read_text(encoding="utf-8", errors="replace").splitlines() if line.strip()][-SHELL_HISTORY_LIMIT:]
+
+
+def append_shell_history(command: str) -> None:
+    command = command.strip()
+    if not command:
+        return
+    entries = load_shell_history()
+    if entries and entries[-1] == command:
+        return
+    entries.append(command)
+    ensure_directory(shell_history_path().parent)
+    shell_history_path().write_text("\n".join(entries[-SHELL_HISTORY_LIMIT:]) + "\n", encoding="utf-8")
+
+
+def clear_shell_history() -> None:
+    path = shell_history_path()
+    if path.exists():
+        path.unlink()
 
 
 def _ask_bool(prompt: str, *, default: bool) -> bool:
@@ -180,12 +231,14 @@ def run_setup(*, offer_check: bool = True) -> str:
     acknowledged = _ask_bool("Acknowledge that project prompts, source context, and model responses may be stored under .tel/?", default=False)
     if not acknowledged:
         raise ConfigError("artifact storage acknowledgement is required to finish setup")
+    shell_history_enabled = _ask_bool("Save shell command history in your private Telchines settings?", default=False)
     setup = UserSetup(
         completed=True,
         model_mode="hybrid" if remote_enabled and allow_local_commands else "remote" if remote_enabled else "local",
         no_egress=not remote_enabled,
         allow_local_commands=allow_local_commands,
         artifact_storage_acknowledged=True,
+        shell_history_enabled=shell_history_enabled,
         model_policy=policy,
     )
     setup.save()

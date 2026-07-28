@@ -793,6 +793,32 @@ def test_cli_human_formats_preserve_json_defaults(sample_project: Path, monkeypa
     assert "Project Templates" in runner.invoke(app, ["project", "templates", "--format", "human"]).stdout
 
 
+def test_diagnose_regressions_recipe_keeps_triage_json_shape(sample_project: Path, monkeypatch) -> None:
+    monkeypatch.chdir(sample_project)
+    assert runner.invoke(app, ["index"]).exit_code == 0
+
+    human = runner.invoke(app, ["diagnose-regressions", "logs/regressions"])
+    machine = runner.invoke(app, ["diagnose-regressions", "logs/regressions", "--format", "json"])
+
+    assert human.exit_code == 0
+    assert "Regression Diagnosis" in human.stdout
+    assert machine.exit_code == 0
+    assert json.loads(machine.stdout)["cluster_count"] == 2
+
+
+def test_cli_doctor_reports_project_health_without_initializing(work_root: Path, sample_project: Path, monkeypatch) -> None:
+    monkeypatch.chdir(work_root)
+    missing = runner.invoke(app, ["doctor"])
+    assert missing.exit_code == 0
+    assert "project: not initialized" in missing.stdout
+    assert not (work_root / ".tel").exists()
+
+    monkeypatch.chdir(sample_project)
+    ready = runner.invoke(app, ["doctor"])
+    assert ready.exit_code == 0
+    assert "Project Health" in ready.stdout
+
+
 def test_cli_reports_unknown_adapter(sample_project: Path, monkeypatch) -> None:
     monkeypatch.chdir(sample_project)
     result = runner.invoke(app, ["repair", "--tool", "missing", "--file", "rtl/broken_counter.sv"])

@@ -12,7 +12,6 @@ from telchines.config import ProjectConfig
 from telchines.import_manifest import import_regression_manifest
 from telchines.project_templates import apply_project_template, list_project_templates
 from telchines.run_store import RunStore
-from telchines.workflows.coverage import load_coverage_report
 
 
 TEMPLATE_NAMES = [item["name"] for item in list_project_templates()]
@@ -27,14 +26,15 @@ def test_all_project_templates_create_valid_local_scaffolds(work_root: Path, tem
     result = apply_project_template(config, template_name)
     loaded = ProjectConfig.load(project_root)
     store = RunStore(loaded)
-    report = load_coverage_report(project_root / "cov" / "coverage.json")
     imported = import_regression_manifest(loaded, store, Path("examples/regression_manifest.json"), dry_run=True)
     user_files = [path for path in project_root.rglob("*") if path.is_file() and ".tel" not in path.relative_to(project_root).parts]
 
     assert result["template"] == template_name
     assert result["created"] or result["skipped"]
     assert (project_root / "README.telchines.md").exists()
-    assert report.design == "example"
+    assert not (project_root / "cov" / "coverage.json").exists()
+    assert (project_root / "examples" / "coverage_template.json").exists()
+    assert "real coverage export" in (project_root / "cov" / "README.md").read_text(encoding="utf-8")
     assert imported["imported_count"] == 0
     assert isinstance(loaded.retrieval["aliases"], dict)
     assert not any(str(project_root) in path.read_text(encoding="utf-8", errors="ignore") for path in user_files)

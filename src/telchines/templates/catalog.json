@@ -28,7 +28,7 @@
           }
         },
         {
-          "path": "cov/coverage.json",
+          "path": "examples/coverage_template.json",
           "kind": "json",
           "content": {
             "schema_version": "0.1",

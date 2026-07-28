@@ -9,7 +9,7 @@ from telchines.cli import app
 from telchines.config import ProjectConfig
 from telchines.errors import ConfigError
 from telchines.shell import ShellSession, _dispatch_slash_command
-from telchines.setup import UserSetup, default_model_policy, settings_path
+from telchines.setup import UserSetup, append_shell_history, default_model_policy, load_shell_history, settings_path, set_shell_history_enabled, shell_history_status
 
 
 try:
@@ -65,13 +65,31 @@ def test_cli_setup_writes_offline_defaults_without_a_project(monkeypatch) -> Non
     root = Path(tempfile.mkdtemp(prefix="telchines-setup-test-"))
     monkeypatch.setenv("TELCHINES_CONFIG_DIR", str(root / "settings"))
 
-    result = runner.invoke(app, ["setup"], input="1\nn\ny\nn\n")
+    result = runner.invoke(app, ["setup"], input="1\nn\ny\nn\nn\n")
 
     assert result.exit_code == 0, result.stdout
     assert "In your repository, run: tel project init ." in result.stdout
     setup = UserSetup.load()
     assert setup is not None and setup.completed
     assert setup.model_policy == default_model_policy()
+    assert setup.shell_history_enabled is False
+
+
+def test_shell_history_is_opt_in_capped_and_private(monkeypatch) -> None:
+    root = Path(tempfile.mkdtemp(prefix="telchines-history-test-"))
+    monkeypatch.setenv("TELCHINES_CONFIG_DIR", str(root / "settings"))
+    UserSetup(completed=True, artifact_storage_acknowledged=True, model_policy=default_model_policy()).save()
+
+    assert shell_history_status()["enabled"] is False
+    assert set_shell_history_enabled(True)["enabled"] is True
+    for index in range(510):
+        append_shell_history(f"/command {index}")
+    append_shell_history("/command 509")
+
+    history = load_shell_history()
+    assert len(history) == 500
+    assert history[0] == "/command 10"
+    assert history[-1] == "/command 509"
 
 
 def test_shell_setup_command_uses_the_shared_wizard(monkeypatch) -> None:

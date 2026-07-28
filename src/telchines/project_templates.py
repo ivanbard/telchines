@@ -50,6 +50,16 @@ def apply_project_template(config: ProjectConfig, template_name: str) -> dict[st
             continue
         write_json(path, payload)
         created.append(relative)
+    coverage_readme = config.project_root / "cov" / "README.md"
+    if not coverage_readme.exists():
+        ensure_directory(coverage_readme.parent)
+        coverage_readme.write_text(
+            "# Coverage input\n\n"
+            "`coverage-plan` requires a real coverage export. Start with `examples/coverage_template.json` only as a schema reference, "
+            "then import or write your real report to `cov/coverage.json`.\n",
+            encoding="utf-8",
+        )
+        created.append("cov/README.md")
     aliases = config.retrieval.get("aliases", {})
     if not isinstance(aliases, dict):
         aliases = {}
@@ -89,7 +99,7 @@ def _default_json_examples() -> dict[str, dict[str, Any]]:
             "tool": {"kind": "regression_manager", "name": "example", "version": "0.1"},
             "runs": [],
         },
-        "cov/coverage.json": {
+        "examples/coverage_template.json": {
             "schema_version": "0.1",
             "tool": "template",
             "generated_at": "1970-01-01T00:00:00+00:00",

@@ -418,6 +418,30 @@ def doctor_runs(root: Path | None = None) -> dict[str, object]:
     }
 
 
+def doctor_summary(root: Path | None = None) -> dict[str, object]:
+    working_root = root or Path.cwd()
+    try:
+        config, _, _ = load_services(working_root)
+    except ProjectNotInitializedError:
+        return {"status": "not_initialized", "project": None, "next_action": "Run `tel get-started` or `tel project init .`."}
+    index = index_status(config.project_root)
+    providers = check_providers(config.project_root, live=False)
+    adapters = list_adapters(config.project_root)
+    available_adapters = sum(1 for item in adapters["adapters"] if item.get("available"))
+    project_index = index["project"]
+    status = "ready" if not project_index["stale"] and providers["status"] == "passed" else "needs_attention"
+    next_action = "Run `tel index` to refresh project context." if project_index["stale"] else "Run `tel get-started` to choose the next workflow."
+    return {
+        "status": status,
+        "project": {"name": config.project.name, "root": str(config.project_root)},
+        "index": project_index,
+        "providers": {"status": providers["status"]},
+        "adapters": {"available": available_adapters, "total": len(adapters["adapters"])},
+        "artifacts_dir": str(config.project_root / config.artifacts_dir),
+        "next_action": next_action,
+    }
+
+
 def show_run(root: Path | None, run_id: str) -> dict[str, object]:
     _, store, _ = load_services(root)
     return dataclass_to_dict(store.load_run(run_id))

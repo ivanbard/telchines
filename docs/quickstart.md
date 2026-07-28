@@ -44,6 +44,7 @@ tel project templates
 
 This creates `.tel/config.json` and the local storage directories used for indexing, runs, generated artifacts, and reports.
 Templates add minimal local scaffolds for common setups such as `basic-rtl`, `cocotb`, `uvm`, `vivado`, `quartus`, and `libero`.
+Their coverage sample is kept at `examples/coverage_template.json`; supply a real report before running `coverage-plan`.
 
 ## Build The Index
 
@@ -177,6 +178,14 @@ Supported first-pass import formats are `telchines-json`, `ucis-json`, `vivado`,
 ```bash
 tel
 tel shell --plain
+```
+
+Shell history is private and disabled by default. Enable it only if you want commands stored beside your user-level Telchines settings:
+
+```bash
+tel history enable
+tel history status
+tel history clear
 ```
 
 Useful starting commands:

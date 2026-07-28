@@ -64,7 +64,10 @@ def _discover_project(root: Path) -> ProjectConfig | None:
 def _detect_inputs(root: Path) -> dict[str, list[str]]:
     discovered = {"rtl": [], "docs": [], "logs": [], "coverage": []}
     for path in root.rglob("*"):
-        if not path.is_file() or any(part in IGNORED_DIRECTORIES for part in path.relative_to(root).parts):
+        relative_parts = path.relative_to(root).parts
+        if not path.is_file() or any(part in IGNORED_DIRECTORIES for part in relative_parts):
+            continue
+        if relative_parts and relative_parts[0] == "examples":
             continue
         relative = path.relative_to(root).as_posix()
         suffix = path.suffix.lower()
