@@ -100,6 +100,19 @@ def test_shell_welcome_renders_project_context(sample_project: Path) -> None:
     assert "Generate" in rendered
 
 
+def test_first_run_shell_decline_does_not_create_a_project(work_root: Path, monkeypatch, capsys) -> None:
+    from telchines.shell import run_shell
+
+    monkeypatch.setattr("telchines.shell.UserSetup.load", lambda: None)
+    monkeypatch.setattr("telchines.shell.run_setup", lambda: "Setup complete.")
+    monkeypatch.setattr("telchines.shell.typer.confirm", lambda *args, **kwargs: False)
+
+    run_shell(work_root, mode="plain")
+
+    assert "No project files were created" in capsys.readouterr().out
+    assert not (work_root / ".tel").exists()
+
+
 def test_shell_help_renders_core_commands() -> None:
     rendered = render_help()
     assert "/providers" in rendered

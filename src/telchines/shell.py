@@ -27,6 +27,15 @@ from rich.table import Table
 from rich.text import Text
 
 from telchines.config import ProjectConfig
+from telchines.onboarding import initialize_and_index_get_started, inspect_get_started
+from telchines.presentation import render_get_started
+from telchines.presentation import (
+    render_index_status_payload as render_index_status_payload_shared,
+    render_provider_payload as render_provider_payload_shared,
+    render_retrieval_payload as render_retrieval_payload_shared,
+    render_run_show as render_run_show_shared,
+    render_runs_payload as render_runs_payload_shared,
+)
 from telchines.setup import UserSetup, run_setup
 from telchines.errors import AdapterExecutionError, ConfigError, ProviderError, TelchinesError
 from telchines.operations import (
@@ -73,6 +82,7 @@ from telchines.operations import (
 SHELL_COMMAND_HELP = [
     ("/help", "Show command reference"),
     ("/setup", "Configure user-level provider and privacy defaults"),
+    ("/get-started", "Inspect this directory and recommend the first workflow"),
     ("/project init [path] [--name NAME] [--template NAME]", "Initialize a Telchines project"),
     ("/project templates", "List built-in project templates"),
     ("/index [status|clean]", "Build, inspect, or clean retrieval indexes"),
@@ -283,6 +293,10 @@ def run_shell(initial_cwd: Path | None = None, mode: str = "auto") -> None:
     session = ShellSession(cwd=(initial_cwd or Path.cwd()).resolve())
     if session.project_config() is None and UserSetup.load() is None:
         typer.echo(_cp1252_safe_text(run_setup()))
+        if typer.confirm(f"Initialize Telchines in {session.cwd} and build its index now?", default=False):
+            typer.echo(_cp1252_safe_text(render_get_started(initialize_and_index_get_started(session.cwd))))
+        else:
+            typer.echo("No project files were created. Run `tel get-started` when you are ready.")
         return
     session.add_transcript("Telchines", render_welcome(session))
     if _supports_fullscreen_shell(mode):
@@ -552,6 +566,8 @@ def _dispatch_slash_command(session: ShellSession, command_line: str) -> tuple[b
         return False, render_help()
     if command == "setup":
         return False, run_setup()
+    if command == "get-started":
+        return False, render_get_started(inspect_get_started(session.cwd))
     if command == "pwd":
         return False, str(session.cwd)
     if command == "clear":
@@ -672,7 +688,7 @@ def _execute_command(session: ShellSession, parts: list[str], raw: bool) -> str 
     if command == "index":
         if len(parts) > 1 and parts[1] == "status":
             payload = index_status(session.cwd)
-            return dump_json(payload) if raw else render_index_status_payload(payload)
+            return dump_json(payload) if raw else _cp1252_safe_text(render_index_status_payload_shared(payload))
         if len(parts) > 1 and parts[1] == "clean":
             payload = clean_index(session.cwd)
             return dump_json(payload) if raw else render_action_panel("Index Cleaned", f"removed {payload['removed_count']} index directorie(s)")
@@ -700,7 +716,7 @@ def _execute_command(session: ShellSession, parts: list[str], raw: bool) -> str 
             raise ValueError("/retrieve requires a query")
         payload = retrieve_query(session.cwd, query, mode="general")
         session.note_context(payload)
-        return dump_json(payload) if raw else render_retrieval_payload(payload)
+        return dump_json(payload) if raw else _cp1252_safe_text(render_retrieval_payload_shared(payload))
 
     if command == "providers":
         if len(parts) > 1 and parts[1] == "check":
@@ -716,7 +732,7 @@ def _execute_command(session: ShellSession, parts: list[str], raw: bool) -> str 
             payload = check_providers(session.cwd, provider_name=provider_name, live=live)
             return dump_json(payload) if raw else render_provider_check_payload(payload)
         payload = list_providers(session.cwd)
-        return dump_json(payload) if raw else render_provider_payload(payload)
+        return dump_json(payload) if raw else _cp1252_safe_text(render_provider_payload_shared(payload))
 
     if command == "model":
         action = parts[1].lower() if len(parts) > 1 else "list"
@@ -871,13 +887,13 @@ def _execute_command(session: ShellSession, parts: list[str], raw: bool) -> str 
     if command == "runs":
         if len(parts) == 1 or parts[1] == "list":
             payload = list_runs(session.cwd)
-            return dump_json(payload) if raw else render_runs_payload(payload)
+            return dump_json(payload) if raw else _cp1252_safe_text(render_runs_payload_shared(payload))
         if parts[1] == "doctor":
             payload = doctor_runs(session.cwd)
             return dump_json(payload) if raw else render_runs_doctor_payload(payload)
         if parts[1] == "show" and len(parts) > 2:
             payload = show_run(session.cwd, parts[2])
-            return dump_json(payload) if raw else render_run_show(payload)
+            return dump_json(payload) if raw else _cp1252_safe_text(render_run_show_shared(payload))
         if parts[1] == "replay" and len(parts) > 2:
             payload = replay_run(session.cwd, parts[2], confirm="--yes" in parts[3:])
             return dump_json(payload) if raw else render_replay_payload(payload)
@@ -1162,7 +1178,7 @@ def render_artifact_review_payload(payload: dict[str, object]) -> str:
 def render_doctor_payload(session: ShellSession) -> str:
     config = session.project_config()
     if config is None:
-        return render_action_panel("Doctor", "No Telchines project detected. Run `/project init .` from a repository root.")
+        return render_action_panel("Doctor", "No Telchines project detected. Run `/get-started` or `/project init .` from a repository root.")
     providers = check_providers(session.cwd, live=False)
     adapters = list_adapters(session.cwd)
     provider_status = providers["status"]

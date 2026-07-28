@@ -733,6 +733,64 @@ def test_cli_reports_project_config_error(work_root: Path, monkeypatch) -> None:
     result = runner.invoke(app, ["index"])
     assert result.exit_code == 2
     assert "no Telchines project found" in result.stderr
+    assert "tel get-started" in result.stderr
+
+
+def test_get_started_is_read_only_and_detects_verification_inputs(work_root: Path, monkeypatch) -> None:
+    root = work_root / "guided"
+    (root / "rtl").mkdir(parents=True)
+    (root / "docs").mkdir()
+    (root / "logs").mkdir()
+    (root / "cov").mkdir()
+    (root / "rtl" / "top.sv").write_text("module top; endmodule\n", encoding="utf-8")
+    (root / "docs" / "spec.md").write_text("# Spec\n", encoding="utf-8")
+    (root / "logs" / "run.log").write_text("failure\n", encoding="utf-8")
+    (root / "cov" / "coverage.json").write_text("{}\n", encoding="utf-8")
+    monkeypatch.chdir(root)
+
+    result = runner.invoke(app, ["get-started"])
+
+    assert result.exit_code == 0
+    assert "project: not initialized" in result.stdout
+    assert "rtl: 1 (rtl/top.sv)" in result.stdout
+    assert "logs: 1 (logs/run.log)" in result.stdout
+    assert "tel get-started --init" in result.stdout
+    assert not (root / ".tel").exists()
+
+
+def test_get_started_requires_confirmation_and_can_initialize(work_root: Path, monkeypatch) -> None:
+    root = work_root / "guided-init"
+    (root / "rtl").mkdir(parents=True)
+    (root / "docs").mkdir()
+    (root / "rtl" / "top.sv").write_text("module top; endmodule\n", encoding="utf-8")
+    (root / "docs" / "spec.md").write_text("# Spec\n", encoding="utf-8")
+    monkeypatch.chdir(root)
+
+    declined = runner.invoke(app, ["get-started", "--init"], input="n\n")
+    assert declined.exit_code == 0
+    assert "No changes were made" in declined.stdout
+    assert not (root / ".tel").exists()
+
+    initialized = runner.invoke(app, ["get-started", "--init", "--yes"])
+    assert initialized.exit_code == 0, initialized.stdout
+    assert (root / ".tel" / "config.json").exists()
+    assert "indexed chunks:" in initialized.stdout
+    assert "tel gen-sva --spec docs/spec.md --rtl rtl/top.sv" in initialized.stdout
+
+
+def test_cli_human_formats_preserve_json_defaults(sample_project: Path, monkeypatch) -> None:
+    monkeypatch.chdir(sample_project)
+    assert runner.invoke(app, ["index"]).exit_code == 0
+
+    retrieve_json = runner.invoke(app, ["retrieve", "uart"])
+    assert retrieve_json.exit_code == 0
+    assert json.loads(retrieve_json.stdout)["hits"]
+    assert "Retrieval Hits" in runner.invoke(app, ["retrieve", "uart", "--format", "human"]).stdout
+    assert "Index Status" in runner.invoke(app, ["index", "status", "--format", "human"]).stdout
+    assert "Provider Status" in runner.invoke(app, ["providers", "list", "--format", "human"]).stdout
+    assert "Adapters" in runner.invoke(app, ["adapters", "list", "--format", "human"]).stdout
+    assert "Runs" in runner.invoke(app, ["runs", "list", "--format", "human"]).stdout
+    assert "Project Templates" in runner.invoke(app, ["project", "templates", "--format", "human"]).stdout
 
 
 def test_cli_reports_unknown_adapter(sample_project: Path, monkeypatch) -> None:

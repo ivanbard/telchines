@@ -152,7 +152,19 @@ tel project init .
 
 Run `tel setup` or `/setup` later to update the global defaults used by newly initialized projects. Provider credentials are referenced by environment-variable name and are never saved in Telchines configuration.
 
-Initialize and index a project:
+For a guided, read-only assessment of the current directory and its next best workflow:
+
+```bash
+tel get-started
+```
+
+When you are ready to create the project state and build the first index, confirm the guided flow:
+
+```bash
+tel get-started --init
+```
+
+Experienced users can initialize and index a project directly:
 
 ```bash
 tel project init .

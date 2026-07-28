@@ -197,7 +197,8 @@ class ProjectConfig:
             if config_path.exists():
                 return cls.from_dict(read_json(config_path))
         raise ProjectNotInitializedError(
-            f"no Telchines project found from {start.resolve()} upward; run `tel project init` in a repository root"
+            f"no Telchines project found from {start.resolve()} upward; run `tel project init` in a repository root\n"
+            "Run 'tel get-started' or 'tel project init .'."
         )
 
     def validate(self) -> None:

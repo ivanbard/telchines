@@ -28,6 +28,15 @@ tel --help
 From the root of a verification repo:
 
 ```bash
+tel get-started
+tel get-started --init
+```
+
+`tel get-started` only inspects the directory. `--init` asks for confirmation before creating `.tel/` and then builds the first retrieval index. It selects the next suggested workflow from available logs, coverage data, RTL, and documentation.
+
+Experienced users can initialize directly:
+
+```bash
 tel project init .
 tel project init . --template uvm
 tel project templates
