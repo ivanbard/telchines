@@ -22,8 +22,8 @@ tel adapters check verilator
 tel adapters check --category simulation
 ```
 
-The command prints JSON and exits nonzero when a selected adapter is missing required binaries.
-Missing open-source tools include `setup_diagnostics` with platform-oriented hints. Telchines only reports these
+The command prints JSON and exits nonzero when a selected adapter is unavailable. Availability requires a usable version probe in the current host environment, not merely a matching name on `PATH`. For example, WSL rejects a Windows/MSYS executable inherited from `/mnt/c/...` instead of attempting to run it.
+Unavailable open-source tools include `setup_diagnostics` with platform-oriented hints. Telchines only reports these
 instructions; it does not install simulators, linters, formal engines, or commercial tools for you.
 
 Common open-source setup routes:
@@ -42,7 +42,7 @@ tel adapters check symbiyosys
 
 Adapter-backed commands accept compile context through `--filelist`, `--include-dir`, `--define`, `--top`, `--worklib`, and `--adapter-arg`. Filelists support blank lines, comments, source paths, `+incdir+...`, and `+define+...`. Telchines stores the expanded run spec, command argv, cwd, adapter version, and redacted env summary in run metadata.
 
-`gen-sva` can use adapters for generated assertion validation. After built-in structural checks pass, Telchines tries `generation.sva.validation_adapters` in order, defaulting to `slang` then `verilator`. The first enabled adapter available on `PATH` and supporting `generation_validation` is run against the DUT RTL plus generated SVA file. If no adapter can run, Telchines reports `structure_only` validation and records adapter fallback reasons in the validation run metadata. When `generation.sva.formal.mode` is `auto` or `required`, Telchines can also run the configured formal adapter, defaulting to SymbiYosys, and reports `formal_run`.
+`gen-sva` can use adapters for generated assertion validation. After built-in structural checks pass, Telchines tries `generation.sva.validation_adapters` in order, defaulting to `slang` then `verilator`. The first enabled, host-compatible adapter supporting `generation_validation` is run against the DUT RTL plus generated SVA file. If no adapter can run, Telchines reports `structure_only` validation and records adapter fallback reasons in the validation run metadata. When `generation.sva.formal.mode` is `auto` or `required`, Telchines can also run the configured formal adapter, defaulting to SymbiYosys, and reports `formal_run`.
 
 Commercial formal or simulator tools should integrate through a wrapper-command adapter that emits stable exit codes, logs, and artifact paths. Native vendor adapters are intentionally out of scope for the v1 real-tool pass.
 

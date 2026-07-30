@@ -133,7 +133,10 @@ For local development from a checkout:
 
 ```bash
 python -m venv .venv
-. .venv/Scripts/activate
+# Windows PowerShell
+.venv\Scripts\Activate.ps1
+# Linux, WSL, and macOS
+. .venv/bin/activate
 pip install -e .[dev]
 ```
 
@@ -144,7 +147,7 @@ tel --version
 telchines --help
 ```
 
-On the first `tel` launch outside a project, Telchines opens a one-time setup wizard for provider defaults and privacy choices. It never initializes a repository. After setup, move to a repository and run:
+On the first `tel` launch outside a project, Telchines opens a one-time setup wizard for provider defaults and privacy choices. It asks about local-command providers, acknowledgement that `.tel/` can retain task artifacts, and optional private shell-history storage. It never initializes a repository. After setup, move to a repository and run:
 
 ```bash
 tel project init .

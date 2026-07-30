@@ -2004,7 +2004,7 @@ def test_cli_checks_adapters_reports_missing_binary(sample_project: Path, monkey
     result = runner.invoke(app, ["adapters", "check", "iverilog"])
     assert result.exit_code == 1
     payload = json.loads(result.stdout)
-    assert payload["adapters"][0]["status"] == "missing"
+    assert payload["adapters"][0]["status"] == "unavailable"
     assert payload["adapters"][0]["missing_binaries"] == ["iverilog", "vvp"]
 
 

@@ -12,7 +12,10 @@ For local development from a checkout:
 
 ```bash
 python -m venv .venv
-. .venv/Scripts/activate
+# Windows PowerShell
+.venv\Scripts\Activate.ps1
+# Linux, WSL, and macOS
+. .venv/bin/activate
 pip install -e .[dev]
 ```
 
@@ -22,6 +25,8 @@ Verify the install:
 tel --version
 tel --help
 ```
+
+The first `tel` launch outside a project asks for provider policy, local-command permission, `.tel/` artifact-storage acknowledgement, and optional private shell-history storage. It never initializes the current directory; use `tel project init .` after setup.
 
 ## Initialize A Project
 

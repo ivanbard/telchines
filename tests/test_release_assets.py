@@ -21,6 +21,13 @@ def test_package_version_matches_pyproject() -> None:
     assert pyproject["project"]["version"] == __version__
 
 
+def test_pyproject_uses_setuptools_compatible_license_table() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    pyproject = tomllib.loads((repo_root / "pyproject.toml").read_text(encoding="utf-8"))
+
+    assert pyproject["project"]["license"] == {"text": "MIT"}
+
+
 def test_release_version_surfaces_match() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     readme = (repo_root / "README.md").read_text(encoding="utf-8")

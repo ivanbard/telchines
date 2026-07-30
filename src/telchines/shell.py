@@ -464,21 +464,28 @@ def _build_fullscreen_shell_app(session: ShellSession, **app_kwargs: Any) -> App
         help_area.text = view_state.help_text
         help_area.buffer.cursor_position = 0
         force_reflow()
-        app.layout.focus(help_area)
+        # Keep command focus while help is visible so a user can immediately
+        # enter /exit after consulting help, including after a failed command.
+        app.layout.focus(input_area)
 
-    def hide_help_overlay() -> None:
+    def hide_help_overlay(*, restore_input: bool = True) -> None:
         if not view_state.help_visible:
             return
         view_state.help_visible = False
-        input_area.text = view_state.saved_input_text
-        input_area.buffer.cursor_position = min(view_state.saved_cursor_position, len(input_area.text))
+        if restore_input:
+            input_area.text = view_state.saved_input_text
+            input_area.buffer.cursor_position = min(view_state.saved_cursor_position, len(input_area.text))
         force_reflow()
         app.layout.focus(input_area)
 
     def submit() -> None:
         if view_state.help_visible:
-            hide_help_overlay()
-            return
+            # Enter with an empty input dismisses help; a command entered while
+            # help is displayed is dispatched normally after the overlay closes.
+            if not input_area.text.strip():
+                hide_help_overlay()
+                return
+            hide_help_overlay(restore_input=False)
         user_input = input_area.text.strip()
         if not user_input:
             return

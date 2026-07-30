@@ -395,7 +395,7 @@ def _run_adapter_validation(
             fallback_reasons.append(f"{adapter_name} does not support generation_validation")
             continue
         if not adapter.is_available():
-            fallback_reasons.append(f"{adapter_name} is not available on PATH")
+            fallback_reasons.append(adapter.unavailable_message())
             continue
         try:
             adapter_spec = (run_spec or AdapterRunSpec(files=[candidate.rtl_path])).expanded(project_root)

@@ -459,7 +459,7 @@ def test_fullscreen_shell_flushes_standalone_escape_without_default_delay(sample
                 stage = 1
                 pipe_input.send_text("/help\r")
                 return
-            if stage == 1 and app.layout.current_control is not initial_control:
+            if stage == 1:
                 stage = 2
 
                 def send_escape() -> None:
@@ -483,6 +483,19 @@ def test_fullscreen_shell_flushes_standalone_escape_without_default_delay(sample
     assert escape_handled_at is not None
     assert escape_sent_at is not None
     assert escape_handled_at - escape_sent_at < 0.05
+
+
+def test_fullscreen_shell_exits_after_error_and_help(sample_project: Path) -> None:
+    session = ShellSession(cwd=sample_project)
+    session.add_transcript("Telchines", render_welcome(session))
+    with create_pipe_input() as pipe_input:
+        app = _build_fullscreen_shell_app(session, input=pipe_input, output=DummyOutput())
+        pipe_input.send_text("/coverage-plan --report cov/missing.json\r/help\r/exit\r")
+        app.run()
+
+    assert session.history == ["/coverage-plan --report cov/missing.json", "/help", "/exit"]
+    assert any("coverage report does not exist" in item for item in session.transcript)
+    assert session.transcript[-1] == "leaving Telchines shell"
 
 
 def test_fullscreen_shell_accepts_model_list_pipe_input(sample_project: Path) -> None:
