@@ -7,6 +7,7 @@ from typing import Optional
 import typer
 
 from telchines.errors import AdapterExecutionError, ConfigError, ProviderError, WorkflowInputError
+from telchines.certification import approve_certificate, certify_providers
 from telchines.onboarding import initialize_and_index_get_started, inspect_get_started
 from telchines.presentation import (
     render_adapters_payload,
@@ -23,6 +24,7 @@ from telchines.presentation import (
     render_runs_payload,
 )
 from telchines import __version__
+from telchines.utils import write_json
 from telchines.operations import (
     agent as agent_op,
     check_adapters as check_adapters_op,
@@ -51,6 +53,7 @@ from telchines.operations import (
     list_waveforms as list_waveforms_op,
     load_eval_report,
     privacy_report as privacy_report_op,
+    plan_task as plan_task_op,
     project_templates as project_templates_op,
     purge_artifacts as purge_artifacts_op,
     repair as repair_op,
@@ -73,8 +76,8 @@ from telchines.setup import clear_shell_history, run_setup, set_shell_history_en
 app = typer.Typer(
     help=(
         "Telchines CLI — grounded verification workflows for hardware teams.\n\n"
-        "Common paths: investigate regressions with `tel triage`; generate assertions with `tel gen-sva`; "
-        "plan coverage closure with `tel coverage-plan`; inspect context with `tel retrieve`."
+        "Start with `tel task \"...\"` to create a cited, review-gated verification plan. "
+        "Expert commands such as `tel triage`, `tel gen-sva`, and `tel coverage-plan` remain available."
     ),
     invoke_without_command=True,
     add_completion=False,
@@ -90,6 +93,7 @@ waveforms_app = typer.Typer(help="Inspect stored or source waveform data.", no_a
 artifacts_app = typer.Typer(help="Review or safely purge generated artifacts.", no_args_is_help=True)
 doctor_app = typer.Typer(help="Inspect privacy and project diagnostics.", invoke_without_command=True)
 history_app = typer.Typer(help="Control private, opt-in shell command history.", no_args_is_help=True)
+certify_app = typer.Typer(help="Run explicitly enabled, budgeted live provider certification.", no_args_is_help=True)
 app.add_typer(project_app, name="project")
 app.add_typer(index_app, name="index")
 app.add_typer(runs_app, name="runs")
@@ -101,6 +105,7 @@ app.add_typer(waveforms_app, name="waveforms")
 app.add_typer(artifacts_app, name="artifacts")
 app.add_typer(doctor_app, name="doctor")
 app.add_typer(history_app, name="history")
+app.add_typer(certify_app, name="certify")
 
 
 def _fail(message: str, exit_code: int = 2) -> None:
@@ -428,6 +433,80 @@ def agent_command(
         _fail(f"provider error: {exc}")
     except ValueError as exc:
         _fail(str(exc))
+    typer.echo(dump_json(payload))
+
+
+@app.command("task")
+def task_command(
+    task: str = typer.Argument(..., help="Natural-language verification objective."),
+    tool: str | None = typer.Option(None, "--tool", help="Adapter for a compile-repair task."),
+    files: list[str] = typer.Option([], "--file", help="RTL/source file for a compile-repair task."),
+    logs: list[Path] = typer.Option([], "--logs", help="Regression log for a triage task."),
+    report: Path | None = typer.Option(None, "--report", help="Coverage report for a coverage task."),
+    rtl: list[Path] = typer.Option([], "--rtl", help="RTL source for an SVA task."),
+    spec: list[Path] = typer.Option([], "--spec", help="Specification/context source for an SVA task."),
+    dut: Path | None = typer.Option(None, "--dut", help="DUT source for a Cocotb task."),
+    provider: str | None = typer.Option(None, "--provider", help="Provider override for provider-backed work."),
+    execute_safe: bool = typer.Option(False, "--execute-safe", help="Run the selected workflow without applying source changes."),
+) -> None:
+    """Create a cited, review-gated verification task plan.
+
+    Add --execute-safe only after reviewing the returned plan. Generated outputs
+    remain drafts and repair patches are never applied by this command.
+    """
+    try:
+        payload = plan_task_op(None, task, tool=tool, files=files, logs=logs, report=report, rtl=rtl, spec=spec, dut=dut, provider_name=provider)
+        if execute_safe and payload["status"] == "planned":
+            payload["execution"] = agent_op(
+                None,
+                task,
+                tool=tool,
+                files=files,
+                logs=logs,
+                report=report,
+                rtl=rtl,
+                spec=spec,
+                dut=dut,
+                provider_name=provider,
+                apply_patch=False,
+            )
+    except (ConfigError, ProviderError, WorkflowInputError, AdapterExecutionError, ValueError) as exc:
+        _fail(f"task error: {exc}")
+    typer.echo(dump_json(payload))
+
+
+@certify_app.command("providers")
+def certify_providers_command(
+    manifest: Path = typer.Argument(..., help="Secret-free provider certification manifest."),
+    include_live: bool = typer.Option(False, "--include-live", help="Explicitly authorize bounded live provider calls."),
+    output: Optional[Path] = typer.Option(None, "--output", help="Write the redacted certificate JSON to this path."),
+) -> None:
+    """Certify one pinned provider/model with a bounded, redacted live study."""
+    try:
+        payload = certify_providers(manifest, include_live=include_live)
+    except ConfigError as exc:
+        _fail(f"certification error: {exc}")
+    if output is not None:
+        write_json(output, payload)
+    typer.echo(dump_json(payload))
+    if payload["status"] != "passed":
+        raise typer.Exit(code=1)
+
+
+@certify_app.command("approve")
+def certify_approve_command(
+    certificate: Path = typer.Argument(..., help="Passed redacted certificate JSON."),
+    reviewer: str = typer.Option(..., "--reviewer", help="Maintainer approving representative fixture outputs."),
+    artifact_url: str = typer.Option(..., "--artifact-url", help="CI artifact URL containing the review bundle."),
+    output: Optional[Path] = typer.Option(None, "--output", help="Write approval record to this path."),
+) -> None:
+    """Record the required human approval for a passed release certificate."""
+    try:
+        payload = approve_certificate(certificate, reviewer=reviewer, artifact_url=artifact_url)
+    except ConfigError as exc:
+        _fail(f"certification approval error: {exc}")
+    if output is not None:
+        write_json(output, payload)
     typer.echo(dump_json(payload))
 
 

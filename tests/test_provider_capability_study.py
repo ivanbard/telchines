@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -13,6 +14,19 @@ SPEC = importlib.util.spec_from_file_location("provider_capability_study", SCRIP
 assert SPEC is not None and SPEC.loader is not None
 provider_capability_study = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(provider_capability_study)
+
+
+def test_provider_capability_command_timeout_is_a_redacted_failure(work_root: Path) -> None:
+    results = provider_capability_study._run_commands(
+        work_root,
+        [{"status": "planned", "label": "provider_check", "command": [sys.executable, "-c", "import time; time.sleep(2)"]}],
+        command_timeout_seconds=1,
+        total_timeout_seconds=5,
+    )
+
+    assert results[0]["status"] == "failed"
+    assert results[0]["status_reason"] == "command_timeout"
+    assert results[0]["exit_code"] is None
 
 
 def test_provider_capability_matrix_presets_are_valid() -> None:
@@ -230,6 +244,24 @@ def test_provider_capability_redaction_preserves_keys_that_match_secrets(monkeyp
     redacted = provider_capability_study._redact_summary(summary)
 
     assert redacted == {"scratch_root": "[REDACTED]", "nested": [{"scratch_root": "safe"}]}
+
+
+def test_provider_capability_published_summary_excludes_raw_model_payloads() -> None:
+    published = provider_capability_study._published_summary(
+        {
+            "results": [
+                {
+                    "label": "gen_sva",
+                    "status": "passed",
+                    "stdout": '{"untrusted":"model payload"}',
+                    "stderr": "transport diagnostic",
+                    "parsed": {"candidate_content": "assert property (...)"},
+                }
+            ]
+        }
+    )
+
+    assert published["results"] == [{"label": "gen_sva", "status": "passed"}]
 
 
 def test_provider_capability_scorer_rejects_false_green_agent_repair() -> None:

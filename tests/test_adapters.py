@@ -6,7 +6,7 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
-from telchines.adapters.base import AdapterRunSpec, ToolAdapter
+from telchines.adapters.base import AdapterRunSpec, ToolAdapter, executable_status
 from telchines.adapters.open_tools import IcarusAdapter, SlangAdapter, SymbiYosysAdapter, VeribleAdapter, VerilatorAdapter
 from telchines.adapters.registry import AdapterRegistry
 from telchines.errors import AdapterExecutionError
@@ -126,13 +126,40 @@ def test_adapter_check_reports_actionable_open_tool_setup_guidance(sample_projec
 
     checks = {item["name"]: item for item in check_adapters(sample_project)["adapters"]}
 
-    assert checks["verilator"]["status"] == "missing"
+    assert checks["verilator"]["status"] == "unavailable"
     assert checks["verilator"]["missing_binaries"] == ["verilator or verilator_bin.exe"]
     assert any("MSYS2" in item for item in checks["verilator"]["setup_diagnostics"])
     assert checks["slang"]["missing_binaries"] == ["slang or pyslang"]
     assert any("pip install pyslang" in item for item in checks["slang"]["setup_diagnostics"])
     assert checks["symbiyosys"]["missing_binaries"] == ["sby"]
     assert any("OSS CAD Suite" in item for item in checks["symbiyosys"]["setup_diagnostics"])
+
+
+def test_executable_status_rejects_windows_mount_binary_in_wsl(monkeypatch) -> None:
+    monkeypatch.setattr("telchines.adapters.base.shutil.which", lambda _: "/mnt/c/msys64/ucrt64/bin/verilator")
+    monkeypatch.setattr("telchines.adapters.base._is_wsl", lambda: True)
+
+    available, version, reason = executable_status("verilator")
+
+    assert available is False
+    assert version == "unavailable"
+    assert "incompatible cross-host executable" in reason
+
+
+def test_executable_status_requires_a_usable_version_probe(monkeypatch) -> None:
+    class Result:
+        returncode = 1
+        stdout = ""
+        stderr = ""
+
+    monkeypatch.setattr("telchines.adapters.base.shutil.which", lambda _: "/usr/bin/verilator")
+    monkeypatch.setattr("telchines.adapters.base.subprocess.run", lambda *_args, **_kwargs: Result())
+
+    available, version, reason = executable_status("verilator")
+
+    assert available is False
+    assert version == "unavailable"
+    assert reason == "version probe did not return a usable version"
 
 
 def test_open_tool_missing_binary_errors_include_setup_guidance(work_root: Path, monkeypatch) -> None:
@@ -154,7 +181,7 @@ def test_open_tool_missing_binary_errors_include_setup_guidance(work_root: Path,
                 work_root / "artifacts",
                 spec=AdapterRunSpec(files=["rtl/top.sv"]),
             )
-        assert "missing required binaries" in str(exc.value)
+        assert "unavailable required binaries" in str(exc.value)
         assert hint in str(exc.value)
 
 
@@ -251,10 +278,12 @@ def test_iverilog_adapter_runs_compile_and_run(monkeypatch, work_root: Path) -> 
         spec=AdapterRunSpec(files=["rtl/demo.sv"], env={"API_TOKEN": "secret", "VISIBLE": "ok"}),
     )
     assert execution.exit_code == 0
-    assert commands[0][:3] == ["iverilog", "-g2012", "-o"]
-    assert commands[1][0] == "vvp"
-    assert run_kwargs[0]["env"]["API_TOKEN"] == "secret"
-    assert run_kwargs[1]["env"]["VISIBLE"] == "ok"
+    execution_commands = [command for command in commands if "--version" not in command]
+    execution_kwargs = [kwargs for command, kwargs in zip(commands, run_kwargs, strict=True) if "--version" not in command]
+    assert execution_commands[0][:3] == ["iverilog", "-g2012", "-o"]
+    assert execution_commands[1][0] == "vvp"
+    assert execution_kwargs[0]["env"]["API_TOKEN"] == "secret"
+    assert execution_kwargs[1]["env"]["VISIBLE"] == "ok"
     assert execution.result["validation_mode"] == "compile_and_run"
     assert execution.result["compile_exit_code"] == 0
     assert execution.result["run_exit_code"] == 0

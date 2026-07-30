@@ -187,6 +187,8 @@ def test_openai_responses_reasoning_payload_uses_canonical_level() -> None:
     )
     assert payload["input"] == '{"workflow_type": "provider_check"}'
     assert payload["reasoning"] == {"effort": "high", "summary": "concise"}
+    assert payload["store"] is False
+    assert "temperature" not in payload
     assert "messages" not in payload
 
 
@@ -252,6 +254,7 @@ def test_anthropic_reasoning_payload_uses_adaptive_thinking() -> None:
     )
     assert payload["thinking"] == {"type": "adaptive"}
     assert payload["output_config"] == {"effort": "low"}
+    assert "temperature" not in payload
 
 
 def test_anthropic_url_preserves_base_prefix_and_avoids_duplicate_endpoint() -> None:
@@ -376,6 +379,8 @@ def test_invoke_openai_compatible_uses_responses_endpoint_headers_and_body(monke
     assert body["model"] == "gpt-5.5"
     assert body["instructions"] == "Return JSON."
     assert json.loads(body["input"])["workflow_type"] == "provider_check"
+    assert body["store"] is False
+    assert "temperature" not in body
     assert "test-token" not in json.dumps(body)
 
 

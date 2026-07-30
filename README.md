@@ -133,7 +133,10 @@ For local development from a checkout:
 
 ```bash
 python -m venv .venv
-. .venv/Scripts/activate
+# Windows PowerShell
+.venv\Scripts\Activate.ps1
+# Linux, WSL, and macOS
+. .venv/bin/activate
 pip install -e .[dev]
 ```
 
@@ -144,11 +147,19 @@ tel --version
 telchines --help
 ```
 
-On the first `tel` launch outside a project, Telchines opens a one-time setup wizard for provider defaults and privacy choices. It never initializes a repository. After setup, move to a repository and run:
+On the first `tel` launch outside a project, Telchines opens a one-time setup wizard for provider defaults and privacy choices. It asks about local-command providers, acknowledgement that `.tel/` can retain task artifacts, and optional private shell-history storage. It never initializes a repository. After setup, move to a repository and run:
 
 ```bash
 tel project init .
 ```
+
+Start verification work with a cited, review-gated task plan:
+
+```bash
+tel task "investigate the failing UART regression" --logs logs/regressions/run_a.log
+```
+
+The plan identifies the selected workflow, evidence, provider/model, required inputs, expected artifacts, and validation limits. Add `--execute-safe` only after reviewing it; Telchines never applies a repair patch through `tel task`.
 
 Run `tel setup` or `/setup` later to update the global defaults used by newly initialized projects. Provider credentials are referenced by environment-variable name and are never saved in Telchines configuration.
 

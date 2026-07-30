@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -11,6 +12,46 @@ from telchines.adapters.parsing import parse_common_output
 from telchines.errors import AdapterExecutionError
 from telchines.models import AdapterDescriptor, Observation, ToolReference
 from telchines.utils import SECRET_KEY_RE, ensure_directory, unique_preserve_order, utc_now
+
+
+def executable_status(binary: str) -> tuple[bool, str, str]:
+    """Return whether *binary* is runnable here, its version, and a diagnostic.
+
+    PATH can be inherited across Windows/WSL boundaries.  A name resolving there
+    is not evidence that the executable is usable by the current Python host.
+    """
+    resolved = shutil.which(binary)
+    if not resolved:
+        return False, "unavailable", "not found on PATH"
+    if _is_wsl() and _is_windows_mount_path(resolved):
+        return False, "unavailable", f"incompatible cross-host executable at {resolved}"
+    for flag in ("--version", "-V", "-version"):
+        try:
+            result = subprocess.run([binary, flag], capture_output=True, text=True, check=False, timeout=5)
+        except TypeError:
+            continue
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            return False, "unavailable", f"version probe failed: {exc}"
+        output = (result.stdout or result.stderr).strip()
+        if result.returncode == 0 and output:
+            return True, output.splitlines()[0].strip(), ""
+    return False, "unavailable", "version probe did not return a usable version"
+
+
+def _is_wsl() -> bool:
+    if os.environ.get("WSL_INTEROP") or os.environ.get("WSL_DISTRO_NAME"):
+        return True
+    if sys.platform != "linux":
+        return False
+    try:
+        return "microsoft" in Path("/proc/sys/kernel/osrelease").read_text(encoding="utf-8").lower()
+    except OSError:
+        return False
+
+
+def _is_windows_mount_path(path: str) -> bool:
+    normalized = path.replace("\\", "/").lower()
+    return normalized.startswith("/mnt/") and len(normalized) > 6 and normalized[6] == "/"
 
 
 @dataclass(slots=True)
@@ -161,23 +202,14 @@ class ToolAdapter:
         required = self.required_binaries or self.binary_names
         if not required:
             return True
-        return all(shutil.which(binary) for binary in required)
+        return all(executable_status(binary)[0] for binary in required)
 
     def version(self) -> str:
         binary = next(iter(self.required_binaries or self.binary_names), "")
-        if not binary or shutil.which(binary) is None:
+        if not binary:
             return "unavailable"
-        for flag in ("--version", "-V", "-version"):
-            try:
-                result = subprocess.run([binary, flag], capture_output=True, text=True, check=False, timeout=5)
-            except TypeError:
-                continue
-            except (OSError, subprocess.TimeoutExpired):
-                continue
-            output = (result.stdout or result.stderr).strip()
-            if result.returncode == 0 and output:
-                return output.splitlines()[0].strip()
-        return "unknown"
+        available, version, _ = executable_status(binary)
+        return version if available else "unavailable"
 
     def build_command(self, project_root: Path, files: list[str], extra_args: list[str] | None = None) -> list[str]:
         raise NotImplementedError
@@ -221,7 +253,12 @@ class ToolAdapter:
 
     def missing_binaries(self) -> list[str]:
         required = self.required_binaries or self.binary_names
-        return [binary for binary in required if shutil.which(binary) is None]
+        missing: list[str] = []
+        for binary in required:
+            available, _, reason = executable_status(binary)
+            if not available:
+                missing.append(binary if reason == "not found on PATH" else f"{binary} ({reason})")
+        return missing
 
     def setup_diagnostics(self, missing: list[str] | None = None) -> list[str]:
         missing = list(missing if missing is not None else self.missing_binaries())
@@ -236,7 +273,7 @@ class ToolAdapter:
         missing = self.missing_binaries()
         missing_text = ", ".join(missing) or ", ".join(self.required_binaries or self.binary_names) or self.name
         diagnostics = "; ".join(self.setup_diagnostics(missing))
-        return f"{self.name} is not available on PATH; missing required binaries: {missing_text}. {diagnostics}"
+        return f"{self.name} is not available in this host environment; unavailable required binaries: {missing_text}. {diagnostics}"
 
     def run(
         self,

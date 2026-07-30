@@ -7,7 +7,89 @@ on:
   workflow_dispatch:
 
 jobs:
+  certification:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        provider: [openai, anthropic]
+    env:
+      TELCHINES_LIVE_CERTIFY: ${{ secrets.TELCHINES_LIVE_CERTIFY }}
+      TELCHINES_LIVE_OPENAI: ${{ secrets.TELCHINES_LIVE_OPENAI }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      TELCHINES_LIVE_ANTHROPIC: ${{ secrets.TELCHINES_LIVE_ANTHROPIC }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install Telchines
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .[dev]
+
+      - name: Run blocking live provider certification
+        run: |
+          tel certify providers docs/provider-certifications/${{ matrix.provider }}.json --include-live --output certification.json
+
+      - name: Upload redacted certification evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: certification-${{ matrix.provider }}
+          path: |
+            certification.json
+            .test-work/release-certification/${{ matrix.provider }}/release_certification.json
+            .test-work/release-certification/${{ matrix.provider }}/review-bundle/
+          if-no-files-found: error
+
+  certification-approval:
+    needs: certification
+    runs-on: ubuntu-latest
+    # Configure required maintainers on this GitHub Environment. Approval of
+    # this job is the human semantic review gate for the uploaded bundles.
+    environment: release-certification
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install Telchines
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+
+      - name: Download redacted certification evidence
+        uses: actions/download-artifact@v4
+        with:
+          pattern: certification-*
+          path: certification-evidence
+          merge-multiple: true
+
+      - name: Record maintainer approval
+        run: |
+          ARTIFACT_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          for CERTIFICATE in $(find certification-evidence -name release_certification.json); do
+            tel certify approve "$CERTIFICATE" --reviewer "$GITHUB_ACTOR" --artifact-url "$ARTIFACT_URL"
+          done
+
+      - name: Upload approval records
+        uses: actions/upload-artifact@v4
+        with:
+          name: certification-approvals
+          path: certification-evidence/**/release_certification_approval.json
+          if-no-files-found: error
+
   build:
+    needs: certification-approval
     runs-on: ubuntu-latest
 
     steps:

@@ -10,7 +10,7 @@ import importlib.util
 from pathlib import Path
 from typing import Any
 
-from telchines.adapters.base import AdapterExecution, AdapterRunSpec, ToolAdapter
+from telchines.adapters.base import AdapterExecution, AdapterRunSpec, ToolAdapter, executable_status
 from telchines.errors import AdapterExecutionError
 from telchines.utils import ensure_directory, utc_now
 
@@ -29,21 +29,22 @@ class VerilatorAdapter(ToolAdapter):
     )
 
     def is_available(self) -> bool:
-        return _verilator_binary() != ""
+        binary = _verilator_binary()
+        return bool(binary and executable_status(binary)[0])
 
     def missing_binaries(self) -> list[str]:
-        return [] if self.is_available() else ["verilator or verilator_bin.exe"]
+        binary = _verilator_binary()
+        if not binary:
+            return ["verilator or verilator_bin.exe"]
+        available, _, reason = executable_status(binary)
+        return [] if available else [f"verilator or verilator_bin.exe ({reason})"]
 
     def version(self) -> str:
         binary = _verilator_binary()
         if not binary:
             return "unavailable"
-        try:
-            result = subprocess.run([binary, "--version"], capture_output=True, text=True, check=False, timeout=5)
-        except (OSError, subprocess.TimeoutExpired):
-            return "unknown"
-        output = (result.stdout or result.stderr).strip()
-        return output.splitlines()[0].strip() if result.returncode == 0 and output else "unknown"
+        available, version, _ = executable_status(binary)
+        return version if available else "unavailable"
 
     def build_command(self, project_root: Path, files: list[str], extra_args: list[str] | None = None) -> list[str]:
         return _verilator_command(project_root, ["--lint-only", *(extra_args or []), *files])
@@ -188,13 +189,13 @@ class SlangAdapter(ToolAdapter):
     )
 
     def is_available(self) -> bool:
-        return shutil.which("slang") is not None or _pyslang_available()
+        return executable_status("slang")[0] or _pyslang_available()
 
     def missing_binaries(self) -> list[str]:
         return [] if self.is_available() else ["slang or pyslang"]
 
     def version(self) -> str:
-        if shutil.which("slang") is not None:
+        if executable_status("slang")[0]:
             return super().version()
         if not _pyslang_available():
             return "unavailable"
@@ -268,7 +269,7 @@ def _verilator_binary() -> str:
 
 
 def _slang_command(args: list[str]) -> list[str]:
-    if shutil.which("slang") is not None:
+    if executable_status("slang")[0]:
         return ["slang", *args]
     if _pyslang_available():
         return [sys.executable, "-m", "telchines.adapters.pyslang_runner", *args]

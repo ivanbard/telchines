@@ -63,6 +63,7 @@ from telchines.operations import (
     list_waveforms,
     load_eval_report,
     privacy_report,
+    plan_task,
     project_templates,
     purge_artifacts,
     repair,
@@ -89,6 +90,7 @@ SHELL_COMMAND_HELP = [
     ("/retrieve QUERY", "Search project context"),
     ("/providers [check [NAME] [--offline]]", "Show or check configured providers"),
     ("/model [list|select|set|reasoning]", "Choose provider, model, and reasoning defaults"),
+    ("/task TASK", "Create a cited, review-gated verification plan (recommended)"),
     ("/agent TASK [--tool TOOL --file PATH]", "Plan and run a review-gated hardware agent task"),
     ("/repair --tool TOOL --file PATH", "Run repair workflow"),
     ("/triage --logs PATH [--logs PATH] [--waveform PATH]", "Run regression triage"),
@@ -464,21 +466,28 @@ def _build_fullscreen_shell_app(session: ShellSession, **app_kwargs: Any) -> App
         help_area.text = view_state.help_text
         help_area.buffer.cursor_position = 0
         force_reflow()
-        app.layout.focus(help_area)
+        # Keep command focus while help is visible so a user can immediately
+        # enter /exit after consulting help, including after a failed command.
+        app.layout.focus(input_area)
 
-    def hide_help_overlay() -> None:
+    def hide_help_overlay(*, restore_input: bool = True) -> None:
         if not view_state.help_visible:
             return
         view_state.help_visible = False
-        input_area.text = view_state.saved_input_text
-        input_area.buffer.cursor_position = min(view_state.saved_cursor_position, len(input_area.text))
+        if restore_input:
+            input_area.text = view_state.saved_input_text
+            input_area.buffer.cursor_position = min(view_state.saved_cursor_position, len(input_area.text))
         force_reflow()
         app.layout.focus(input_area)
 
     def submit() -> None:
         if view_state.help_visible:
-            hide_help_overlay()
-            return
+            # Enter with an empty input dismisses help; a command entered while
+            # help is displayed is dispatched normally after the overlay closes.
+            if not input_area.text.strip():
+                hide_help_overlay()
+                return
+            hide_help_overlay(restore_input=False)
         user_input = input_area.text.strip()
         if not user_input:
             return
@@ -609,7 +618,7 @@ def _dispatch_slash_command(session: ShellSession, command_line: str) -> tuple[b
     started = time.perf_counter()
     payload = _execute_command(session, parts, raw=False)
     elapsed = time.perf_counter() - started
-    if payload and command in {"providers", "agent", "repair", "gen-sva", "gen-cocotb", "runs", "artifacts"}:
+    if payload and command in {"providers", "task", "agent", "repair", "gen-sva", "gen-cocotb", "runs", "artifacts"}:
         payload = f"{payload}\n\nelapsed: {elapsed:.2f}s"
     return False, payload or ""
 
@@ -798,6 +807,14 @@ def _execute_command(session: ShellSession, parts: list[str], raw: bool) -> str 
         session.note_context(payload)
         return dump_json(payload) if raw else render_agent_payload(payload)
 
+    if command == "task":
+        task_text = " ".join(parts[1:]).strip()
+        if not task_text:
+            raise ValueError("/task requires a natural-language verification objective")
+        payload = plan_task(session.cwd, task_text)
+        session.note_context(payload)
+        return dump_json(payload) if raw else render_task_payload(payload)
+
     if command == "repair":
         tool, files, extra_args, apply_patch, context = _parse_repair_args(parts[1:])
         payload = repair(
@@ -961,7 +978,8 @@ def render_welcome(session: ShellSession) -> str:
     table.add_row("Project", config.project.name if config else "No Telchines project detected")
     table.add_row("Repair", session.active_provider())
     table.add_row("Generate", session.active_generation_provider())
-    table.add_row("Try", "/help  /providers  /index  /triage --logs logs/regressions")
+    table.add_row("Start", "/task \"investigate the failing UART regression\"")
+    table.add_row("Expert", "/help  /providers  /index  /triage --logs logs/regressions")
     return _render_rich(
         Panel(
             table,
@@ -1276,6 +1294,26 @@ def render_agent_payload(payload: dict[str, object]) -> str:
         elif validation_run_id:
             body.append(f"next: /runs show {validation_run_id}")
     return render_action_panel("Agent Result", "\n".join(body))
+
+
+def render_task_payload(payload: dict[str, object]) -> str:
+    provider = payload.get("provider") if isinstance(payload.get("provider"), dict) else {}
+    evidence = payload.get("evidence") if isinstance(payload.get("evidence"), dict) else {}
+    body = [
+        f"status: {payload.get('status')}",
+        f"workflow: {payload.get('workflow_type')}",
+        f"provider: {provider.get('name')} ({provider.get('model')})",
+        f"context: {payload.get('context_id')}",
+    ]
+    missing = payload.get("missing_inputs")
+    if isinstance(missing, list) and missing:
+        body.append(f"needs: {', '.join(str(item) for item in missing)}")
+    citations = evidence.get("citations") if isinstance(evidence, dict) else []
+    if isinstance(citations, list) and citations:
+        body.append(f"evidence: {', '.join(str(item) for item in citations[:3])}")
+    body.append("review: plan and preview only; generated outputs remain drafts")
+    body.append(f"next: {payload.get('proposed_command')}")
+    return render_action_panel("Verification Task Plan", "\n".join(body))
 
 
 def render_triage_payload(payload: dict[str, object]) -> str:

@@ -124,7 +124,7 @@ def test_adapter_check_reports_command_preview_and_setup_diagnostics(sample_proj
     payload = operations.check_adapters(sample_project, adapter_name="iverilog")
     adapter = payload["adapters"][0]
 
-    assert adapter["status"] == "missing"
+    assert adapter["status"] == "unavailable"
     assert adapter["command_preview"][:2] == ["iverilog", "-g2012"]
     assert adapter["setup_diagnostics"]
     assert "TOKEN" not in str(adapter)

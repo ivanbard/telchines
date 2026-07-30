@@ -12,7 +12,10 @@ For local development from a checkout:
 
 ```bash
 python -m venv .venv
-. .venv/Scripts/activate
+# Windows PowerShell
+.venv\Scripts\Activate.ps1
+# Linux, WSL, and macOS
+. .venv/bin/activate
 pip install -e .[dev]
 ```
 
@@ -22,6 +25,8 @@ Verify the install:
 tel --version
 tel --help
 ```
+
+The first `tel` launch outside a project asks for provider policy, local-command permission, `.tel/` artifact-storage acknowledgement, and optional private shell-history storage. It never initializes the current directory; use `tel project init .` after setup.
 
 ## Initialize A Project
 
@@ -67,6 +72,16 @@ tel providers check heuristic
 ```
 
 The default project uses the built-in `heuristic` provider for both `repair` and `generation`.
+
+## Start With A Verification Task
+
+Describe the verification objective instead of selecting a workflow first:
+
+```bash
+tel task "draft a UART start-bit assertion" --spec docs/uart.md --rtl rtl/uart_rx.sv
+```
+
+Telchines returns a non-mutating task plan with retrieved citations, selected provider/model, expected review-gated artifacts, and validation limitations. Once the plan is correct, add `--execute-safe` to generate drafts and run non-destructive validation. Use `tel agent` and the commands below when you need expert-level control over every input.
 
 ## Run Common Workflows
 
