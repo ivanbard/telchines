@@ -1056,10 +1056,17 @@ def _build_openai_compatible_payload(config: dict[str, Any], system_prompt: str,
     if str(config.get("endpoint", "chat/completions")).strip("/").endswith("responses"):
         payload = {
             "model": config["model"],
-            "temperature": config.get("temperature", 0),
             "instructions": system_prompt,
             "input": json.dumps(provider_request),
+            # Verification projects can contain proprietary RTL and logs.
+            # Opt out of server-side response storage unless a deliberately
+            # configured compatible endpoint needs it.
+            "store": bool(config.get("store", False)),
         }
+        # GPT-5 Responses models reject the legacy temperature control. Keep
+        # this endpoint portable; Chat Completions retains temperature below.
+        if bool(config.get("allow_responses_temperature", False)):
+            payload["temperature"] = config.get("temperature", 0)
     else:
         payload = {
             "model": config["model"],
@@ -1107,12 +1114,15 @@ def _build_anthropic_message_payload(config: dict[str, Any], system_prompt: str,
     payload = {
         "model": config["model"],
         "max_tokens": int(config.get("max_tokens", 4096)),
-        "temperature": config.get("temperature", 0),
         "system": system_prompt,
         "messages": [
             {"role": "user", "content": json.dumps(provider_request)},
         ],
     }
+    # Current Claude models deprecate temperature. Preserve an explicit escape
+    # hatch for compatible gateways without sending it to first-party defaults.
+    if bool(config.get("allow_anthropic_temperature", False)):
+        payload["temperature"] = config.get("temperature", 0)
     return _apply_anthropic_reasoning(payload, config)
 
 

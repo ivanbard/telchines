@@ -35,8 +35,21 @@ def certify_providers(manifest_path: Path, *, include_live: bool) -> dict[str, o
         str(manifest["repeat_count"]),
         "--max-live-commands",
         str(max_requests),
+        "--command-timeout-seconds",
+        str(manifest["command_timeout_seconds"]),
+        "--total-timeout-seconds",
+        str(manifest["timeout_seconds"]),
     ]
-    completed = subprocess.run(command, capture_output=True, text=True, check=False, timeout=int(manifest["timeout_seconds"]))
+    # The child is responsible for the study-wide limit.  Give it one scenario
+    # of grace so it can turn an in-flight command into a redacted timeout
+    # record and persist the report instead of being killed by this wrapper.
+    completed = subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=int(manifest["timeout_seconds"]) + int(manifest["command_timeout_seconds"]) + 15,
+    )
     payload = _last_json(completed.stdout)
     return {
         "certification_id": stable_id("cert", manifest["suite_version"], provider, utc_now()),
@@ -64,7 +77,7 @@ def _load_manifest(path: Path) -> dict[str, Any]:
         raise ConfigError(f"certification manifest does not exist: {path}") from exc
     except json.JSONDecodeError as exc:
         raise ConfigError(f"certification manifest is not valid JSON: {exc}") from exc
-    required = {"schema_version", "suite_version", "matrix", "provider", "model", "live_gate_env", "repeat_count", "max_requests", "max_output_tokens", "max_cost_usd", "timeout_seconds"}
+    required = {"schema_version", "suite_version", "matrix", "provider", "model", "live_gate_env", "repeat_count", "max_requests", "max_output_tokens", "max_cost_usd", "command_timeout_seconds", "timeout_seconds"}
     missing = sorted(required.difference(payload)) if isinstance(payload, dict) else sorted(required)
     if missing or not isinstance(payload, dict) or payload.get("schema_version") != "0.1":
         raise ConfigError(f"invalid certification manifest; missing or invalid fields: {', '.join(missing or ['schema_version'])}")
@@ -72,7 +85,7 @@ def _load_manifest(path: Path) -> dict[str, Any]:
         raise ConfigError("certification repeat_count must be at least 3")
     if int(payload["max_requests"]) < int(payload["repeat_count"]):
         raise ConfigError("certification max_requests must cover every repeat")
-    if int(payload["max_output_tokens"]) < 1 or float(payload["max_cost_usd"]) <= 0 or int(payload["timeout_seconds"]) < 1:
+    if int(payload["max_output_tokens"]) < 1 or float(payload["max_cost_usd"]) <= 0 or int(payload["command_timeout_seconds"]) < 1 or int(payload["timeout_seconds"]) < int(payload["command_timeout_seconds"]):
         raise ConfigError("certification budgets and timeout must be positive")
     return payload
 
@@ -86,4 +99,3 @@ def _last_json(output: str) -> dict[str, object]:
     except json.JSONDecodeError:
         return {"status": "invalid_runner_output"}
     return value if isinstance(value, dict) else {"status": "invalid_runner_output"}
-

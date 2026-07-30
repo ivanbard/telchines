@@ -9,5 +9,6 @@
   "max_requests": 18,
   "max_output_tokens": 4096,
   "max_cost_usd": 10.0,
-  "timeout_seconds": 900
+  "command_timeout_seconds": 60,
+  "timeout_seconds": 600
 }

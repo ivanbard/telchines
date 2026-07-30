@@ -31,6 +31,14 @@ def main() -> int:
     parser.add_argument("--include-live", action="store_true", help="Allow live HTTP/local-server providers when their env gates are set.")
     parser.add_argument("--max-live-commands", type=int, help="Optional cap on non-dry-run commands executed.")
     parser.add_argument("--repeat-count", type=int, default=1, help="Repeat each planned provider scenario this many times.")
+    parser.add_argument(
+        "--scenario",
+        action="append",
+        choices=("provider_check_offline", "provider_check", "agent_repair", "gen_sva", "gen_cocotb", "shell_smoke"),
+        help="Run only this scenario label; repeat the option to select several.",
+    )
+    parser.add_argument("--command-timeout-seconds", type=int, default=120, help="Hard timeout for each provider scenario.")
+    parser.add_argument("--total-timeout-seconds", type=int, help="Optional hard timeout for the complete study.")
     args = parser.parse_args()
 
     try:
@@ -40,6 +48,10 @@ def main() -> int:
     except MatrixError as exc:
         print(json.dumps({"status": "invalid_matrix", "error": str(exc)}, indent=2))
         return 2
+
+    if args.scenario:
+        selected_scenarios = set(args.scenario)
+        plan["commands"] = [item for item in plan["commands"] if item.get("label") in selected_scenarios]
 
     if args.dry_run:
         print(json.dumps({"status": "dry_run", "matrix": matrix["name"], "providers": plan["providers"], "commands": plan["commands"]}, indent=2))
@@ -51,9 +63,15 @@ def main() -> int:
     scratch = Path(plan["scratch_root"])
     active_providers = _active_providers(selected, plan["commands"])
     _prepare_scratch_project(scratch, matrix, active_providers)
-    results = _run_commands(scratch, plan["commands"])
+    results = _run_commands(
+        scratch,
+        plan["commands"],
+        command_timeout_seconds=args.command_timeout_seconds,
+        total_timeout_seconds=args.total_timeout_seconds,
+    )
     summary = _summary(matrix, scratch, plan, results)
     summary = _redact_summary(summary)
+    summary = _published_summary(summary)
     results_path = scratch / f"{matrix['name']}_provider_capability_summary.json"
     report_path = scratch / f"{matrix['name']}_provider_capability_summary.md"
     results_path.write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
@@ -570,22 +588,61 @@ print(json.dumps({"status": "no_generation", "summary": f"unsupported workflow {
     )
 
 
-def _run_commands(scratch: Path, commands: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _run_commands(
+    scratch: Path,
+    commands: list[dict[str, Any]],
+    *,
+    command_timeout_seconds: int,
+    total_timeout_seconds: int | None,
+) -> list[dict[str, Any]]:
+    if command_timeout_seconds < 1:
+        raise MatrixError("command-timeout-seconds must be at least 1")
+    if total_timeout_seconds is not None and total_timeout_seconds < 1:
+        raise MatrixError("total-timeout-seconds must be at least 1")
     results: list[dict[str, Any]] = []
+    study_started = time.perf_counter()
     for item in commands:
         if item["status"] != "planned":
             results.append(dict(item))
             continue
+        if total_timeout_seconds is not None and time.perf_counter() - study_started >= total_timeout_seconds:
+            results.append({**item, "status": "failed", "status_reason": "total_timeout", "exit_code": None, "elapsed_seconds": 0.0})
+            continue
         started = time.perf_counter()
-        process = subprocess.run(
-            item["command"],
-            cwd=scratch,
-            input=item.get("stdin"),
-            capture_output=True,
-            text=True,
-            env=_subprocess_env(),
-            check=False,
-        )
+        try:
+            process = subprocess.run(
+                item["command"],
+                cwd=scratch,
+                input=item.get("stdin"),
+                capture_output=True,
+                text=True,
+                env=_subprocess_env(),
+                check=False,
+                timeout=command_timeout_seconds,
+            )
+        except subprocess.TimeoutExpired as exc:
+            elapsed = round(time.perf_counter() - started, 3)
+            results.append(
+                {
+                    **item,
+                    "exit_code": None,
+                    "elapsed_seconds": elapsed,
+                    "stdout": _bounded(exc.stdout or ""),
+                    "stderr": _bounded(exc.stderr or ""),
+                    "parsed": {},
+                    "status": "failed",
+                    "status_reason": "command_timeout",
+                    "validation_status": None,
+                    "candidate_id": None,
+                    "patch_id": None,
+                    "attempt_count": None,
+                    "retry_count": None,
+                    "json_repair_attempt_count": 0,
+                    "validation_delta": {},
+                    "semantic_fingerprint": _semantic_fingerprint(item, {}),
+                }
+            )
+            continue
         elapsed = round(time.perf_counter() - started, 3)
         parsed = _parse_last_json(process.stdout)
         status, status_reason = _score_command_result(item, process.returncode, parsed)
@@ -934,6 +991,24 @@ def _redact_summary(value: Any) -> Any:
     return redact(value)
 
 
+def _published_summary(summary: dict[str, Any]) -> dict[str, Any]:
+    """Keep certification reports reviewable without publishing model payloads.
+
+    Detailed request/response artifacts remain scoped to the disposable study
+    project.  The durable JSON and Markdown reports contain only the outcome,
+    validation metadata, and deterministic fingerprints needed for release
+    review.
+    """
+    published = dict(summary)
+    results: list[dict[str, Any]] = []
+    for item in summary.get("results", []):
+        if not isinstance(item, dict):
+            continue
+        results.append({key: value for key, value in item.items() if key not in {"stdout", "stderr", "parsed"}})
+    published["results"] = results
+    return published
+
+
 def _looks_secret_key(key: str) -> bool:
     lowered = key.lower()
     return any(part in lowered for part in SECRET_KEY_PARTS)
@@ -1013,7 +1088,7 @@ def _markdown_report(summary: dict[str, Any]) -> str:
             f"{item.get('json_repair_attempt_count_max', 0)} | "
             f"`{','.join(item.get('fingerprints', []))}` |"
         )
-    lines.extend(["", "Stdout/stderr are bounded in the JSON summary. Secret-looking environment values are redacted."])
+    lines.extend(["", "Published reports exclude raw prompts, model responses, stdout, and stderr. Secret-looking environment values are redacted."])
     return "\n".join(lines) + "\n"
 
 
