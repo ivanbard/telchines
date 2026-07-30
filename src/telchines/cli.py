@@ -7,7 +7,7 @@ from typing import Optional
 import typer
 
 from telchines.errors import AdapterExecutionError, ConfigError, ProviderError, WorkflowInputError
-from telchines.certification import certify_providers
+from telchines.certification import approve_certificate, certify_providers
 from telchines.onboarding import initialize_and_index_get_started, inspect_get_started
 from telchines.presentation import (
     render_adapters_payload,
@@ -24,6 +24,7 @@ from telchines.presentation import (
     render_runs_payload,
 )
 from telchines import __version__
+from telchines.utils import write_json
 from telchines.operations import (
     agent as agent_op,
     check_adapters as check_adapters_op,
@@ -478,15 +479,35 @@ def task_command(
 def certify_providers_command(
     manifest: Path = typer.Argument(..., help="Secret-free provider certification manifest."),
     include_live: bool = typer.Option(False, "--include-live", help="Explicitly authorize bounded live provider calls."),
+    output: Optional[Path] = typer.Option(None, "--output", help="Write the redacted certificate JSON to this path."),
 ) -> None:
     """Certify one pinned provider/model with a bounded, redacted live study."""
     try:
         payload = certify_providers(manifest, include_live=include_live)
     except ConfigError as exc:
         _fail(f"certification error: {exc}")
+    if output is not None:
+        write_json(output, payload)
     typer.echo(dump_json(payload))
     if payload["status"] != "passed":
         raise typer.Exit(code=1)
+
+
+@certify_app.command("approve")
+def certify_approve_command(
+    certificate: Path = typer.Argument(..., help="Passed redacted certificate JSON."),
+    reviewer: str = typer.Option(..., "--reviewer", help="Maintainer approving representative fixture outputs."),
+    artifact_url: str = typer.Option(..., "--artifact-url", help="CI artifact URL containing the review bundle."),
+    output: Optional[Path] = typer.Option(None, "--output", help="Write approval record to this path."),
+) -> None:
+    """Record the required human approval for a passed release certificate."""
+    try:
+        payload = approve_certificate(certificate, reviewer=reviewer, artifact_url=artifact_url)
+    except ConfigError as exc:
+        _fail(f"certification approval error: {exc}")
+    if output is not None:
+        write_json(output, payload)
+    typer.echo(dump_json(payload))
 
 
 @app.command("triage")

@@ -1,0 +1,16 @@
+{
+  "schema_version": "0.1",
+  "version": "llm-certification-v2",
+  "cases": [
+    {"id": "provider-readiness", "kind": "provider_check", "assertions": ["bounded_live_probe", "schema_compliant"]},
+    {"id": "review-gated-repair", "kind": "agent_repair", "assertions": ["minimal_patch", "citations", "pending_review", "validated_not_proven"]},
+    {"id": "grounded-sva", "kind": "gen_sva", "assertions": ["known_dut_signals", "citations", "structural_validation", "not_formal_proof"]},
+    {"id": "grounded-cocotb", "kind": "gen_cocotb", "assertions": ["known_dut_ports", "clock_reset_intent", "executable_validation", "pending_review"]},
+    {"id": "shell-recovery", "kind": "shell_smoke", "assertions": ["plain_shell_exit", "no_write"]},
+    {"id": "triage-grounding", "kind": "triage_grounding", "assertions": ["log_and_waveform_citations", "deterministic_contract"]},
+    {"id": "missing-context", "kind": "missing_context_refusal", "assertions": ["actionable_refusal", "no_generation"]},
+    {"id": "malicious-instruction", "kind": "malicious_instruction_refusal", "assertions": ["policy_safe_refusal", "no_write", "no_secret_exposure"]},
+    {"id": "malformed-output", "kind": "malformed_output_recovery", "assertions": ["schema_retry", "failure_not_success"]},
+    {"id": "policy-review", "kind": "policy_and_review_gate", "assertions": ["provider_policy_enforced", "apply_required", "redacted_artifacts"]}
+  ]
+}

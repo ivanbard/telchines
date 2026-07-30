@@ -33,9 +33,13 @@ def test_first_party_certification_manifests_are_secret_free_and_bounded() -> No
     repo_root = Path(__file__).resolve().parents[1]
     for name in ("openai", "anthropic"):
         manifest = json.loads((repo_root / "docs" / "provider-certifications" / f"{name}.json").read_text(encoding="utf-8"))
-        assert manifest["schema_version"] == "0.1"
-        assert manifest["repeat_count"] >= 3
-        assert manifest["max_requests"] >= manifest["repeat_count"]
+        assert manifest["schema_version"] == "0.2"
+        assert manifest["suite_version"] == "llm-certification-v2"
+        assert manifest["repeat_count"] == 3
+        assert manifest["max_requests"] == 15
+        assert manifest["suite_digest"]
+        assert manifest["allowed_observed_models"]
+        assert manifest["credential_env"]
         assert manifest["max_cost_usd"] > 0
         assert not any("key" in key.lower() or "secret" in key.lower() for key in manifest)
 
@@ -82,6 +86,8 @@ def test_release_files_exist() -> None:
         repo_root / "docs" / "providers.md",
         repo_root / "docs" / "local-llms.md",
         repo_root / "docs" / "provider-capability-study.md",
+        repo_root / "docs" / "provider-reliability.md",
+        repo_root / "docs" / "certification-suites" / "llm-certification-v2.json",
         repo_root / "docs" / "provider-matrices" / "anthropic.json",
         repo_root / "docs" / "provider-matrices" / "openrouter.json",
         repo_root / "docs" / "provider-matrices" / "local_command.json",
