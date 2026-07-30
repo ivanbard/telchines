@@ -73,6 +73,16 @@ tel providers check heuristic
 
 The default project uses the built-in `heuristic` provider for both `repair` and `generation`.
 
+## Start With A Verification Task
+
+Describe the verification objective instead of selecting a workflow first:
+
+```bash
+tel task "draft a UART start-bit assertion" --spec docs/uart.md --rtl rtl/uart_rx.sv
+```
+
+Telchines returns a non-mutating task plan with retrieved citations, selected provider/model, expected review-gated artifacts, and validation limitations. Once the plan is correct, add `--execute-safe` to generate drafts and run non-destructive validation. Use `tel agent` and the commands below when you need expert-level control over every input.
+
 ## Run Common Workflows
 
 Retrieve:

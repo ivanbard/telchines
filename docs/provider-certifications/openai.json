@@ -1,0 +1,13 @@
+{
+  "schema_version": "0.1",
+  "suite_version": "llm-certification-v1",
+  "matrix": "../provider-matrices/openai.json",
+  "provider": "openai",
+  "model": "gpt-5.5",
+  "live_gate_env": "TELCHINES_LIVE_CERTIFY",
+  "repeat_count": 3,
+  "max_requests": 18,
+  "max_output_tokens": 4096,
+  "max_cost_usd": 10.0,
+  "timeout_seconds": 900
+}

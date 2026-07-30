@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 import tomllib
 from pathlib import Path
@@ -26,6 +27,17 @@ def test_pyproject_uses_setuptools_compatible_license_table() -> None:
     pyproject = tomllib.loads((repo_root / "pyproject.toml").read_text(encoding="utf-8"))
 
     assert pyproject["project"]["license"] == {"text": "MIT"}
+
+
+def test_first_party_certification_manifests_are_secret_free_and_bounded() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    for name in ("openai", "anthropic"):
+        manifest = json.loads((repo_root / "docs" / "provider-certifications" / f"{name}.json").read_text(encoding="utf-8"))
+        assert manifest["schema_version"] == "0.1"
+        assert manifest["repeat_count"] >= 3
+        assert manifest["max_requests"] >= manifest["repeat_count"]
+        assert manifest["max_cost_usd"] > 0
+        assert not any("key" in key.lower() or "secret" in key.lower() for key in manifest)
 
 
 def test_release_version_surfaces_match() -> None:

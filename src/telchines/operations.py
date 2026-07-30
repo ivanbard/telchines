@@ -34,7 +34,7 @@ from telchines.project_templates import apply_project_template, list_project_tem
 from telchines.retrieval import RetrievalService
 from telchines.run_store import RunStore
 from telchines.utils import SECRET_KEY_RE, dataclass_to_dict, ensure_directory, read_json, remove_tree, stable_id, utc_now
-from telchines.workflows.agent import execute_agent
+from telchines.workflows.agent import execute_agent, plan_task as plan_task_workflow
 from telchines.workflows.coverage import execute_coverage_plan, format_coverage_human  # noqa: F401
 from telchines.workflows.gen_cocotb import execute_cocotb_generation
 from telchines.workflows.gen_sva import execute_generation
@@ -74,6 +74,35 @@ def index_project(root: Path | None = None) -> int:
 def index_status(root: Path | None = None) -> dict[str, object]:
     _, _, retrieval = load_services(root)
     return retrieval.status()
+
+
+def plan_task(
+    root: Path | None,
+    task: str,
+    *,
+    tool: str | None = None,
+    files: list[str] | None = None,
+    logs: list[Path] | None = None,
+    report: Path | None = None,
+    rtl: list[Path] | None = None,
+    spec: list[Path] | None = None,
+    dut: Path | None = None,
+    provider_name: str | None = None,
+) -> dict[str, object]:
+    config, _, retrieval = load_services(root)
+    return plan_task_workflow(
+        config,
+        retrieval,
+        task,
+        tool=tool,
+        files=files,
+        logs=logs,
+        report=report,
+        rtl=rtl,
+        spec=spec,
+        dut=dut,
+        provider_name=provider_name,
+    )
 
 
 def clean_index(root: Path | None = None) -> dict[str, object]:

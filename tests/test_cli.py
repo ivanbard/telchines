@@ -2744,6 +2744,42 @@ def test_cli_shell_supports_gen_cocotb(sample_project: Path, monkeypatch) -> Non
     assert "test_uart_rx.py" in result.stdout
 
 
+def test_task_plans_cited_review_gated_sva_work_without_writing_draft(sample_project: Path, monkeypatch) -> None:
+    monkeypatch.chdir(sample_project)
+    assert runner.invoke(app, ["index"]).exit_code == 0
+
+    result = runner.invoke(app, ["task", "draft a UART SVA", "--spec", "docs/uart.md", "--rtl", "rtl/uart_rx.sv"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "planned"
+    assert payload["workflow_type"] == "spec_to_sva"
+    assert payload["review_gate"]["authority"] == "plan_and_preview"
+    assert payload["evidence"]["citations"]
+    assert not (sample_project / ".tel" / "artifacts" / "generated" / "uart_rx_assertions.sv").exists()
+
+
+def test_shell_task_command_renders_task_first_plan(sample_project: Path, monkeypatch) -> None:
+    monkeypatch.chdir(sample_project)
+    assert runner.invoke(app, ["index"]).exit_code == 0
+
+    result = runner.invoke(app, [], input="/task draft an SVA\n/exit\n")
+
+    assert result.exit_code == 0
+    assert "Verification Task Plan" in result.stdout
+    assert "needs: --spec, --rtl" in result.stdout
+
+
+def test_live_certification_requires_explicit_gate(monkeypatch) -> None:
+    manifest = Path(__file__).resolve().parents[1] / "docs" / "provider-certifications" / "openai.json"
+    monkeypatch.delenv("TELCHINES_LIVE_CERTIFY", raising=False)
+
+    result = runner.invoke(app, ["certify", "providers", str(manifest), "--include-live"])
+
+    assert result.exit_code == 2
+    assert isinstance(result.exception, SystemExit)
+
+
 def test_cli_shell_supports_coverage_plan(sample_project: Path, monkeypatch) -> None:
     _write_coverage_report(sample_project)
     monkeypatch.chdir(sample_project)

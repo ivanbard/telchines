@@ -153,6 +153,14 @@ On the first `tel` launch outside a project, Telchines opens a one-time setup wi
 tel project init .
 ```
 
+Start verification work with a cited, review-gated task plan:
+
+```bash
+tel task "investigate the failing UART regression" --logs logs/regressions/run_a.log
+```
+
+The plan identifies the selected workflow, evidence, provider/model, required inputs, expected artifacts, and validation limits. Add `--execute-safe` only after reviewing it; Telchines never applies a repair patch through `tel task`.
+
 Run `tel setup` or `/setup` later to update the global defaults used by newly initialized projects. Provider credentials are referenced by environment-variable name and are never saved in Telchines configuration.
 
 For a guided, read-only assessment of the current directory and its next best workflow:

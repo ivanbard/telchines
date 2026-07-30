@@ -19,6 +19,76 @@ from telchines.workflows.repair import execute_repair
 from telchines.workflows.triage import triage_logs
 
 
+def plan_task(
+    config: ProjectConfig,
+    retrieval: RetrievalService,
+    task: str,
+    *,
+    tool: str | None = None,
+    files: list[str] | None = None,
+    logs: list[Path] | None = None,
+    report: Path | None = None,
+    rtl: list[Path] | None = None,
+    spec: list[Path] | None = None,
+    dut: Path | None = None,
+    provider_name: str | None = None,
+) -> dict[str, object]:
+    """Build a non-mutating, review-gated plan for a natural-language task."""
+    task_text = task.strip()
+    if not task_text:
+        raise ValueError("task must not be empty")
+    files = files or []
+    logs = logs or []
+    rtl = rtl or []
+    spec = spec or []
+    workflow_type = _select_workflow(
+        task_text,
+        tool=tool,
+        files=files,
+        logs=logs,
+        report=report,
+        rtl=rtl,
+        spec=spec,
+        dut=dut,
+    )
+    focus_paths = _focus_paths(config, files=files, logs=logs, report=report, rtl=rtl, spec=spec, dut=dut)
+    context = retrieval.search(
+        query=_agent_retrieval_query(task_text, files=files, logs=logs, report=report, rtl=rtl, spec=spec, dut=dut),
+        limit=int(config.retrieval.get("max_hits", 5)),
+        mode="task_plan",
+        focus_paths=focus_paths,
+    )
+    capability = "repair" if workflow_type == "compile_repair" else "generation" if workflow_type in {"spec_to_sva", "dut_to_cocotb"} else None
+    selected_provider = provider_name or (config.default_provider_by_capability().get(capability, "heuristic") if capability else "builtin")
+    provider_config = config.project.model_policy.get("providers", {}).get(selected_provider, {}) if isinstance(config.project.model_policy, dict) else {}
+    model = provider_config.get("model") or provider_config.get("model_default") or "builtin"
+    missing_inputs = _missing_task_inputs(workflow_type, tool=tool, files=files, logs=logs, report=report, rtl=rtl, spec=spec, dut=dut)
+    lifecycle = [
+        {"stage": "understand", "status": "passed"},
+        {"stage": "retrieve", "status": "passed", "context_id": context.context_id, "citation_count": len(context.hits)},
+        {"stage": "plan", "status": "clarification_required" if missing_inputs else "ready"},
+        {"stage": "execute_safe_steps", "status": "pending"},
+        {"stage": "validate", "status": "pending"},
+        {"stage": "summarize", "status": "pending"},
+        {"stage": "await_review", "status": "required"},
+    ]
+    return {
+        "status": "clarification_required" if missing_inputs else "planned",
+        "task": task_text,
+        "workflow_type": workflow_type,
+        "lifecycle": lifecycle,
+        "plan": _build_plan(workflow_type, review_required=True),
+        "context_id": context.context_id,
+        "evidence": {"citations": [hit.citation for hit in context.hits], "focus_paths": focus_paths},
+        "provider": {"name": selected_provider, "model": model, "capability": capability},
+        "proposed_command": f'tel task {task_text!r} --execute-safe',
+        "expected_artifacts": _expected_task_artifacts(workflow_type),
+        "validation_limitations": ["Generated artifacts are drafts; structural or adapter validation is not functional or formal proof."],
+        "review_gate": {"required": True, "authority": "plan_and_preview", "writes_without_review": False},
+        "missing_inputs": missing_inputs,
+    }
+
+
 def execute_agent(
     config: ProjectConfig,
     store: RunStore,
@@ -606,6 +676,37 @@ def _build_plan(workflow_type: str, *, review_required: bool) -> dict[str, objec
         "review_required": review_required,
         "steps": ["retrieve_context", *workflow_steps[workflow_type]],
     }
+
+
+def _missing_task_inputs(
+    workflow_type: str,
+    *,
+    tool: str | None,
+    files: list[str],
+    logs: list[Path],
+    report: Path | None,
+    rtl: list[Path],
+    spec: list[Path],
+    dut: Path | None,
+) -> list[str]:
+    required = {
+        "compile_repair": [("--tool", tool), ("--file", bool(files))],
+        "triage": [("--logs", bool(logs))],
+        "coverage_plan": [("--report", report)],
+        "spec_to_sva": [("--spec", bool(spec)), ("--rtl", bool(rtl))],
+        "dut_to_cocotb": [("--dut", dut)],
+    }
+    return [name for name, value in required[workflow_type] if not value]
+
+
+def _expected_task_artifacts(workflow_type: str) -> list[str]:
+    return {
+        "compile_repair": ["review-gated patch draft", "adapter validation run", "replay metadata"],
+        "triage": ["failure clusters", "evidence citations", "stored triage run"],
+        "coverage_plan": ["coverage recommendation plan", "supporting evidence"],
+        "spec_to_sva": ["review-gated SVA draft", "validation run", "citations"],
+        "dut_to_cocotb": ["review-gated Cocotb draft", "manifest", "validation run"],
+    }[workflow_type]
 
 
 def _agent_retrieval_query(
