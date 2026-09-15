@@ -100,7 +100,7 @@ def unique_preserve_order(values: Iterable[str]) -> list[str]:
 
 
 def relative_to(path: Path, root: Path) -> str:
-    return str(path.resolve().relative_to(root.resolve()))
+    return path.resolve().relative_to(root.resolve()).as_posix()
 
 
 def load_text(path: Path) -> str:

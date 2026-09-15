@@ -286,7 +286,7 @@ def _cleanup_raw_task_artifacts(scratch: Path) -> None:
 
 
 def _file_digest(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    return hashlib.sha256(path.read_text(encoding="utf-8").encode()).hexdigest()
 
 
 def _fixture_digest() -> str:

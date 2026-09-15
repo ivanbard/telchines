@@ -2216,7 +2216,7 @@ def test_cli_gen_sva_with_default_heuristic_provider(sample_project: Path, monke
     assert payload["candidate_status"] == "validated"
     assert payload["validation_status"] == "passed"
     assert payload["property_summaries"][0]["name"] == "p_start_seen_follows_serial_i"
-    assert payload["property_summaries"][0]["source_citation"] == "docs/uart.md"
+    assert payload["property_summaries"][0]["source_citation"] == "docs/uart.md:1-4"
     artifact = sample_project / payload["artifact_path"]
     rendered = artifact.read_text(encoding="utf-8")
     assert "(!serial_i) |=> (start_seen == 1'b1);" in rendered

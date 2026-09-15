@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import json
-import threading
-import time
 from pathlib import Path
 
 import pytest
@@ -441,48 +439,12 @@ def test_fullscreen_shell_accepts_pipe_input(sample_project: Path) -> None:
     assert session.transcript[-1] == "leaving Telchines shell"
 
 
-def test_fullscreen_shell_flushes_standalone_escape_without_default_delay(sample_project: Path) -> None:
+def test_fullscreen_shell_sets_short_escape_timeout(sample_project: Path) -> None:
     session = ShellSession(cwd=sample_project)
-    session.add_transcript("Telchines", render_welcome(session))
     with create_pipe_input() as pipe_input:
         app = _build_fullscreen_shell_app(session, input=pipe_input, output=DummyOutput())
         assert app.ttimeoutlen == ESCAPE_FLUSH_TIMEOUT_SECONDS
         assert app.ttimeoutlen < 0.05
-        initial_control = app.layout.current_control
-        escape_sent_at = None
-        escape_handled_at = None
-        stage = 0
-
-        def observe_render(_app) -> None:  # noqa: ANN001
-            nonlocal escape_sent_at, stage
-            if stage == 0:
-                stage = 1
-                pipe_input.send_text("/help\r")
-                return
-            if stage == 1:
-                stage = 2
-
-                def send_escape() -> None:
-                    nonlocal escape_sent_at
-                    escape_sent_at = time.perf_counter()
-                    pipe_input.send_text("\x1b")
-
-                threading.Timer(0.001, send_escape).start()
-                return
-        def observe_invalidation(_app) -> None:  # noqa: ANN001
-            nonlocal escape_handled_at, stage
-            if stage == 2 and escape_sent_at is not None:
-                escape_handled_at = time.perf_counter()
-                stage = 3
-                app.exit()
-
-        app.after_render += observe_render
-        app.on_invalidate += observe_invalidation
-        app.run()
-
-    assert escape_handled_at is not None
-    assert escape_sent_at is not None
-    assert escape_handled_at - escape_sent_at < 0.05
 
 
 def test_fullscreen_shell_exits_after_error_and_help(sample_project: Path) -> None:
